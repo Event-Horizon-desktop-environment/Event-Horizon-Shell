@@ -367,6 +367,7 @@ static bool matugen_tpl_get(const Settings& s, int idx) {
     case 32: return m.heroic;
     case 33: return m.horizonPhoto;
     case 34: return m.horizonCalendar;
+    case 35: return m.fluxer;
     default: return true;
   }
 }
@@ -409,12 +410,13 @@ static void matugen_tpl_set(Settings& s, int idx, bool v) {
     case 32: m.heroic = v; break;
     case 33: m.horizonPhoto = v; break;
     case 34: m.horizonCalendar = v; break;
+    case 35: m.fluxer = v; break;
     default: break;
   }
 }
 
 static const char* matugen_tpl_title(int idx) {
-  static const char* const kT[35] = {
+  static const char* const kT[36] = {
       "Niri",           "Hyprland",      "Mango",           "GTK shell CSS",    "GTK colors (light)",
       "GTK colors (dark)", "KDE colors", "Qt5ct",             "Qt6ct",            "Kitty theme",
       "Kitty tabs",     "Ghostty",       "WezTerm",           "Alacritty",        "Foot",
@@ -422,13 +424,13 @@ static const char* matugen_tpl_title(int idx) {
       "Firefox",        "Zen",           "Vesktop",           "Equibop",          "PyWalFox",
       "Steam",          "dgop",          "Emacs",             "Zed",
       "Ptyxis",         "Horizon Files", "OBS Studio",        "Heroic",
-      "Horizon Photo",  "Horizon Calendar",
+      "Horizon Photo",  "Horizon Calendar", "Fluxer",
   };
-  if (idx < 0 || idx >= 35) return "?";
+  if (idx < 0 || idx >= 36) return "?";
   return kT[static_cast<size_t>(idx)];
 }
 
-static constexpr int kMatugenTplToggleCount = 35;
+static constexpr int kMatugenTplToggleCount = 36;
 static constexpr int kMatugenTplCols = 2;
 static constexpr int kMatugenTplRows = (kMatugenTplToggleCount + kMatugenTplCols - 1) / kMatugenTplCols;
 

@@ -1,0 +1,3 @@
+[templates.ehfluxer]
+input_path = 'SHELL_DIR/matugen/templates/fluxer.css'
+output_path = 'CONFIG_DIR/fluxer/themes/event-horizon.css'

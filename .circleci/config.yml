@@ -121,8 +121,6 @@ jobs:
               done
 
             # Update packages to latest Stable branch
-            git -C packages/horizon-shot fetch --depth 1 origin Stable 2>/dev/null || true
-            git -C packages/horizon-shot checkout origin/Stable 2>/dev/null || true
             git -C packages/horizon-files fetch --depth 1 origin main 2>/dev/null || true
             git -C packages/horizon-files checkout origin/main 2>/dev/null || true
             git -C packages/horizon-photo-viewer fetch --depth 1 origin Stable 2>/dev/null || true
@@ -138,15 +136,6 @@ jobs:
       - configure-release
       - build-release
       - install-staging
-      - run:
-          name: Build horizon-shot
-          command: |
-            meson setup packages/horizon-shot/build-debug   packages/horizon-shot --buildtype=debug
-            meson setup packages/horizon-shot/build-release packages/horizon-shot --buildtype=release
-            meson compile -C packages/horizon-shot/build-debug
-            meson compile -C packages/horizon-shot/build-release
-            DESTDIR=$PWD/staging-shot-debug   meson install -C packages/horizon-shot/build-debug
-            DESTDIR=$PWD/staging-shot-release meson install -C packages/horizon-shot/build-release
       - run:
           name: Build horizon-files
           command: |
@@ -167,12 +156,6 @@ jobs:
             DESTDIR=$PWD/staging-photo-viewer-release meson install -C packages/horizon-photo-viewer/build-release
       - get-version
       - run:
-          name: Get shot version
-          command: |
-            SHOT_VER=$(grep "^ *version:" packages/horizon-shot/meson.build | sed "s/.*'\(.*\)'.*/\1/")
-            echo "$SHOT_VER" > .shot-version
-            echo "export SHOT_VERSION=$SHOT_VER" >> $BASH_ENV
-      - run:
           name: Get files version
           command: |
             FILES_VER=$(grep "^ *version:" packages/horizon-files/meson.build | sed "s/.*'\(.*\)'.*/\1/")
@@ -189,14 +172,11 @@ jobs:
           paths:
             - staging-debug
             - staging-release
-            - staging-shot-debug
-            - staging-shot-release
             - staging-files-debug
             - staging-files-release
             - staging-photo-viewer-debug
             - staging-photo-viewer-release
             - .version
-            - .shot-version
             - .files-version
             - .photo-viewer-version
 
@@ -214,7 +194,6 @@ jobs:
           name: Create Arch packages
           command: |
             VER=$(cat .version)
-            SHOT_VER=$(cat .shot-version)
             FILES_VER=$(cat .files-version)
             PHOTO_VER=$(cat .photo-viewer-version)
             mkdir -p packages
@@ -231,19 +210,6 @@ jobs:
               --license "MIT" \
               --url "https://github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" \
               -C staging-debug -p "packages/event-horizon-de-debug-${VER}-1-x86_64.pkg.tar.zst"
-            fpm -s dir -t pacman --pacman-compression zstd \
-              --name horizon-shot --version "$SHOT_VER" --iteration 1 --architecture x86_64 \
-              --description "Horizon Screenshot Tool - Wayland-native region/window/screen capture" \
-              --license "MIT" \
-              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-shot" \
-              --depends wayland,cairo,libxkbcommon,libdrm \
-              -C staging-shot-release -p "packages/horizon-shot-${SHOT_VER}-1-x86_64.pkg.tar.zst"
-            fpm -s dir -t pacman --pacman-compression zstd \
-              --name horizon-shot-debug --version "$SHOT_VER" --iteration 1 --architecture x86_64 \
-              --description "Horizon Screenshot Tool (debug symbols)" \
-              --license "MIT" \
-              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-shot" \
-              -C staging-shot-debug -p "packages/horizon-shot-debug-${SHOT_VER}-1-x86_64.pkg.tar.zst"
             fpm -s dir -t pacman --pacman-compression zstd \
               --name horizon-files --version "$FILES_VER" --iteration 1 --architecture x86_64 \
               --description "Horizon File Manager - Wayland-native file browser" \
@@ -289,7 +255,6 @@ jobs:
           name: Create Debian packages
           command: |
             VER=$(cat .version)
-            SHOT_VER=$(cat .shot-version)
             FILES_VER=$(cat .files-version)
             PHOTO_VER=$(cat .photo-viewer-version)
             mkdir -p packages
@@ -297,10 +262,6 @@ jobs:
               -C staging-release -p "packages/event-horizon-de_${VER}_amd64.deb"
             fpm -s dir -t deb -n event-horizon-de-debug -v "$VER" --architecture amd64 \
               -C staging-debug -p "packages/event-horizon-de-debug_${VER}_amd64.deb"
-            fpm -s dir -t deb -n horizon-shot -v "$SHOT_VER" --architecture amd64 \
-              -C staging-shot-release -p "packages/horizon-shot_${SHOT_VER}_amd64.deb"
-            fpm -s dir -t deb -n horizon-shot-dbgsym -v "$SHOT_VER" --architecture amd64 \
-              -C staging-shot-debug -p "packages/horizon-shot-dbgsym_${SHOT_VER}_amd64.deb"
             fpm -s dir -t deb -n horizon-files -v "$FILES_VER" --architecture amd64 \
               -C staging-files-release -p "packages/horizon-files_${FILES_VER}_amd64.deb"
             fpm -s dir -t deb -n horizon-files-dbgsym -v "$FILES_VER" --architecture amd64 \
@@ -327,7 +288,6 @@ jobs:
           name: Create RPM packages
           command: |
             VER=$(cat .version)
-            SHOT_VER=$(cat .shot-version)
             FILES_VER=$(cat .files-version)
             PHOTO_VER=$(cat .photo-viewer-version)
             mkdir -p packages
@@ -335,10 +295,6 @@ jobs:
               -C staging-release -p "packages/event-horizon-de-${VER}-1.x86_64.rpm"
             fpm -s dir -t rpm -n event-horizon-de-debug -v "$VER" --architecture x86_64 \
               -C staging-debug -p "packages/event-horizon-de-debug-${VER}-1.x86_64.rpm"
-            fpm -s dir -t rpm -n horizon-shot -v "$SHOT_VER" --architecture x86_64 \
-              -C staging-shot-release -p "packages/horizon-shot-${SHOT_VER}-1.x86_64.rpm"
-            fpm -s dir -t rpm -n horizon-shot-debug -v "$SHOT_VER" --architecture x86_64 \
-              -C staging-shot-debug -p "packages/horizon-shot-debug-${SHOT_VER}-1.x86_64.rpm"
             fpm -s dir -t rpm -n horizon-files -v "$FILES_VER" --architecture x86_64 \
               -C staging-files-release -p "packages/horizon-files-${FILES_VER}-1.x86_64.rpm"
             fpm -s dir -t rpm -n horizon-files-debug -v "$FILES_VER" --architecture x86_64 \

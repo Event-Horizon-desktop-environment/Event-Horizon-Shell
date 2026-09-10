@@ -58,6 +58,7 @@ struct MatugenExternalTemplateToggles {
   bool horizonCalendar = true;
   bool obs = true;
   bool heroic = true;
+  bool fluxer = true;
 };
 
 struct ShellAppearance {

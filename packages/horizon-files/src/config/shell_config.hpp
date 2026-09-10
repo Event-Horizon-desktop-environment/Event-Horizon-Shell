@@ -55,6 +55,7 @@ struct MatugenExternalTemplateToggles {
   bool ptyxis = true;
   bool obs = true;
   bool heroic = true;
+  bool fluxer = true;
   bool horizonFiles = true;
   bool horizonPhoto = true;
   bool horizonCalendar = true;
