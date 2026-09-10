@@ -119,8 +119,7 @@ jobs:
                   git clone --depth 1 "$url" "$path"
                 fi
               done
-
-            - run:
+      - run:
           name: Remove non-Meson subprojects
           command: |
             rm -rf subprojects/ffmpegthumbnailer third_party/ffmpegthumbnailer
