@@ -577,6 +577,7 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
       tb("horizon_calendar", mo.horizonCalendar);
       tb("obs", mo.obs);
       tb("heroic", mo.heroic);
+      tb("fluxer", mo.fluxer);
     }
     auto read_cf = [&](const char* key, float& out) {
       if (auto d = (*ap)[key].value<double>())
@@ -1461,6 +1462,7 @@ bool write_state_settings_toml(const ShellConfig& c) {
       mt.insert_or_assign("horizon_calendar", m.horizonCalendar);
       mt.insert_or_assign("obs", m.obs);
       mt.insert_or_assign("heroic", m.heroic);
+      mt.insert_or_assign("fluxer", m.fluxer);
       ap.insert_or_assign("matugen_templates", std::move(mt));
     }
     ap.insert_or_assign("color_theme_enabled", a.customThemeEnabled);

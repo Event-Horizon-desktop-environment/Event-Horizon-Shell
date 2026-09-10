@@ -1239,6 +1239,74 @@ void merge_heroic_prefs(const fs::path& heroic_dir) {
   } catch (...) {}
 }
 
+void merge_fluxer_prefs(const std::string& cfg_main, const std::string& home) {
+  try {
+    const fs::path master = fs::path(cfg_main) / "fluxer" / "themes" / "event-horizon.css";
+    if (!fs::is_regular_file(master)) return;
+    const std::array<const char*, 2> kFluxerDirs = {"fluxercanary", "fluxer"};
+    for (const char* name : kFluxerDirs) {
+      const fs::path user_dir = fs::path(home) / ".config" / name;
+      if (!fs::is_directory(user_dir)) continue;
+      const fs::path theme_dir = user_dir / "themes";
+      std::error_code ec;
+      fs::create_directories(theme_dir, ec);
+      const fs::path theme_path = theme_dir / "event-horizon.css";
+      std::string want;
+      {
+        std::ifstream in(master);
+        want.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      }
+      if (want.empty()) continue;
+      std::string have;
+      if (fs::is_regular_file(theme_path)) {
+        std::ifstream in(theme_path);
+        have.assign((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+      }
+      bool changed = false;
+      if (have != want) {
+        std::ofstream out(theme_path, std::ios::binary | std::ios::trunc);
+        if (out) {
+          out << want;
+          changed = true;
+        }
+      }
+      const fs::path settings_path = user_dir / "settings.json";
+      nlohmann::json root = nlohmann::json::object();
+      if (fs::is_regular_file(settings_path)) {
+        std::ifstream in(settings_path);
+        const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        try {
+          root = nlohmann::json::parse(raw, nullptr, true, true, true);
+        } catch (...) {}
+      }
+      const std::string entry = theme_path.string();
+      bool present = false;
+      if (root.is_object() && root.contains("theme_allowed_local_files") && root["theme_allowed_local_files"].is_array()) {
+        for (const auto& s : root["theme_allowed_local_files"]) {
+          if (s.is_string() && s.get<std::string>() == entry) {
+            present = true;
+            break;
+          }
+        }
+      }
+      if (!present) {
+        if (!root.is_object()) root = nlohmann::json::object();
+        nlohmann::json& arr = root["theme_allowed_local_files"];
+        if (!arr.is_array()) arr = nlohmann::json::array();
+        arr.push_back(entry);
+        std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
+        if (out) {
+          out << root.dump(2) << '\n';
+          changed = true;
+        }
+      }
+      if (changed) {
+        std::fprintf(stderr, "[eh-hc-tpl] fluxer post: seeded themes + allowlist in %s\n", user_dir.c_str());
+      }
+    }
+  } catch (...) {}
+}
+
 void merge_vscode_user_settings(const fs::path& user_dir, const fs::path& material_json,
                                 bool merge_material, bool set_workbench_theme, const std::string& mode_norm) {
   try {
@@ -1368,6 +1436,11 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
     return exe_on_path("heroic") || exe_on_path("com.heroicgameslauncher.hgl") ||
            fs::exists(fs::path(home) / ".config/heroic");
   });
+  maybe_append(T.fluxer, "fluxer.toml", [&] {
+    return exe_on_path("fluxer-canary") || exe_on_path("fluxer") ||
+           fs::exists(fs::path(home) / ".config/fluxercanary") ||
+           fs::exists(fs::path(home) / ".config/fluxer");
+  });
   maybe_append(T.horizonFiles, "horizon-files.toml", [&] {
     return fs::exists(fs::path(cfg_main) / "event-horizon");
   });
@@ -1479,6 +1552,10 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
   }
   if (T.alacritty && fs::exists(fs::path(cfg_main) / "alacritty" / "event-theme.toml")) {
     sync_alacritty(cfg_main);
+  }
+  if (T.fluxer && fs::exists(fs::path(cfg_main) / "fluxer" / "themes" / "event-horizon.css")) {
+    std::fprintf(stderr, "[eh-hc-tpl] fluxer post-hook: seeding themes + allowlist\n");
+    merge_fluxer_prefs(cfg_main, home);
   }
 }
 
