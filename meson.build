@@ -1223,7 +1223,7 @@ test_vram_boost_live = executable('test_vram_boost_live',
   cpp_args: test_cpp_args,
   install: false,
 )
-test('vram_boost_live', test_vram_boost_live, expected_fail: false)
+test('vram_boost_live', test_vram_boost_live, should_fail: false)
 
 # ── Icon cache engine test (ported from Horizon-File-Manager) ───────────────
 test_icon_cache = executable('test_icon_cache',
