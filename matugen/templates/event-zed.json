@@ -1,0 +1,1359 @@
+{
+    "$schema": "https://zed.dev/schema/themes/v0.2.0.json",
+    "name": "Event Horizon",
+    "author": "Event Horizon",
+    "themes": [
+        {
+            "name": "Event Horizon",
+            "appearance": "dark",
+            "style": {
+                "accents": [
+                    "{{colors.primary.dark.hex}}",
+                    "{{colors.secondary.dark.hex}}",
+                    "{{colors.tertiary.dark.hex}}"
+                ],
+                "background.appearance": "opaque",
+                "border": "{{colors.outline_variant.dark.hex}}",
+                "border.variant": "{{colors.outline.dark.hex}}",
+                "border.focused": "{{colors.primary.dark.hex}}",
+                "border.selected": "{{colors.primary.dark.hex}}",
+                "border.transparent": null,
+                "border.disabled": "{{colors.outline_variant.dark.hex}}60",
+                "elevated_surface.background": "{{colors.surface_container_high.dark.hex}}",
+                "surface.background": "{{colors.surface.dark.hex}}",
+                "background": "{{colors.surface_dim.dark.hex}}",
+                "element.background": "{{colors.surface_container.dark.hex}}",
+                "element.hover": "{{colors.surface_container_high.dark.hex}}",
+                "element.active": "{{colors.surface_container_highest.dark.hex}}",
+                "element.selected": "{{colors.secondary_container.dark.hex}}",
+                "element.disabled": "{{colors.surface_variant.dark.hex}}",
+                "drop_target.background": "{{colors.primary_container.dark.hex}}80",
+                "ghost_element.background": null,
+                "ghost_element.hover": "{{colors.surface_container.dark.hex}}80",
+                "ghost_element.active": "{{colors.surface_container_high.dark.hex}}",
+                "ghost_element.selected": "{{colors.secondary_container.dark.hex}}80",
+                "ghost_element.disabled": "{{colors.surface_variant.dark.hex}}60",
+                "text": "{{colors.on_surface.dark.hex}}",
+                "text.muted": "{{colors.on_surface_variant.dark.hex}}",
+                "text.placeholder": "{{colors.on_surface_variant.dark.hex}}99",
+                "text.disabled": "{{colors.on_surface.dark.hex}}60",
+                "text.accent": "{{colors.primary.dark.hex}}",
+                "icon": "{{colors.on_surface.dark.hex}}",
+                "icon.muted": "{{colors.on_surface_variant.dark.hex}}",
+                "icon.disabled": "{{colors.on_surface.dark.hex}}60",
+                "icon.placeholder": "{{colors.on_surface_variant.dark.hex}}80",
+                "icon.accent": "{{colors.primary.dark.hex}}",
+                "status_bar.background": "{{colors.surface_dim.dark.hex}}",
+                "title_bar.background": "{{colors.surface_dim.dark.hex}}",
+                "title_bar.inactive_background": "{{colors.surface_dim.dark.hex}}",
+                "toolbar.background": "{{colors.background.dark.hex}}",
+                "tab_bar.background": "{{colors.surface.dark.hex}}",
+                "tab.inactive_background": "{{colors.surface.dark.hex}}",
+                "tab.active_background": "{{colors.surface_dim.dark.hex}}",
+                "search.match_background": "{{colors.tertiary_container.dark.hex}}80",
+                "search.active_match_background": "{{colors.primary_container.dark.hex}}99",
+                "panel.background": "{{colors.surface.dark.hex}}",
+                "panel.focused_border": null,
+                "pane.focused_border": null,
+                "scrollbar.thumb.background": "{{colors.on_surface_variant.dark.hex}}50",
+                "scrollbar.thumb.hover_background": "{{colors.on_surface_variant.dark.hex}}80",
+                "scrollbar.thumb.border": "{{colors.outline_variant.dark.hex}}40",
+                "scrollbar.track.background": null,
+                "scrollbar.track.border": "{{colors.outline_variant.dark.hex}}20",
+                "editor.foreground": "{{colors.on_surface.dark.hex}}",
+                "editor.background": "{{colors.background.dark.hex}}",
+                "editor.gutter.background": "{{colors.surface_dim.dark.hex}}",
+                "editor.subheader.background": "{{colors.surface.dark.hex}}",
+                "editor.indent_guide": "{{colors.outline_variant.dark.hex}}22",
+                "editor.indent_guide_active": "{{colors.primary.dark.hex}}99",
+                "editor.active_line.background": "{{colors.surface_container.dark.hex}}66",
+                "editor.highlighted_line.background": "{{colors.surface_container.dark.hex}}66",
+                "editor.line_number": "{{colors.on_surface_variant.dark.hex}}",
+                "editor.active_line_number": "{{colors.primary.dark.hex}}",
+                "editor.invisible": "{{colors.outline_variant.dark.hex}}33",
+                "editor.wrap_guide": "{{colors.outline_variant.dark.hex}}22",
+                "editor.active_wrap_guide": "{{colors.outline.dark.hex}}80",
+                "editor.document_highlight.read_background": "{{colors.primary_container.dark.hex}}60",
+                "editor.document_highlight.write_background": "{{colors.secondary_container.dark.hex}}80",
+                "terminal.background": "{{colors.background.dark.hex}}",
+                "terminal.foreground": "{{colors.on_surface.dark.hex}}",
+                "terminal.bright_foreground": "{{colors.on_surface.dark.hex}}",
+                "terminal.dim_foreground": "{{colors.on_surface_variant.dark.hex}}",
+                "terminal.ansi.black": "{{event16.color0.dark.hex}}",
+                "terminal.ansi.bright_black": "{{event16.color8.dark.hex}}",
+                "terminal.ansi.dim_black": "{{event16.color0.dark.hex}}",
+                "terminal.ansi.red": "{{event16.color1.dark.hex}}",
+                "terminal.ansi.bright_red": "{{event16.color9.dark.hex}}",
+                "terminal.ansi.dim_red": "{{event16.color1.dark.hex}}",
+                "terminal.ansi.green": "{{event16.color2.dark.hex}}",
+                "terminal.ansi.bright_green": "{{event16.color10.dark.hex}}",
+                "terminal.ansi.dim_green": "{{event16.color2.dark.hex}}",
+                "terminal.ansi.yellow": "{{event16.color3.dark.hex}}",
+                "terminal.ansi.bright_yellow": "{{event16.color11.dark.hex}}",
+                "terminal.ansi.dim_yellow": "{{event16.color3.dark.hex}}",
+                "terminal.ansi.blue": "{{event16.color4.dark.hex}}",
+                "terminal.ansi.bright_blue": "{{event16.color12.dark.hex}}",
+                "terminal.ansi.dim_blue": "{{event16.color4.dark.hex}}",
+                "terminal.ansi.magenta": "{{event16.color5.dark.hex}}",
+                "terminal.ansi.bright_magenta": "{{event16.color13.dark.hex}}",
+                "terminal.ansi.dim_magenta": "{{event16.color5.dark.hex}}",
+                "terminal.ansi.cyan": "{{event16.color6.dark.hex}}",
+                "terminal.ansi.bright_cyan": "{{event16.color14.dark.hex}}",
+                "terminal.ansi.dim_cyan": "{{event16.color6.dark.hex}}",
+                "terminal.ansi.white": "{{event16.color7.dark.hex}}",
+                "terminal.ansi.bright_white": "{{event16.color15.dark.hex}}",
+                "terminal.ansi.dim_white": "{{event16.color7.dark.hex}}",
+                "link_text.hover": "{{colors.primary.dark.hex}}",
+                "version_control.added": "{{event16.color2.dark.hex}}",
+                "version_control.modified": "{{event16.color3.dark.hex}}",
+                "version_control.word_added": "{{event16.color2.dark.hex}}33",
+                "version_control.word_deleted": "{{event16.color1.dark.hex}}33",
+                "version_control.deleted": "{{event16.color1.dark.hex}}",
+                "conflict": "{{colors.error.dark.hex}}",
+                "conflict.background": "{{colors.error_container.dark.hex}}80",
+                "conflict.border": "{{colors.on_error_container.dark.hex}}",
+                "created": "{{event16.color2.dark.hex}}",
+                "created.background": "{{event16.color2.dark.hex}}1A",
+                "created.border": "{{event16.color2.dark.hex}}",
+                "deleted": "{{event16.color1.dark.hex}}",
+                "deleted.background": "{{event16.color1.dark.hex}}1A",
+                "deleted.border": "{{event16.color1.dark.hex}}",
+                "error": "{{colors.error.dark.hex}}",
+                "error.background": "{{colors.error.dark.hex}}1A",
+                "error.border": "{{colors.error.dark.hex}}",
+                "hidden": "{{colors.outline.dark.hex}}",
+                "hidden.background": "{{colors.outline.dark.hex}}1A",
+                "hidden.border": "{{colors.outline.dark.hex}}",
+                "hint": "{{colors.tertiary.dark.hex}}",
+                "hint.background": "{{colors.tertiary.dark.hex}}1A",
+                "hint.border": "{{colors.tertiary.dark.hex}}",
+                "ignored": "{{colors.outline.dark.hex}}",
+                "ignored.background": "{{colors.outline.dark.hex}}1A",
+                "ignored.border": "{{colors.outline.dark.hex}}",
+                "info": "{{event16.color4.dark.hex}}",
+                "info.background": "{{event16.color4.dark.hex}}1A",
+                "info.border": "{{event16.color4.dark.hex}}",
+                "modified": "{{event16.color3.dark.hex}}",
+                "modified.background": "{{event16.color3.dark.hex}}1A",
+                "modified.border": "{{event16.color3.dark.hex}}",
+                "predictive": "{{colors.tertiary.dark.hex}}",
+                "predictive.border": "{{colors.tertiary.dark.hex}}",
+                "predictive.background": "{{colors.tertiary_container.dark.hex}}1A",
+                "renamed": "{{event16.color4.dark.hex}}",
+                "renamed.border": "{{event16.color4.dark.hex}}",
+                "renamed.background": "{{event16.color4.dark.hex}}1A",
+                "success": "{{event16.color2.dark.hex}}",
+                "success.background": "{{event16.color2.dark.hex}}1A",
+                "success.border": "{{event16.color2.dark.hex}}",
+                "unreachable": "{{colors.error.dark.hex}}",
+                "unreachable.background": "{{colors.error_container.dark.hex}}1A",
+                "unreachable.border": "{{colors.error.dark.hex}}",
+                "warning": "{{event16.color3.dark.hex}}",
+                "warning.background": "{{event16.color3.dark.hex}}1A",
+                "warning.border": "{{event16.color3.dark.hex}}",
+                "players": "{{colors.secondary.dark.hex}}",
+                "syntax": {
+                    "attribute": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "boolean": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "comment": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "comment.doc": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "constant": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "constructor": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "embedded": {
+                        "color": "{{colors.on_surface.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "emphasis": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "emphasis.strong": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "enum": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "function": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "keyword": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "label": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "link_text": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "link_uri": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": "normal",
+                        "font_weight": null
+                    },
+                    "number": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "operator": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "property": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation": {
+                        "color": "{{colors.on_surface_variant.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.bracket": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.delimiter": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.list_marker": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.special": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector.pseudo": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.escape": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.regex": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special.symbol": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "tag": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "text.literal": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "title": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "type": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "variable": {
+                        "color": "{{colors.on_surface.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variable.special": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variant": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    }
+                }
+            }
+        },
+        {
+            "name": "Event Horizon Light",
+            "appearance": "light",
+            "style": {
+                "accents": [
+                    "{{colors.primary.light.hex}}",
+                    "{{colors.secondary.light.hex}}",
+                    "{{colors.tertiary.light.hex}}"
+                ],
+                "background.appearance": "opaque",
+                "border": "{{colors.outline_variant.light.hex}}",
+                "border.variant": "{{colors.outline.light.hex}}",
+                "border.focused": "{{colors.primary.light.hex}}",
+                "border.selected": "{{colors.primary.light.hex}}",
+                "border.transparent": null,
+                "border.disabled": "{{colors.outline_variant.light.hex}}60",
+                "elevated_surface.background": "{{colors.surface_container_high.light.hex}}",
+                "surface.background": "{{colors.surface.light.hex}}",
+                "background": "{{colors.surface_dim.light.hex}}",
+                "element.background": "{{colors.surface_container.light.hex}}",
+                "element.hover": "{{colors.surface_container_high.light.hex}}",
+                "element.active": "{{colors.surface_container_highest.light.hex}}",
+                "element.selected": "{{colors.secondary_container.light.hex}}",
+                "element.disabled": "{{colors.surface_variant.light.hex}}",
+                "drop_target.background": "{{colors.primary_container.light.hex}}80",
+                "ghost_element.background": null,
+                "ghost_element.hover": "{{colors.surface_container.light.hex}}80",
+                "ghost_element.active": "{{colors.surface_container_high.light.hex}}",
+                "ghost_element.selected": "{{colors.secondary_container.light.hex}}80",
+                "ghost_element.disabled": "{{colors.surface_variant.light.hex}}60",
+                "text": "{{colors.on_surface.light.hex}}",
+                "text.muted": "{{colors.on_surface_variant.light.hex}}",
+                "text.placeholder": "{{colors.on_surface_variant.light.hex}}99",
+                "text.disabled": "{{colors.on_surface.light.hex}}60",
+                "text.accent": "{{colors.primary.light.hex}}",
+                "icon": "{{colors.on_surface.light.hex}}",
+                "icon.muted": "{{colors.on_surface_variant.light.hex}}",
+                "icon.disabled": "{{colors.on_surface.light.hex}}60",
+                "icon.placeholder": "{{colors.on_surface_variant.light.hex}}80",
+                "icon.accent": "{{colors.primary.light.hex}}",
+                "status_bar.background": "{{colors.surface_dim.light.hex}}",
+                "title_bar.background": "{{colors.surface_dim.light.hex}}",
+                "title_bar.inactive_background": "{{colors.surface_dim.light.hex}}",
+                "toolbar.background": "{{colors.background.light.hex}}",
+                "tab_bar.background": "{{colors.surface.light.hex}}",
+                "tab.inactive_background": "{{colors.surface.light.hex}}",
+                "tab.active_background": "{{colors.surface_dim.light.hex}}",
+                "search.match_background": "{{colors.tertiary_container.light.hex}}80",
+                "search.active_match_background": "{{colors.primary_container.light.hex}}99",
+                "panel.background": "{{colors.surface.light.hex}}",
+                "panel.focused_border": null,
+                "pane.focused_border": null,
+                "scrollbar.thumb.background": "{{colors.on_surface_variant.light.hex}}50",
+                "scrollbar.thumb.hover_background": "{{colors.on_surface_variant.light.hex}}80",
+                "scrollbar.thumb.border": "{{colors.outline_variant.light.hex}}40",
+                "scrollbar.track.background": null,
+                "scrollbar.track.border": "{{colors.outline_variant.light.hex}}20",
+                "editor.foreground": "{{colors.on_surface.light.hex}}",
+                "editor.background": "{{colors.background.light.hex}}",
+                "editor.gutter.background": "{{colors.surface_dim.light.hex}}",
+                "editor.subheader.background": "{{colors.surface.light.hex}}",
+                "editor.indent_guide": "{{colors.outline_variant.light.hex}}22",
+                "editor.indent_guide_active": "{{colors.primary.light.hex}}99",
+                "editor.active_line.background": "{{colors.surface_container.light.hex}}66",
+                "editor.highlighted_line.background": "{{colors.surface_container.light.hex}}66",
+                "editor.line_number": "{{colors.on_surface_variant.light.hex}}",
+                "editor.active_line_number": "{{colors.primary.light.hex}}",
+                "editor.invisible": "{{colors.outline_variant.light.hex}}33",
+                "editor.wrap_guide": "{{colors.outline_variant.light.hex}}22",
+                "editor.active_wrap_guide": "{{colors.outline.light.hex}}80",
+                "editor.document_highlight.read_background": "{{colors.primary_container.light.hex}}60",
+                "editor.document_highlight.write_background": "{{colors.secondary_container.light.hex}}80",
+                "terminal.background": "{{colors.background.light.hex}}",
+                "terminal.foreground": "{{colors.on_surface.light.hex}}",
+                "terminal.bright_foreground": "{{colors.on_surface.light.hex}}",
+                "terminal.dim_foreground": "{{colors.on_surface_variant.light.hex}}",
+                "terminal.ansi.black": "{{event16.color0.light.hex}}",
+                "terminal.ansi.bright_black": "{{event16.color8.light.hex}}",
+                "terminal.ansi.dim_black": "{{event16.color0.light.hex}}",
+                "terminal.ansi.red": "{{event16.color1.light.hex}}",
+                "terminal.ansi.bright_red": "{{event16.color9.light.hex}}",
+                "terminal.ansi.dim_red": "{{event16.color1.light.hex}}",
+                "terminal.ansi.green": "{{event16.color2.light.hex}}",
+                "terminal.ansi.bright_green": "{{event16.color10.light.hex}}",
+                "terminal.ansi.dim_green": "{{event16.color2.light.hex}}",
+                "terminal.ansi.yellow": "{{event16.color3.light.hex}}",
+                "terminal.ansi.bright_yellow": "{{event16.color11.light.hex}}",
+                "terminal.ansi.dim_yellow": "{{event16.color3.light.hex}}",
+                "terminal.ansi.blue": "{{event16.color4.light.hex}}",
+                "terminal.ansi.bright_blue": "{{event16.color12.light.hex}}",
+                "terminal.ansi.dim_blue": "{{event16.color4.light.hex}}",
+                "terminal.ansi.magenta": "{{event16.color5.light.hex}}",
+                "terminal.ansi.bright_magenta": "{{event16.color13.light.hex}}",
+                "terminal.ansi.dim_magenta": "{{event16.color5.light.hex}}",
+                "terminal.ansi.cyan": "{{event16.color6.light.hex}}",
+                "terminal.ansi.bright_cyan": "{{event16.color14.light.hex}}",
+                "terminal.ansi.dim_cyan": "{{event16.color6.light.hex}}",
+                "terminal.ansi.white": "{{event16.color7.light.hex}}",
+                "terminal.ansi.bright_white": "{{event16.color15.light.hex}}",
+                "terminal.ansi.dim_white": "{{event16.color7.light.hex}}",
+                "link_text.hover": "{{colors.primary.light.hex}}",
+                "version_control.added": "{{event16.color2.light.hex}}",
+                "version_control.modified": "{{event16.color3.light.hex}}",
+                "version_control.word_added": "{{event16.color2.light.hex}}33",
+                "version_control.word_deleted": "{{event16.color1.light.hex}}33",
+                "version_control.deleted": "{{event16.color1.light.hex}}",
+                "conflict": "{{colors.error.light.hex}}",
+                "conflict.background": "{{colors.error_container.light.hex}}80",
+                "conflict.border": "{{colors.on_error_container.light.hex}}",
+                "created": "{{event16.color2.light.hex}}",
+                "created.background": "{{event16.color2.light.hex}}1A",
+                "created.border": "{{event16.color2.light.hex}}",
+                "deleted": "{{event16.color1.light.hex}}",
+                "deleted.background": "{{event16.color1.light.hex}}1A",
+                "deleted.border": "{{event16.color1.light.hex}}",
+                "error": "{{colors.error.light.hex}}",
+                "error.background": "{{colors.error.light.hex}}1A",
+                "error.border": "{{colors.error.light.hex}}",
+                "hidden": "{{colors.outline.light.hex}}",
+                "hidden.background": "{{colors.outline.light.hex}}1A",
+                "hidden.border": "{{colors.outline.light.hex}}",
+                "hint": "{{colors.tertiary.light.hex}}",
+                "hint.background": "{{colors.tertiary.light.hex}}1A",
+                "hint.border": "{{colors.tertiary.light.hex}}",
+                "ignored": "{{colors.outline.light.hex}}",
+                "ignored.background": "{{colors.outline.light.hex}}1A",
+                "ignored.border": "{{colors.outline.light.hex}}",
+                "info": "{{event16.color4.light.hex}}",
+                "info.background": "{{event16.color4.light.hex}}1A",
+                "info.border": "{{event16.color4.light.hex}}",
+                "modified": "{{event16.color3.light.hex}}",
+                "modified.background": "{{event16.color3.light.hex}}1A",
+                "modified.border": "{{event16.color3.light.hex}}",
+                "predictive": "{{colors.tertiary.light.hex}}",
+                "predictive.border": "{{colors.tertiary.light.hex}}",
+                "predictive.background": "{{colors.tertiary_container.light.hex}}1A",
+                "renamed": "{{event16.color4.light.hex}}",
+                "renamed.border": "{{event16.color4.light.hex}}",
+                "renamed.background": "{{event16.color4.light.hex}}1A",
+                "success": "{{event16.color2.light.hex}}",
+                "success.background": "{{event16.color2.light.hex}}1A",
+                "success.border": "{{event16.color2.light.hex}}",
+                "unreachable": "{{colors.error.light.hex}}",
+                "unreachable.background": "{{colors.error_container.light.hex}}1A",
+                "unreachable.border": "{{colors.error.light.hex}}",
+                "warning": "{{event16.color3.light.hex}}",
+                "warning.background": "{{event16.color3.light.hex}}1A",
+                "warning.border": "{{event16.color3.light.hex}}",
+                "players": "{{colors.secondary.light.hex}}",
+                "syntax": {
+                    "attribute": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "boolean": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "comment": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "comment.doc": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "constant": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "constructor": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "embedded": {
+                        "color": "{{colors.on_surface.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "emphasis": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "emphasis.strong": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "enum": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "function": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "keyword": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "label": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "link_text": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "link_uri": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": "normal",
+                        "font_weight": null
+                    },
+                    "number": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "operator": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "property": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation": {
+                        "color": "{{colors.on_surface_variant.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.bracket": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.delimiter": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.list_marker": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.special": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector.pseudo": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.escape": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.regex": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special.symbol": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "tag": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "text.literal": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "title": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "type": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "variable": {
+                        "color": "{{colors.on_surface.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variable.special": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variant": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    }
+                }
+            }
+        },
+        {
+            "name": "Event Horizon Dark (Blur)",
+            "appearance": "dark",
+            "style": {
+                "accents": [
+                    "{{colors.primary.dark.hex}}",
+                    "{{colors.secondary.dark.hex}}",
+                    "{{colors.tertiary.dark.hex}}"
+                ],
+                "background.appearance": "blurred",
+                "border": "{{colors.outline_variant.dark.hex}}",
+                "border.variant": "{{colors.outline.dark.hex}}",
+                "border.focused": "{{colors.primary.dark.hex}}",
+                "border.selected": "{{colors.primary.dark.hex}}",
+                "border.transparent": null,
+                "border.disabled": "{{colors.outline_variant.dark.hex}}60",
+                "elevated_surface.background": "{{colors.surface_container_high.dark.hex}}",
+                "surface.background": "{{colors.surface.dark.hex}}",
+                "background": null,
+                "element.background": "{{colors.surface_container.dark.hex}}",
+                "element.hover": "{{colors.surface_container_high.dark.hex}}",
+                "element.active": "{{colors.surface_container_highest.dark.hex}}",
+                "element.selected": "{{colors.secondary_container.dark.hex}}",
+                "element.disabled": "{{colors.surface_variant.dark.hex}}",
+                "drop_target.background": "{{colors.primary_container.dark.hex}}80",
+                "ghost_element.background": null,
+                "ghost_element.hover": "{{colors.surface_container.dark.hex}}80",
+                "ghost_element.active": "{{colors.surface_container_high.dark.hex}}",
+                "ghost_element.selected": "{{colors.secondary_container.dark.hex}}80",
+                "ghost_element.disabled": "{{colors.surface_variant.dark.hex}}60",
+                "text": "{{colors.on_surface.dark.hex}}",
+                "text.muted": "{{colors.on_surface_variant.dark.hex}}",
+                "text.placeholder": "{{colors.on_surface_variant.dark.hex}}99",
+                "text.disabled": "{{colors.on_surface.dark.hex}}60",
+                "text.accent": "{{colors.primary.dark.hex}}",
+                "icon": "{{colors.on_surface.dark.hex}}",
+                "icon.muted": "{{colors.on_surface_variant.dark.hex}}",
+                "icon.disabled": "{{colors.on_surface.dark.hex}}60",
+                "icon.placeholder": "{{colors.on_surface_variant.dark.hex}}80",
+                "icon.accent": "{{colors.primary.dark.hex}}",
+                "status_bar.background": "{{colors.surface_dim.dark.hex}}",
+                "title_bar.background": "{{colors.surface_dim.dark.hex}}",
+                "title_bar.inactive_background": "{{colors.surface_dim.dark.hex}}",
+                "toolbar.background": "{{colors.background.dark.hex}}",
+                "tab_bar.background": "{{colors.surface.dark.hex}}",
+                "tab.inactive_background": "{{colors.surface.dark.hex}}",
+                "tab.active_background": "{{colors.surface_dim.dark.hex}}",
+                "search.match_background": "{{colors.tertiary_container.dark.hex}}80",
+                "search.active_match_background": "{{colors.primary_container.dark.hex}}99",
+                "panel.background": "{{colors.surface.dark.hex}}",
+                "panel.focused_border": null,
+                "pane.focused_border": null,
+                "scrollbar.thumb.background": "{{colors.on_surface_variant.dark.hex}}50",
+                "scrollbar.thumb.hover_background": "{{colors.on_surface_variant.dark.hex}}80",
+                "scrollbar.thumb.border": "{{colors.outline_variant.dark.hex}}40",
+                "scrollbar.track.background": null,
+                "scrollbar.track.border": "{{colors.outline_variant.dark.hex}}20",
+                "editor.foreground": "{{colors.on_surface.dark.hex}}",
+                "editor.background": "{{colors.background.dark.hex}}",
+                "editor.gutter.background": "{{colors.surface_dim.dark.hex}}",
+                "editor.subheader.background": "{{colors.surface.dark.hex}}",
+                "editor.indent_guide": "{{colors.outline_variant.dark.hex}}22",
+                "editor.indent_guide_active": "{{colors.primary.dark.hex}}99",
+                "editor.active_line.background": "{{colors.surface_container.dark.hex}}66",
+                "editor.highlighted_line.background": "{{colors.surface_container.dark.hex}}66",
+                "editor.line_number": "{{colors.on_surface_variant.dark.hex}}",
+                "editor.active_line_number": "{{colors.primary.dark.hex}}",
+                "editor.invisible": "{{colors.outline_variant.dark.hex}}33",
+                "editor.wrap_guide": "{{colors.outline_variant.dark.hex}}22",
+                "editor.active_wrap_guide": "{{colors.outline.dark.hex}}80",
+                "editor.document_highlight.read_background": "{{colors.primary_container.dark.hex}}60",
+                "editor.document_highlight.write_background": "{{colors.secondary_container.dark.hex}}80",
+                "terminal.background": "{{colors.background.dark.hex}}",
+                "terminal.foreground": "{{colors.on_surface.dark.hex}}",
+                "terminal.bright_foreground": "{{colors.on_surface.dark.hex}}",
+                "terminal.dim_foreground": "{{colors.on_surface_variant.dark.hex}}",
+                "terminal.ansi.black": "{{event16.color0.dark.hex}}",
+                "terminal.ansi.bright_black": "{{event16.color8.dark.hex}}",
+                "terminal.ansi.dim_black": "{{event16.color0.dark.hex}}",
+                "terminal.ansi.red": "{{event16.color1.dark.hex}}",
+                "terminal.ansi.bright_red": "{{event16.color9.dark.hex}}",
+                "terminal.ansi.dim_red": "{{event16.color1.dark.hex}}",
+                "terminal.ansi.green": "{{event16.color2.dark.hex}}",
+                "terminal.ansi.bright_green": "{{event16.color10.dark.hex}}",
+                "terminal.ansi.dim_green": "{{event16.color2.dark.hex}}",
+                "terminal.ansi.yellow": "{{event16.color3.dark.hex}}",
+                "terminal.ansi.bright_yellow": "{{event16.color11.dark.hex}}",
+                "terminal.ansi.dim_yellow": "{{event16.color3.dark.hex}}",
+                "terminal.ansi.blue": "{{event16.color4.dark.hex}}",
+                "terminal.ansi.bright_blue": "{{event16.color12.dark.hex}}",
+                "terminal.ansi.dim_blue": "{{event16.color4.dark.hex}}",
+                "terminal.ansi.magenta": "{{event16.color5.dark.hex}}",
+                "terminal.ansi.bright_magenta": "{{event16.color13.dark.hex}}",
+                "terminal.ansi.dim_magenta": "{{event16.color5.dark.hex}}",
+                "terminal.ansi.cyan": "{{event16.color6.dark.hex}}",
+                "terminal.ansi.bright_cyan": "{{event16.color14.dark.hex}}",
+                "terminal.ansi.dim_cyan": "{{event16.color6.dark.hex}}",
+                "terminal.ansi.white": "{{event16.color7.dark.hex}}",
+                "terminal.ansi.bright_white": "{{event16.color15.dark.hex}}",
+                "terminal.ansi.dim_white": "{{event16.color7.dark.hex}}",
+                "link_text.hover": "{{colors.primary.dark.hex}}",
+                "version_control.added": "{{event16.color2.dark.hex}}",
+                "version_control.modified": "{{event16.color3.dark.hex}}",
+                "version_control.word_added": "{{event16.color2.dark.hex}}33",
+                "version_control.word_deleted": "{{event16.color1.dark.hex}}33",
+                "version_control.deleted": "{{event16.color1.dark.hex}}",
+                "conflict": "{{colors.error.dark.hex}}",
+                "conflict.background": "{{colors.error_container.dark.hex}}80",
+                "conflict.border": "{{colors.on_error_container.dark.hex}}",
+                "created": "{{event16.color2.dark.hex}}",
+                "created.background": "{{event16.color2.dark.hex}}1A",
+                "created.border": "{{event16.color2.dark.hex}}",
+                "deleted": "{{event16.color1.dark.hex}}",
+                "deleted.background": "{{event16.color1.dark.hex}}1A",
+                "deleted.border": "{{event16.color1.dark.hex}}",
+                "error": "{{colors.error.dark.hex}}",
+                "error.background": "{{colors.error.dark.hex}}1A",
+                "error.border": "{{colors.error.dark.hex}}",
+                "hidden": "{{colors.outline.dark.hex}}",
+                "hidden.background": "{{colors.outline.dark.hex}}1A",
+                "hidden.border": "{{colors.outline.dark.hex}}",
+                "hint": "{{colors.tertiary.dark.hex}}",
+                "hint.background": "{{colors.tertiary.dark.hex}}1A",
+                "hint.border": "{{colors.tertiary.dark.hex}}",
+                "ignored": "{{colors.outline.dark.hex}}",
+                "ignored.background": "{{colors.outline.dark.hex}}1A",
+                "ignored.border": "{{colors.outline.dark.hex}}",
+                "info": "{{event16.color4.dark.hex}}",
+                "info.background": "{{event16.color4.dark.hex}}1A",
+                "info.border": "{{event16.color4.dark.hex}}",
+                "modified": "{{event16.color3.dark.hex}}",
+                "modified.background": "{{event16.color3.dark.hex}}1A",
+                "modified.border": "{{event16.color3.dark.hex}}",
+                "predictive": "{{colors.tertiary.dark.hex}}",
+                "predictive.border": "{{colors.tertiary.dark.hex}}",
+                "predictive.background": "{{colors.tertiary_container.dark.hex}}1A",
+                "renamed": "{{event16.color4.dark.hex}}",
+                "renamed.border": "{{event16.color4.dark.hex}}",
+                "renamed.background": "{{event16.color4.dark.hex}}1A",
+                "success": "{{event16.color2.dark.hex}}",
+                "success.background": "{{event16.color2.dark.hex}}1A",
+                "success.border": "{{event16.color2.dark.hex}}",
+                "unreachable": "{{colors.error.dark.hex}}",
+                "unreachable.background": "{{colors.error_container.dark.hex}}1A",
+                "unreachable.border": "{{colors.error.dark.hex}}",
+                "warning": "{{event16.color3.dark.hex}}",
+                "warning.background": "{{event16.color3.dark.hex}}1A",
+                "warning.border": "{{event16.color3.dark.hex}}",
+                "players": "{{colors.secondary.dark.hex}}",
+                "syntax": {
+                    "attribute": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "boolean": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "comment": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "comment.doc": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "constant": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "constructor": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "embedded": {
+                        "color": "{{colors.on_surface.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "emphasis": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "emphasis.strong": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "enum": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "function": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "keyword": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "label": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "link_text": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "link_uri": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": "normal",
+                        "font_weight": null
+                    },
+                    "number": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "operator": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "property": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation": {
+                        "color": "{{colors.on_surface_variant.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.bracket": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.delimiter": {
+                        "color": "{{colors.outline.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.list_marker": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.special": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector.pseudo": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.escape": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.regex": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special.symbol": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "tag": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "text.literal": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "title": {
+                        "color": "{{colors.primary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "type": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "variable": {
+                        "color": "{{colors.on_surface.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variable.special": {
+                        "color": "{{colors.secondary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variant": {
+                        "color": "{{colors.tertiary.dark.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    }
+                }
+            }
+        },
+        {
+            "name": "Event Horizon Light (Blur)",
+            "appearance": "light",
+            "style": {
+                "accents": [
+                    "{{colors.primary.light.hex}}",
+                    "{{colors.secondary.light.hex}}",
+                    "{{colors.tertiary.light.hex}}"
+                ],
+                "background.appearance": "blurred",
+                "border": "{{colors.outline_variant.light.hex}}",
+                "border.variant": "{{colors.outline.light.hex}}",
+                "border.focused": "{{colors.primary.light.hex}}",
+                "border.selected": "{{colors.primary.light.hex}}",
+                "border.transparent": null,
+                "border.disabled": "{{colors.outline_variant.light.hex}}60",
+                "elevated_surface.background": "{{colors.surface_container_high.light.hex}}",
+                "surface.background": "{{colors.surface.light.hex}}",
+                "background": null,
+                "element.background": "{{colors.surface_container.light.hex}}",
+                "element.hover": "{{colors.surface_container_high.light.hex}}",
+                "element.active": "{{colors.surface_container_highest.light.hex}}",
+                "element.selected": "{{colors.secondary_container.light.hex}}",
+                "element.disabled": "{{colors.surface_variant.light.hex}}",
+                "drop_target.background": "{{colors.primary_container.light.hex}}80",
+                "ghost_element.background": null,
+                "ghost_element.hover": "{{colors.surface_container.light.hex}}80",
+                "ghost_element.active": "{{colors.surface_container_high.light.hex}}",
+                "ghost_element.selected": "{{colors.secondary_container.light.hex}}80",
+                "ghost_element.disabled": "{{colors.surface_variant.light.hex}}60",
+                "text": "{{colors.on_surface.light.hex}}",
+                "text.muted": "{{colors.on_surface_variant.light.hex}}",
+                "text.placeholder": "{{colors.on_surface_variant.light.hex}}99",
+                "text.disabled": "{{colors.on_surface.light.hex}}60",
+                "text.accent": "{{colors.primary.light.hex}}",
+                "icon": "{{colors.on_surface.light.hex}}",
+                "icon.muted": "{{colors.on_surface_variant.light.hex}}",
+                "icon.disabled": "{{colors.on_surface.light.hex}}60",
+                "icon.placeholder": "{{colors.on_surface_variant.light.hex}}80",
+                "icon.accent": "{{colors.primary.light.hex}}",
+                "status_bar.background": "{{colors.surface_dim.light.hex}}",
+                "title_bar.background": "{{colors.surface_dim.light.hex}}",
+                "title_bar.inactive_background": "{{colors.surface_dim.light.hex}}",
+                "toolbar.background": "{{colors.background.light.hex}}",
+                "tab_bar.background": "{{colors.surface.light.hex}}",
+                "tab.inactive_background": "{{colors.surface.light.hex}}",
+                "tab.active_background": "{{colors.surface_dim.light.hex}}",
+                "search.match_background": "{{colors.tertiary_container.light.hex}}80",
+                "search.active_match_background": "{{colors.primary_container.light.hex}}99",
+                "panel.background": "{{colors.surface.light.hex}}",
+                "panel.focused_border": null,
+                "pane.focused_border": null,
+                "scrollbar.thumb.background": "{{colors.on_surface_variant.light.hex}}50",
+                "scrollbar.thumb.hover_background": "{{colors.on_surface_variant.light.hex}}80",
+                "scrollbar.thumb.border": "{{colors.outline_variant.light.hex}}40",
+                "scrollbar.track.background": null,
+                "scrollbar.track.border": "{{colors.outline_variant.light.hex}}20",
+                "editor.foreground": "{{colors.on_surface.light.hex}}",
+                "editor.background": "{{colors.background.light.hex}}",
+                "editor.gutter.background": "{{colors.surface_dim.light.hex}}",
+                "editor.subheader.background": "{{colors.surface.light.hex}}",
+                "editor.indent_guide": "{{colors.outline_variant.light.hex}}22",
+                "editor.indent_guide_active": "{{colors.primary.light.hex}}99",
+                "editor.active_line.background": "{{colors.surface_container.light.hex}}66",
+                "editor.highlighted_line.background": "{{colors.surface_container.light.hex}}66",
+                "editor.line_number": "{{colors.on_surface_variant.light.hex}}",
+                "editor.active_line_number": "{{colors.primary.light.hex}}",
+                "editor.invisible": "{{colors.outline_variant.light.hex}}33",
+                "editor.wrap_guide": "{{colors.outline_variant.light.hex}}22",
+                "editor.active_wrap_guide": "{{colors.outline.light.hex}}80",
+                "editor.document_highlight.read_background": "{{colors.primary_container.light.hex}}60",
+                "editor.document_highlight.write_background": "{{colors.secondary_container.light.hex}}80",
+                "terminal.background": "{{colors.background.light.hex}}",
+                "terminal.foreground": "{{colors.on_surface.light.hex}}",
+                "terminal.bright_foreground": "{{colors.on_surface.light.hex}}",
+                "terminal.dim_foreground": "{{colors.on_surface_variant.light.hex}}",
+                "terminal.ansi.black": "{{event16.color0.light.hex}}",
+                "terminal.ansi.bright_black": "{{event16.color8.light.hex}}",
+                "terminal.ansi.dim_black": "{{event16.color0.light.hex}}",
+                "terminal.ansi.red": "{{event16.color1.light.hex}}",
+                "terminal.ansi.bright_red": "{{event16.color9.light.hex}}",
+                "terminal.ansi.dim_red": "{{event16.color1.light.hex}}",
+                "terminal.ansi.green": "{{event16.color2.light.hex}}",
+                "terminal.ansi.bright_green": "{{event16.color10.light.hex}}",
+                "terminal.ansi.dim_green": "{{event16.color2.light.hex}}",
+                "terminal.ansi.yellow": "{{event16.color3.light.hex}}",
+                "terminal.ansi.bright_yellow": "{{event16.color11.light.hex}}",
+                "terminal.ansi.dim_yellow": "{{event16.color3.light.hex}}",
+                "terminal.ansi.blue": "{{event16.color4.light.hex}}",
+                "terminal.ansi.bright_blue": "{{event16.color12.light.hex}}",
+                "terminal.ansi.dim_blue": "{{event16.color4.light.hex}}",
+                "terminal.ansi.magenta": "{{event16.color5.light.hex}}",
+                "terminal.ansi.bright_magenta": "{{event16.color13.light.hex}}",
+                "terminal.ansi.dim_magenta": "{{event16.color5.light.hex}}",
+                "terminal.ansi.cyan": "{{event16.color6.light.hex}}",
+                "terminal.ansi.bright_cyan": "{{event16.color14.light.hex}}",
+                "terminal.ansi.dim_cyan": "{{event16.color6.light.hex}}",
+                "terminal.ansi.white": "{{event16.color7.light.hex}}",
+                "terminal.ansi.bright_white": "{{event16.color15.light.hex}}",
+                "terminal.ansi.dim_white": "{{event16.color7.light.hex}}",
+                "link_text.hover": "{{colors.primary.light.hex}}",
+                "version_control.added": "{{event16.color2.light.hex}}",
+                "version_control.modified": "{{event16.color3.light.hex}}",
+                "version_control.word_added": "{{event16.color2.light.hex}}33",
+                "version_control.word_deleted": "{{event16.color1.light.hex}}33",
+                "version_control.deleted": "{{event16.color1.light.hex}}",
+                "conflict": "{{colors.error.light.hex}}",
+                "conflict.background": "{{colors.error_container.light.hex}}80",
+                "conflict.border": "{{colors.on_error_container.light.hex}}",
+                "created": "{{event16.color2.light.hex}}",
+                "created.background": "{{event16.color2.light.hex}}1A",
+                "created.border": "{{event16.color2.light.hex}}",
+                "deleted": "{{event16.color1.light.hex}}",
+                "deleted.background": "{{event16.color1.light.hex}}1A",
+                "deleted.border": "{{event16.color1.light.hex}}",
+                "error": "{{colors.error.light.hex}}",
+                "error.background": "{{colors.error.light.hex}}1A",
+                "error.border": "{{colors.error.light.hex}}",
+                "hidden": "{{colors.outline.light.hex}}",
+                "hidden.background": "{{colors.outline.light.hex}}1A",
+                "hidden.border": "{{colors.outline.light.hex}}",
+                "hint": "{{colors.tertiary.light.hex}}",
+                "hint.background": "{{colors.tertiary.light.hex}}1A",
+                "hint.border": "{{colors.tertiary.light.hex}}",
+                "ignored": "{{colors.outline.light.hex}}",
+                "ignored.background": "{{colors.outline.light.hex}}1A",
+                "ignored.border": "{{colors.outline.light.hex}}",
+                "info": "{{event16.color4.light.hex}}",
+                "info.background": "{{event16.color4.light.hex}}1A",
+                "info.border": "{{event16.color4.light.hex}}",
+                "modified": "{{event16.color3.light.hex}}",
+                "modified.background": "{{event16.color3.light.hex}}1A",
+                "modified.border": "{{event16.color3.light.hex}}",
+                "predictive": "{{colors.tertiary.light.hex}}",
+                "predictive.border": "{{colors.tertiary.light.hex}}",
+                "predictive.background": "{{colors.tertiary_container.light.hex}}1A",
+                "renamed": "{{event16.color4.light.hex}}",
+                "renamed.border": "{{event16.color4.light.hex}}",
+                "renamed.background": "{{event16.color4.light.hex}}1A",
+                "success": "{{event16.color2.light.hex}}",
+                "success.background": "{{event16.color2.light.hex}}1A",
+                "success.border": "{{event16.color2.light.hex}}",
+                "unreachable": "{{colors.error.light.hex}}",
+                "unreachable.background": "{{colors.error_container.light.hex}}1A",
+                "unreachable.border": "{{colors.error.light.hex}}",
+                "warning": "{{event16.color3.light.hex}}",
+                "warning.background": "{{event16.color3.light.hex}}1A",
+                "warning.border": "{{event16.color3.light.hex}}",
+                "players": "{{colors.secondary.light.hex}}",
+                "syntax": {
+                    "attribute": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "boolean": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "comment": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "comment.doc": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "constant": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "constructor": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "embedded": {
+                        "color": "{{colors.on_surface.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "emphasis": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "emphasis.strong": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "enum": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "function": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "keyword": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "label": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "link_text": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "link_uri": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": "normal",
+                        "font_weight": null
+                    },
+                    "number": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "operator": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "property": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation": {
+                        "color": "{{colors.on_surface_variant.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.bracket": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.delimiter": {
+                        "color": "{{colors.outline.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.list_marker": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "punctuation.special": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "selector.pseudo": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.escape": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.regex": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "string.special.symbol": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "tag": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "text.literal": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "title": {
+                        "color": "{{colors.primary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": 700
+                    },
+                    "type": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": "italic",
+                        "font_weight": null
+                    },
+                    "variable": {
+                        "color": "{{colors.on_surface.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variable.special": {
+                        "color": "{{colors.secondary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    },
+                    "variant": {
+                        "color": "{{colors.tertiary.light.hex}}",
+                        "font_style": null,
+                        "font_weight": null
+                    }
+                }
+            }
+        }
+    ]
+}

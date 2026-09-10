@@ -1,0 +1,1405 @@
+// Copyright 2025 The Wuffs Authors.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+//
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+// --------
+
+// Handsum is a very lossy format for very small thumbnails.
+//
+// See the lib/handsum Go implementation for more about the file format.
+
+pub status "#bad header"
+pub status "#truncated input"
+
+pub const DECODER_WORKBUF_LEN_MAX_INCL_WORST_CASE : base.u64 = 0
+
+pub struct decoder? implements base.image_decoder(
+        width   : base.u32[..= 16],
+        height  : base.u32[..= 16],
+        color   : base.u32[..= 3],  // 0=gray, 2=rgb, 3=rgba.
+        quality : base.u32[..= 3],  // 0=worst, 3=best.
+
+        // The call sequence state machine is discussed in
+        // (/doc/std/image-decoders-call-sequence.md).
+        call_sequence : base.u8,
+
+        bit_offset : base.u16,
+
+        coeffs : array[25] base.u16,
+
+        swizzler : base.pixel_swizzler,
+        util     : base.utility,
+) + (
+        bits    : array[256] base.u8,
+        buffers : array[2] array[16] array[64] base.u8,
+)
+
+pub func decoder.get_quirk(key: base.u32) base.u64 {
+    return 0
+}
+
+pub func decoder.set_quirk!(key: base.u32, value: base.u64) base.status {
+    return base."#unsupported option"
+}
+
+pub func decoder.decode_image_config?(dst: nptr base.image_config, src: base.io_reader) {
+    var status : base.status
+
+    while true {
+        status =? this.do_decode_image_config?(dst: args.dst, src: args.src)
+        if (status == base."$short read") and args.src.is_closed() {
+            return "#truncated input"
+        }
+        yield? status
+    }
+}
+
+pri func decoder.do_decode_image_config?(dst: nptr base.image_config, src: base.io_reader) {
+    var c32    : base.u32
+    var pixfmt : base.u32
+
+    if this.call_sequence <> 0x00 {
+        return base."#bad call sequence"
+    }
+
+    c32 = args.src.read_u24be_as_u32?()
+    if (c32 >> 9) <> 0x7F6B {
+        return "#bad header"
+    }
+    this.color = (c32 >> 7) & 3
+    if this.color == 1 {
+        return "#bad header"
+    }
+    this.quality = (c32 >> 5) & 3
+
+    if (c32 & 0x1F) == 0x1F {  // Reserved for future expansion.
+        return "#bad header"
+    } else if (c32 & 0x10) == 0x00 {  // Landscape.
+        this.width = 16
+        this.height = (c32 & 0x0F) + 1
+    } else {  // Portrait.
+        this.width = (c32 & 0x0F) + 1
+        this.height = 16
+    }
+
+    if args.dst <> nullptr {
+        pixfmt = base.PIXEL_FORMAT__Y
+        if this.color == 2 {
+            pixfmt = base.PIXEL_FORMAT__BGRX
+        } else if this.color > 2 {
+            pixfmt = base.PIXEL_FORMAT__BGRA_NONPREMUL
+        }
+
+        args.dst.set!(
+                pixfmt: pixfmt,
+                pixsub: 0,
+                width: this.width,
+                height: this.height,
+                first_frame_io_position: 3,
+                first_frame_is_opaque: true)
+    }
+
+    this.call_sequence = 0x20
+}
+
+pub func decoder.decode_frame_config?(dst: nptr base.frame_config, src: base.io_reader) {
+    var status : base.status
+
+    while true {
+        status =? this.do_decode_frame_config?(dst: args.dst, src: args.src)
+        if (status == base."$short read") and args.src.is_closed() {
+            return "#truncated input"
+        }
+        yield? status
+    }
+}
+
+pri func decoder.do_decode_frame_config?(dst: nptr base.frame_config, src: base.io_reader) {
+    var opaque_within_bounds : base.bool
+    var background_color     : base.u32
+
+    if this.call_sequence == 0x20 {
+        // No-op.
+    } else if this.call_sequence < 0x20 {
+        this.do_decode_image_config?(dst: nullptr, src: args.src)
+    } else if this.call_sequence == 0x28 {
+        if 3 <> args.src.position() {
+            return base."#bad restart"
+        }
+    } else if this.call_sequence == 0x40 {
+        this.call_sequence = 0x60
+        return base."@end of data"
+    } else {
+        return base."@end of data"
+    }
+
+    if args.dst <> nullptr {
+        opaque_within_bounds = false
+        background_color = 0x0000_0000
+        if this.color < 3 {
+            opaque_within_bounds = true
+            background_color = 0xFF00_0000
+        }
+
+        args.dst.set!(bounds: this.util.make_rect_ie_u32(
+                min_incl_x: 0,
+                min_incl_y: 0,
+                max_excl_x: this.width,
+                max_excl_y: this.height),
+                duration: 0,
+                index: 0,
+                io_position: 3,
+                disposal: 0,
+                opaque_within_bounds: opaque_within_bounds,
+                overwrite_instead_of_blend: false,
+                background_color: background_color)
+    }
+
+    this.call_sequence = 0x40
+}
+
+pub func decoder.decode_frame?(dst: ptr base.pixel_buffer, src: base.io_reader, blend: base.pixel_blend, workbuf: slice base.u8, opts: nptr base.decode_frame_options) {
+    var status : base.status
+
+    while true {
+        status =? this.do_decode_frame?(dst: args.dst, src: args.src, blend: args.blend, workbuf: args.workbuf, opts: args.opts)
+        if (status == base."$short read") and args.src.is_closed() {
+            return "#truncated input"
+        }
+        yield? status
+    }
+}
+
+pri func decoder.do_decode_frame?(dst: ptr base.pixel_buffer, src: base.io_reader, blend: base.pixel_blend, workbuf: slice base.u8, opts: nptr base.decode_frame_options) {
+    var pixfmt       : base.u32
+    var status       : base.status
+    var num_read     : base.u32
+    var payload_size : base.u32[..= 171]
+    var which        : base.u32[..= 1]
+
+    if this.call_sequence == 0x40 {
+        // No-op.
+    } else if this.call_sequence < 0x40 {
+        this.do_decode_frame_config?(dst: nullptr, src: args.src)
+    } else {
+        return base."@end of data"
+    }
+
+    pixfmt = base.PIXEL_FORMAT__Y
+    if this.color == 2 {
+        pixfmt = base.PIXEL_FORMAT__BGRX
+    } else if this.color > 2 {
+        pixfmt = base.PIXEL_FORMAT__BGRA_NONPREMUL
+    }
+
+    status = this.swizzler.prepare!(
+            dst_pixfmt: args.dst.pixel_format(),
+            dst_palette: args.dst.palette(),
+            src_pixfmt: this.util.make_pixel_format(repr: pixfmt),
+            src_palette: this.util.empty_slice_u8(),
+            blend: args.blend)
+    if not status.is_ok() {
+        return status
+    }
+
+    while true {
+        payload_size = PAYLOAD_SIZES[this.color][this.quality] as base.u32
+        if num_read >= payload_size {
+            break
+        }
+        assert num_read < 256 via "a < b: a < c; c <= b"(c: payload_size)
+        assert payload_size > num_read via "a > b: b < a"()
+        num_read ~mod+= args.src.limited_copy_u32_to_slice!(
+                up_to: payload_size - num_read,
+                s: this.bits[num_read ..])
+        if num_read < payload_size {
+            yield? base."$short read"
+        }
+    }
+
+    this.bit_offset = 0
+    if this.quality == 0 {
+        this.decode_block_q0!(which: 0, y_offset: 0, x_offset: 4 * 0)
+        this.decode_block_q0!(which: 0, y_offset: 0, x_offset: 4 * 8)
+        this.decode_block_q0!(which: 0, y_offset: 8, x_offset: 4 * 0)
+        this.decode_block_q0!(which: 0, y_offset: 8, x_offset: 4 * 8)
+        if this.color <> 0 {
+            this.decode_block_q0!(which: 1, y_offset: 0, x_offset: 1)
+            this.decode_block_q0!(which: 1, y_offset: 0, x_offset: 2)
+        }
+
+    } else if this.quality < 3 {
+        this.decode_block_q1!(which: 0, y_offset: 0, x_offset: 4 * 0)
+        this.decode_block_q1!(which: 0, y_offset: 0, x_offset: 4 * 8)
+        this.decode_block_q1!(which: 0, y_offset: 8, x_offset: 4 * 0)
+        this.decode_block_q1!(which: 0, y_offset: 8, x_offset: 4 * 8)
+        if this.color <> 0 {
+            this.decode_block_q1!(which: 1, y_offset: 0, x_offset: 1)
+            this.decode_block_q1!(which: 1, y_offset: 0, x_offset: 2)
+        }
+
+    } else {
+        this.decode_block_q3!(which: 0, y_offset: 0, x_offset: 4 * 0)
+        this.decode_block_q3!(which: 0, y_offset: 0, x_offset: 4 * 8)
+        this.decode_block_q3!(which: 0, y_offset: 8, x_offset: 4 * 0)
+        this.decode_block_q3!(which: 0, y_offset: 8, x_offset: 4 * 8)
+        if this.color <> 0 {
+            this.decode_block_q3!(which: 1, y_offset: 0, x_offset: 1)
+            this.decode_block_q3!(which: 1, y_offset: 0, x_offset: 2)
+        }
+    }
+
+    if this.color < 3 {
+        this.set_block_0xff!(which: 1, y_offset: 0, x_offset: 3)
+    } else {
+        this.decode_block_q3!(which: 1, y_offset: 0, x_offset: 3)
+    }
+
+    this.smooth_seams_16x16!()
+
+    if this.color <> 0 {
+        this.scale_and_bias_chroma_down!()
+        this.upsample_chroma_and_alpha!()
+        this.convert_ycca_to_bgra!()
+    }
+
+    which = 0
+    if this.width < 16 {
+        which = 1
+        this.scale_horizontal!()
+    } else if this.height < 16 {
+        which = 1
+        this.scale_vertical!()
+    }
+
+    if this.color == 0 {
+        this.convert_yxxx_to_y!(which: which)
+    }
+
+    status = this.from_pixels_to_dst!(dst: args.dst, which: which)
+    if not status.is_ok() {
+        return status
+    }
+
+    this.call_sequence = 0x60
+}
+
+pri func decoder.decode_zigzag_coeffs!() {
+    var dcm : base.u16
+    var dcn : base.u16
+    var acm : base.u16
+    var acn : base.u16
+    var z   : base.u32[..= 1]
+
+    var num_coeffs : base.u32[..= 15]
+
+    var bo     : base.u32
+    var nibble : base.u8[..= 15]
+    var i      : base.u32
+
+    dcm = 0x88
+    dcn = 1024
+    acm = 64
+    acn = 512
+    z = 0
+    if this.quality <> 0 {
+        dcm = 0x44
+        dcn = 512
+        acm = 32
+        acn = 256
+        z = 1
+    }
+
+    num_coeffs = NUM_COEFFS[this.quality]
+
+    bo = this.bit_offset as base.u32
+
+    nibble = (this.bits[(bo >> 3) & 255] >> (bo & 4)) & 15
+    this.coeffs[0] = ((nibble as base.u16) ~mod* dcm) ~mod- dcn
+    bo ~mod+= 4
+
+    i = 1
+    while i < num_coeffs {
+        assert i < 15 via "a < b: a < c; c <= b"(c: num_coeffs)
+        nibble = (this.bits[(bo >> 3) & 255] >> (bo & 4)) & 15
+        this.coeffs[ZIGZAG[z][i]] = ((nibble as base.u16) ~mod* acm) ~mod- acn
+        bo ~mod+= 4
+
+        i += 1
+    }
+
+    this.bit_offset = (bo & 0xFFFF) as base.u16
+}
+
+pri func decoder.decode_block_q0!(which: base.u32[..= 1], y_offset: base.u32[..= 8], x_offset: base.u32[..= 32]) {
+    var y : base.u32
+    var x : base.u32
+    var v : base.u32
+    var u : base.u32
+
+    var alphas_sum_32   : base.u64
+    var half_alpha_v_16 : base.u64
+    var half_alpha_u_16 : base.u64
+    var alphas_16       : base.u64
+    var c_32            : base.u64
+    var c_16            : base.u64
+    var result_0        : base.u64
+
+    this.decode_zigzag_coeffs!()
+
+    // This IDCT (Inverse Discrete Cosine Transform) algorithm is equivalent to
+    // the lowleveljpeg Go package's BlockU8.InverseDCTFrom code, although
+    // Handsum only needs to go up to (5, 5) in DCT space, instead of (8, 8).
+
+    y = 0
+    while y < 8 {
+        x = 0
+        while x < 8,
+                inv y < 8,
+        {
+            alphas_sum_32 = 0
+
+            v = 0
+            while v < 5,
+                    inv y < 8,
+                    inv x < 8,
+            {
+                half_alpha_v_16 = FIXED_POINT_INV_2_SQRT_2 as base.u64
+                if v <> 0 {
+                    half_alpha_v_16 = FIXED_POINT_HALF as base.u64
+                }
+
+                u = 0
+                while u < 5,
+                        inv y < 8,
+                        inv x < 8,
+                        inv v < 5,
+                {
+                    half_alpha_u_16 = FIXED_POINT_INV_2_SQRT_2 as base.u64
+                    if u <> 0 {
+                        half_alpha_u_16 = FIXED_POINT_HALF as base.u64
+                    }
+
+                    alphas_16 = this.util.sign_extend_rshift_u64(
+                            a: (half_alpha_v_16 ~mod* half_alpha_u_16) ~mod+ (1 << 15),
+                            n: 16)
+
+                    c_32 = this.util.sign_extend_convert_u32_u64(a: COSINES[(((2 * x) + 1) * u) & 31]) ~mod*
+                            this.util.sign_extend_convert_u32_u64(a: COSINES[(((2 * y) + 1) * v) & 31])
+
+                    c_16 = this.util.sign_extend_rshift_u64(
+                            a: c_32 ~mod+ (1 << 15),
+                            n: 16)
+
+                    alphas_sum_32 ~mod+= (alphas_16 ~mod* c_16) ~mod*
+                            this.util.sign_extend_convert_u16_u64(
+                            a: this.coeffs[(5 * v) + u])
+
+                    u += 1
+                }
+                v += 1
+            }
+
+            result_0 = this.util.sign_extend_rshift_u64(
+                    a: alphas_sum_32 ~mod+ (1 << 31),
+                    n: 32)
+
+            this.buffers[args.which][args.y_offset + y][args.x_offset + (4 * x)] =
+                    BIAS_AND_CLAMP[result_0 & 1023]
+
+            x += 1
+        }
+        y += 1
+    }
+}
+
+pri func decoder.decode_block_q1!(which: base.u32[..= 1], y_offset: base.u32[..= 8], x_offset: base.u32[..= 32]) {
+    var i : base.u32
+
+    i = 0
+    while i < 4 {
+        this.decode_zigzag_coeffs!()
+        this.decode_tile_q1!(
+                which: args.which,
+                y_offset: args.y_offset + ((i & 2) << 1),
+                x_offset: args.x_offset + ((i & 1) << 4))
+
+        i += 1
+    }
+
+    this.smooth_seams_8x8!(
+            which: args.which,
+            y_offset: args.y_offset,
+            x_offset: args.x_offset)
+}
+
+pri func decoder.decode_tile_q1!(which: base.u32[..= 1], y_offset: base.u32[..= 12], x_offset: base.u32[..= 48]) {
+    var y : base.u32
+    var x : base.u32
+    var v : base.u32
+    var u : base.u32
+
+    var alphas_sum_32   : base.u64
+    var half_alpha_v_16 : base.u64
+    var half_alpha_u_16 : base.u64
+    var alphas_16       : base.u64
+    var c_32            : base.u64
+    var c_16            : base.u64
+    var result_0        : base.u64
+
+    // IDCT but for 4×4 tiles instead of 8×8.
+
+    y = 0
+    while y < 4 {
+        x = 0
+        while x < 4,
+                inv y < 4,
+        {
+            alphas_sum_32 = 0
+
+            v = 0
+            while v < 4,
+                    inv y < 4,
+                    inv x < 4,
+            {
+                half_alpha_v_16 = FIXED_POINT_HALF as base.u64
+                if v <> 0 {
+                    half_alpha_v_16 = FIXED_POINT_INV_SQRT_2 as base.u64
+                }
+
+                u = 0
+                while u < 4,
+                        inv y < 4,
+                        inv x < 4,
+                        inv v < 4,
+                {
+                    half_alpha_u_16 = FIXED_POINT_HALF as base.u64
+                    if u <> 0 {
+                        half_alpha_u_16 = FIXED_POINT_INV_SQRT_2 as base.u64
+                    }
+
+                    alphas_16 = this.util.sign_extend_rshift_u64(
+                            a: (half_alpha_v_16 ~mod* half_alpha_u_16) ~mod+ (1 << 15),
+                            n: 16)
+
+                    c_32 = this.util.sign_extend_convert_u32_u64(a: COSINES[(((4 * x) + 2) * u) & 31]) ~mod*
+                            this.util.sign_extend_convert_u32_u64(a: COSINES[(((4 * y) + 2) * v) & 31])
+
+                    c_16 = this.util.sign_extend_rshift_u64(
+                            a: c_32 ~mod+ (1 << 15),
+                            n: 16)
+
+                    alphas_sum_32 ~mod+= (alphas_16 ~mod* c_16) ~mod*
+                            this.util.sign_extend_convert_u16_u64(
+                            a: this.coeffs[(4 * v) + u])
+
+                    u += 1
+                }
+                v += 1
+            }
+
+            result_0 = this.util.sign_extend_rshift_u64(
+                    a: alphas_sum_32 ~mod+ (1 << 31),
+                    n: 32)
+
+            this.buffers[args.which][args.y_offset + y][args.x_offset + (4 * x)] =
+                    BIAS_AND_CLAMP[result_0 & 1023]
+
+            x += 1
+        }
+        y += 1
+    }
+}
+
+pri func decoder.decode_block_q3!(which: base.u32[..= 1], y_offset: base.u32[..= 8], x_offset: base.u32[..= 32]) {
+    var bo : base.u32
+
+    var y : base.u32
+    var x : base.u32
+
+    var dct0 : base.u32
+    var dct1 : base.u32
+    var dct2 : base.u32
+
+    var v00 : base.u8
+    var v01 : base.u8
+    var v10 : base.u8
+    var v11 : base.u8
+
+    var v0 : base.u32
+    var v1 : base.u32
+    var v8 : base.u32
+    var v9 : base.u32
+
+    bo = this.bit_offset as base.u32
+
+    y = 0
+    while y < 7 {
+        x = 0
+        while x < 7,
+                inv y < 7,
+        {
+            dct0 = ((((this.bits[(bo >> 3) & 255] >> (bo & 4)) & 15) as base.u32) ~mod* 0x22) ~mod- 0x100
+            bo ~mod+= 4
+            dct1 = ((((this.bits[(bo >> 3) & 255] >> (bo & 4)) & 15) as base.u32) ~mod* 0x10) ~mod- 0x080
+            bo ~mod+= 4
+            dct2 = ((((this.bits[(bo >> 3) & 255] >> (bo & 4)) & 15) as base.u32) ~mod* 0x10) ~mod- 0x080
+            bo ~mod+= 4
+
+            // IDCT but for 2×2 tiles instead of 8×8.
+
+            v00 = BIAS_AND_CLAMP[((((dct0 ~mod+ dct1) ~mod+ dct2) ~mod+ 1) >> 1) & 1023]
+            v01 = BIAS_AND_CLAMP[((((dct0 ~mod- dct1) ~mod+ dct2) ~mod+ 1) >> 1) & 1023]
+            v10 = BIAS_AND_CLAMP[((((dct0 ~mod+ dct1) ~mod- dct2) ~mod+ 1) >> 1) & 1023]
+            v11 = BIAS_AND_CLAMP[((((dct0 ~mod- dct1) ~mod- dct2) ~mod+ 1) >> 1) & 1023]
+
+            this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * x) + 0] = v00
+            this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * x) + 4] = v01
+            this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * x) + 0] = v10
+            this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * x) + 4] = v11
+
+            x += 2
+        }
+        y += 2
+    }
+
+    this.bit_offset = (bo & 0xFFFF) as base.u16
+
+    // Smooth the seams between adjacent 2×2 tiles.
+
+    y = 1
+    while y < 7 {
+        x = 1
+        while x < 7,
+                inv y < 7,
+        {
+
+            v0 = this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * x) + 0] as base.u32
+            v1 = this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * x) + 4] as base.u32
+            v9 = this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * x) + 4] as base.u32
+            v8 = this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * x) + 0] as base.u32
+
+            this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * x) + 0] =
+                    (((((((9 ~mod* v0) ~mod+ (3 ~mod* v1)) ~mod+ v9) ~mod+ (3 ~mod* v8)) ~mod+ 8) / 16) & 0xFF) as base.u8
+            this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * x) + 4] =
+                    (((((((9 ~mod* v1) ~mod+ (3 ~mod* v9)) ~mod+ v8) ~mod+ (3 ~mod* v0)) ~mod+ 8) / 16) & 0xFF) as base.u8
+            this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * x) + 4] =
+                    (((((((9 ~mod* v9) ~mod+ (3 ~mod* v8)) ~mod+ v0) ~mod+ (3 ~mod* v1)) ~mod+ 8) / 16) & 0xFF) as base.u8
+            this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * x) + 0] =
+                    (((((((9 ~mod* v8) ~mod+ (3 ~mod* v0)) ~mod+ v1) ~mod+ (3 ~mod* v9)) ~mod+ 8) / 16) & 0xFF) as base.u8
+
+            x += 2
+        }
+
+        v0 = this.buffers[args.which][args.y_offset + 0 + 0][args.x_offset + (4 * y) + 0] as base.u32
+        v1 = this.buffers[args.which][args.y_offset + 0 + 0][args.x_offset + (4 * y) + 4] as base.u32
+        this.buffers[args.which][args.y_offset + 0 + 0][args.x_offset + (4 * y) + 0] =
+                (((((3 ~mod* v0) ~mod+ v1) ~mod+ 2) / 4) & 0xFF) as base.u8
+        this.buffers[args.which][args.y_offset + 0 + 0][args.x_offset + (4 * y) + 4] =
+                (((((3 ~mod* v1) ~mod+ v0) ~mod+ 2) / 4) & 0xFF) as base.u8
+
+        v0 = this.buffers[args.which][args.y_offset + 7 + 0][args.x_offset + (4 * y) + 0] as base.u32
+        v1 = this.buffers[args.which][args.y_offset + 7 + 0][args.x_offset + (4 * y) + 4] as base.u32
+        this.buffers[args.which][args.y_offset + 7 + 0][args.x_offset + (4 * y) + 0] =
+                (((((3 ~mod* v0) ~mod+ v1) ~mod+ 2) / 4) & 0xFF) as base.u8
+        this.buffers[args.which][args.y_offset + 7 + 0][args.x_offset + (4 * y) + 4] =
+                (((((3 ~mod* v1) ~mod+ v0) ~mod+ 2) / 4) & 0xFF) as base.u8
+
+        v0 = this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * 0) + 0] as base.u32
+        v1 = this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * 0) + 0] as base.u32
+        this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * 0) + 0] =
+                (((((3 ~mod* v0) ~mod+ v1) ~mod+ 2) / 4) & 0xFF) as base.u8
+        this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * 0) + 0] =
+                (((((3 ~mod* v1) ~mod+ v0) ~mod+ 2) / 4) & 0xFF) as base.u8
+
+        v0 = this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * 7) + 0] as base.u32
+        v1 = this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * 7) + 0] as base.u32
+        this.buffers[args.which][args.y_offset + y + 0][args.x_offset + (4 * 7) + 0] =
+                (((((3 ~mod* v0) ~mod+ v1) ~mod+ 2) / 4) & 0xFF) as base.u8
+        this.buffers[args.which][args.y_offset + y + 1][args.x_offset + (4 * 7) + 0] =
+                (((((3 ~mod* v1) ~mod+ v0) ~mod+ 2) / 4) & 0xFF) as base.u8
+
+        y += 2
+    }
+}
+
+pri func decoder.set_block_0xff!(which: base.u32[..= 1], y_offset: base.u32[..= 8], x_offset: base.u32[..= 32]) {
+    var y : base.u32
+    var x : base.u32
+
+    y = 0
+    while y < 7 {
+        x = 0
+        while x < 7,
+                inv y < 7,
+        {
+            this.buffers[args.which][args.y_offset + y][args.x_offset + (4 * x)] = 0xFF
+
+            x += 1
+        }
+        y += 1
+    }
+}
+
+pri func decoder.smooth_seams_16x16!() {
+    var i  : base.u32
+    var p0 : base.u8
+    var p1 : base.u8
+    var y0 : base.u32[..= 15]
+    var y1 : base.u32[..= 15]
+    var x0 : base.u32[..= 60]
+    var x1 : base.u32[..= 60]
+
+    var v0 : base.u32[..= 255]
+    var v1 : base.u32[..= 255]
+
+    var w0 : base.u32[..= 255]
+    var w1 : base.u32[..= 255]
+
+    var v77 : base.u32[..= 255]
+    var v78 : base.u32[..= 255]
+    var v88 : base.u32[..= 255]
+    var v87 : base.u32[..= 255]
+
+    var w77 : base.u32[..= 255]
+    var w78 : base.u32[..= 255]
+    var w88 : base.u32[..= 255]
+    var w87 : base.u32[..= 255]
+
+    i = 0
+    while i <= 54 {
+        p0 = SMOOTHING_PAIRS_16X16[i + 0]
+        p1 = SMOOTHING_PAIRS_16X16[i + 1]
+        y0 = (p0 >> 4) as base.u32
+        y1 = (p1 >> 4) as base.u32
+        x0 = ((p0 & 15) as base.u32) << 2
+        x1 = ((p1 & 15) as base.u32) << 2
+
+        v0 = this.buffers[0][y0][x0] as base.u32
+        v1 = this.buffers[0][y1][x1] as base.u32
+
+        w0 = ((3 * v0) + v1 + 2) / 4
+        w1 = ((3 * v1) + v0 + 2) / 4
+
+        this.buffers[0][y0][x0] = w0 as base.u8
+        this.buffers[0][y1][x1] = w1 as base.u8
+
+        i += 2
+    }
+
+    v77 = this.buffers[0][7][28] as base.u32
+    v78 = this.buffers[0][7][32] as base.u32
+    v88 = this.buffers[0][8][32] as base.u32
+    v87 = this.buffers[0][8][28] as base.u32
+
+    w77 = ((9 * v77) + (3 * v78) + v88 + (3 * v87) + 8) / 16
+    w78 = ((9 * v78) + (3 * v88) + v87 + (3 * v77) + 8) / 16
+    w88 = ((9 * v88) + (3 * v87) + v77 + (3 * v78) + 8) / 16
+    w87 = ((9 * v87) + (3 * v77) + v78 + (3 * v88) + 8) / 16
+
+    this.buffers[0][7][28] = w77 as base.u8
+    this.buffers[0][7][32] = w78 as base.u8
+    this.buffers[0][8][32] = w88 as base.u8
+    this.buffers[0][8][28] = w87 as base.u8
+}
+
+pri func decoder.smooth_seams_8x8!(which: base.u32[..= 1], y_offset: base.u32[..= 8], x_offset: base.u32[..= 32]) {
+    var i  : base.u32
+    var p0 : base.u8
+    var p1 : base.u8
+    var y0 : base.u32[..= 15]
+    var y1 : base.u32[..= 15]
+    var x0 : base.u32[..= 60]
+    var x1 : base.u32[..= 60]
+
+    var v0 : base.u32[..= 255]
+    var v1 : base.u32[..= 255]
+
+    var w0 : base.u32[..= 255]
+    var w1 : base.u32[..= 255]
+
+    var v33 : base.u32[..= 255]
+    var v34 : base.u32[..= 255]
+    var v44 : base.u32[..= 255]
+    var v43 : base.u32[..= 255]
+
+    var w33 : base.u32[..= 255]
+    var w34 : base.u32[..= 255]
+    var w44 : base.u32[..= 255]
+    var w43 : base.u32[..= 255]
+
+    i = 0
+    while i <= 22 {
+        p0 = SMOOTHING_PAIRS_8X8[i + 0]
+        p1 = SMOOTHING_PAIRS_8X8[i + 1]
+        y0 = args.y_offset + ((p0 >> 3) as base.u32)
+        y1 = args.y_offset + ((p1 >> 3) as base.u32)
+        x0 = args.x_offset + (((p0 & 7) as base.u32) << 2)
+        x1 = args.x_offset + (((p1 & 7) as base.u32) << 2)
+
+        v0 = this.buffers[args.which][y0][x0] as base.u32
+        v1 = this.buffers[args.which][y1][x1] as base.u32
+
+        w0 = ((3 * v0) + v1 + 2) / 4
+        w1 = ((3 * v1) + v0 + 2) / 4
+
+        this.buffers[args.which][y0][x0] = w0 as base.u8
+        this.buffers[args.which][y1][x1] = w1 as base.u8
+
+        i += 2
+    }
+
+    v33 = this.buffers[args.which][args.y_offset + 3][args.x_offset + 12] as base.u32
+    v34 = this.buffers[args.which][args.y_offset + 3][args.x_offset + 16] as base.u32
+    v44 = this.buffers[args.which][args.y_offset + 4][args.x_offset + 16] as base.u32
+    v43 = this.buffers[args.which][args.y_offset + 4][args.x_offset + 12] as base.u32
+
+    w33 = ((9 * v33) + (3 * v34) + v44 + (3 * v43) + 8) / 16
+    w34 = ((9 * v34) + (3 * v44) + v43 + (3 * v33) + 8) / 16
+    w44 = ((9 * v44) + (3 * v43) + v33 + (3 * v34) + 8) / 16
+    w43 = ((9 * v43) + (3 * v33) + v34 + (3 * v44) + 8) / 16
+
+    this.buffers[args.which][args.y_offset + 3][args.x_offset + 12] = w33 as base.u8
+    this.buffers[args.which][args.y_offset + 3][args.x_offset + 16] = w34 as base.u8
+    this.buffers[args.which][args.y_offset + 4][args.x_offset + 16] = w44 as base.u8
+    this.buffers[args.which][args.y_offset + 4][args.x_offset + 12] = w43 as base.u8
+}
+
+// scale_and_bias_chroma_down applies a look-up table transform to the 8×8
+// Chroma samples in this.buffers[1].
+pri func decoder.scale_and_bias_chroma_down!() {
+    var y : base.u32
+    var x : base.u32
+
+    y = 0
+    while y < 8 {
+        x = 0
+        while x < 8,
+                inv y < 8,
+        {
+            this.buffers[1][y][(4 * x) + 1] = SCALE_AND_BIAS_CHROMA_DOWN[
+                    this.buffers[1][y][(4 * x) + 1]]
+            this.buffers[1][y][(4 * x) + 2] = SCALE_AND_BIAS_CHROMA_DOWN[
+                    this.buffers[1][y][(4 * x) + 2]]
+
+            x += 1
+        }
+        y += 1
+    }
+}
+
+// upsample_chroma_and_alpha converts the 8×8 Chroma and Alpha samples in
+// this.buffers[1] to 16×16 samples in this.buffers[0], adjacent to the
+// existing 16×16 Luma samples in this.buffers[0].
+pri func decoder.upsample_chroma_and_alpha!() {
+    var y  : base.u32
+    var dy : base.u32
+    var y0 : base.u32[..= 7]
+    var y1 : base.u32[..= 7]
+    var x  : base.u32
+    var dx : base.u32
+    var x0 : base.u32[..= 7]
+    var x1 : base.u32[..= 7]
+
+    y = 0
+    while y < 16 {
+        dy = (((y & 1) * 2) ~mod- 1)
+        y0 = y >> 1
+        y1 = CLAMP_7[(y0 ~mod+ dy) & 31] as base.u32
+
+        x = 0
+        while x < 16,
+                inv y < 16,
+        {
+            dx = (((x & 1) * 2) ~mod- 1)
+            x0 = x >> 1
+            x1 = CLAMP_7[(x0 ~mod+ dx) & 31] as base.u32
+
+            this.buffers[0][y][(4 * x) + 1] = ((
+                    ((this.buffers[1][y0][(4 * x0) + 1] as base.u32) * 9) +
+                    ((this.buffers[1][y0][(4 * x1) + 1] as base.u32) * 3) +
+                    ((this.buffers[1][y1][(4 * x0) + 1] as base.u32) * 3) +
+                    (this.buffers[1][y1][(4 * x1) + 1] as base.u32) + 8) / 16) as base.u8
+
+            this.buffers[0][y][(4 * x) + 2] = ((
+                    ((this.buffers[1][y0][(4 * x0) + 2] as base.u32) * 9) +
+                    ((this.buffers[1][y0][(4 * x1) + 2] as base.u32) * 3) +
+                    ((this.buffers[1][y1][(4 * x0) + 2] as base.u32) * 3) +
+                    (this.buffers[1][y1][(4 * x1) + 2] as base.u32) + 8) / 16) as base.u8
+
+            this.buffers[0][y][(4 * x) + 3] = ((
+                    ((this.buffers[1][y0][(4 * x0) + 3] as base.u32) * 9) +
+                    ((this.buffers[1][y0][(4 * x1) + 3] as base.u32) * 3) +
+                    ((this.buffers[1][y1][(4 * x0) + 3] as base.u32) * 3) +
+                    (this.buffers[1][y1][(4 * x1) + 3] as base.u32) + 8) / 16) as base.u8
+
+            x += 1
+        }
+        y += 1
+    }
+
+    if this.color < 3 {
+        return nothing
+    }
+
+    y = 0
+    while y < 16 {
+        x = 0
+        while x < 16,
+                inv y < 16,
+        {
+            this.buffers[0][y][(4 * x) + 3] = CUBE_ROOT[
+                    this.buffers[0][y][(4 * x) + 3]]
+
+            x += 1
+        }
+        y += 1
+    }
+}
+
+pri func decoder.convert_yxxx_to_y!(which: base.u32[..= 1]) {
+    var y : base.u32
+    var x : base.u32
+
+    y = 0
+    while y < 16 {
+        x = 1
+        while x < 16,
+                inv y < 16,
+        {
+            this.buffers[args.which][y][x] = this.buffers[args.which][y][4 * x]
+
+            x += 1
+        }
+        y += 1
+    }
+}
+
+pri func decoder.convert_ycca_to_bgra!() {
+    var y   : base.u32
+    var x   : base.u32
+    var yy1 : base.u32
+    var cb1 : base.u32
+    var cr1 : base.u32
+    var r   : base.u32
+    var g   : base.u32
+    var b   : base.u32
+
+    y = 0
+    while y < 16 {
+        x = 0
+        while x < 16,
+                inv y < 16,
+        {
+            // This conversion algorithm is the same as the one used by
+            // src/image/color/ycbcr.go in Go's standard library.
+
+            yy1 = (this.buffers[0][y][(4 * x) + 0] as base.u32) * 0x1_0101
+            cb1 = (this.buffers[0][y][(4 * x) + 1] as base.u32) ~mod- 0x80
+            cr1 = (this.buffers[0][y][(4 * x) + 2] as base.u32) ~mod- 0x80
+
+            r = yy1 ~mod+ (91881 ~mod* cr1)
+            if (r & 0xFF00_0000) == 0 {
+                r >>= 16
+            } else {
+                r = 0xFFFF_FFFF ^ this.util.sign_extend_rshift_u32(a: r, n: 31)
+            }
+
+            g = yy1 ~mod- ((22554 ~mod* cb1) ~mod+ (46802 ~mod* cr1))
+            if (g & 0xFF00_0000) == 0 {
+                g >>= 16
+            } else {
+                g = 0xFFFF_FFFF ^ this.util.sign_extend_rshift_u32(a: g, n: 31)
+            }
+
+            b = yy1 ~mod+ (116130 ~mod* cb1)
+            if (b & 0xFF00_0000) == 0 {
+                b >>= 16
+            } else {
+                b = 0xFFFF_FFFF ^ this.util.sign_extend_rshift_u32(a: b, n: 31)
+            }
+
+            this.buffers[0][y][(4 * x) + 0] = (b & 0xFF) as base.u8
+            this.buffers[0][y][(4 * x) + 1] = (g & 0xFF) as base.u8
+            this.buffers[0][y][(4 * x) + 2] = (r & 0xFF) as base.u8
+
+            x += 1
+        }
+        y += 1
+    }
+}
+
+pri func decoder.scale_horizontal!() {
+    var y         : base.u32
+    var dstx      : base.u32[..= 15]
+    var srcx      : base.u32
+    var acc0      : base.u32
+    var acc1      : base.u32
+    var acc2      : base.u32
+    var acc3      : base.u32
+    var s0        : base.u32[..= 0xFF]
+    var s1        : base.u32[..= 0xFF]
+    var s2        : base.u32[..= 0xFF]
+    var s3        : base.u32[..= 0xFF]
+    var remainder : base.u32[..= 16]
+    var partial   : base.u32[..= 16]
+
+    y = 0
+    while y < 16 {
+        dstx = 0
+        srcx = 0
+        acc0 = 0
+        acc1 = 0
+        acc2 = 0
+        acc3 = 0
+        remainder = 16
+        while srcx < 16,
+                inv y < 16,
+        {
+            s0 = this.buffers[0][y][(4 * srcx) + 0] as base.u32
+            s1 = this.buffers[0][y][(4 * srcx) + 1] as base.u32
+            s2 = this.buffers[0][y][(4 * srcx) + 2] as base.u32
+            s3 = this.buffers[0][y][(4 * srcx) + 3] as base.u32
+
+            if remainder > this.width {
+                remainder -= this.width
+                acc0 ~mod+= this.width * s0
+                acc1 ~mod+= this.width * s1
+                acc2 ~mod+= this.width * s2
+                acc3 ~mod+= this.width * s3
+
+            } else {
+                assert this.width >= remainder via "a >= b: b <= a"()
+
+                acc0 ~mod+= remainder * s0
+                acc1 ~mod+= remainder * s1
+                acc2 ~mod+= remainder * s2
+                acc3 ~mod+= remainder * s3
+
+                this.buffers[1][y][(4 * dstx) + 0] = (((acc0 ~mod+ 8) / 16) & 0xFF) as base.u8
+                this.buffers[1][y][(4 * dstx) + 1] = (((acc1 ~mod+ 8) / 16) & 0xFF) as base.u8
+                this.buffers[1][y][(4 * dstx) + 2] = (((acc2 ~mod+ 8) / 16) & 0xFF) as base.u8
+                this.buffers[1][y][(4 * dstx) + 3] = (((acc3 ~mod+ 8) / 16) & 0xFF) as base.u8
+                dstx = (dstx + 1) & 15
+
+                partial = this.width - remainder
+
+                acc0 = partial * s0
+                acc1 = partial * s1
+                acc2 = partial * s2
+                acc3 = partial * s3
+
+                remainder = 16 - partial
+            }
+
+            srcx += 1
+        }
+        y += 1
+    }
+}
+
+pri func decoder.scale_vertical!() {
+    var x         : base.u32
+    var dsty      : base.u32[..= 15]
+    var srcy      : base.u32
+    var acc0      : base.u32
+    var acc1      : base.u32
+    var acc2      : base.u32
+    var acc3      : base.u32
+    var s0        : base.u32[..= 0xFF]
+    var s1        : base.u32[..= 0xFF]
+    var s2        : base.u32[..= 0xFF]
+    var s3        : base.u32[..= 0xFF]
+    var remainder : base.u32[..= 16]
+    var partial   : base.u32[..= 16]
+
+    x = 0
+    while x < 16 {
+        dsty = 0
+        srcy = 0
+        acc0 = 0
+        acc1 = 0
+        acc2 = 0
+        acc3 = 0
+        remainder = 16
+        while srcy < 16,
+                inv x < 16,
+        {
+            s0 = this.buffers[0][srcy][(4 * x) + 0] as base.u32
+            s1 = this.buffers[0][srcy][(4 * x) + 1] as base.u32
+            s2 = this.buffers[0][srcy][(4 * x) + 2] as base.u32
+            s3 = this.buffers[0][srcy][(4 * x) + 3] as base.u32
+
+            if remainder > this.height {
+                remainder -= this.height
+                acc0 ~mod+= this.height * s0
+                acc1 ~mod+= this.height * s1
+                acc2 ~mod+= this.height * s2
+                acc3 ~mod+= this.height * s3
+
+            } else {
+                assert this.height >= remainder via "a >= b: b <= a"()
+
+                acc0 ~mod+= remainder * s0
+                acc1 ~mod+= remainder * s1
+                acc2 ~mod+= remainder * s2
+                acc3 ~mod+= remainder * s3
+
+                this.buffers[1][dsty][(4 * x) + 0] = (((acc0 ~mod+ 8) / 16) & 0xFF) as base.u8
+                this.buffers[1][dsty][(4 * x) + 1] = (((acc1 ~mod+ 8) / 16) & 0xFF) as base.u8
+                this.buffers[1][dsty][(4 * x) + 2] = (((acc2 ~mod+ 8) / 16) & 0xFF) as base.u8
+                this.buffers[1][dsty][(4 * x) + 3] = (((acc3 ~mod+ 8) / 16) & 0xFF) as base.u8
+                dsty = (dsty + 1) & 15
+
+                partial = this.height - remainder
+
+                acc0 = partial * s0
+                acc1 = partial * s1
+                acc2 = partial * s2
+                acc3 = partial * s3
+
+                remainder = 16 - partial
+            }
+
+            srcy += 1
+        }
+        x += 1
+    }
+}
+
+pri func decoder.from_pixels_to_dst!(dst: ptr base.pixel_buffer, which: base.u32[..= 1]) base.status {
+    var dst_pixfmt          : base.pixel_format
+    var dst_bits_per_pixel  : base.u32[..= 256]
+    var dst_bytes_per_pixel : base.u32[..= 32]
+    var dst_bytes_per_row   : base.u64
+    var tab                 : table base.u8
+    var y                   : base.u32
+    var dst                 : slice base.u8
+    var src_bytes_per_pixel : base.u32[..= 4]
+    var src                 : slice base.u8
+
+    // TODO: the dst_pixfmt variable shouldn't be necessary. We should be able
+    // to chain the two calls: "args.dst.pixel_format().bits_per_pixel()".
+    dst_pixfmt = args.dst.pixel_format()
+    dst_bits_per_pixel = dst_pixfmt.bits_per_pixel()
+    if (dst_bits_per_pixel & 7) <> 0 {
+        return base."#unsupported option"
+    }
+    dst_bytes_per_pixel = dst_bits_per_pixel / 8
+    dst_bytes_per_row = (this.width * dst_bytes_per_pixel) as base.u64
+    tab = args.dst.plane(p: 0)
+
+    src_bytes_per_pixel = 1
+    if this.color <> 0 {
+        src_bytes_per_pixel = 4
+    }
+
+    while y < this.height {
+        assert y < 16 via "a < b: a < c; c <= b"(c: this.height)
+        src = this.buffers[args.which][y][.. this.width * src_bytes_per_pixel]
+
+        dst = tab.row_u32(y: y)
+        if dst_bytes_per_row < dst.length() {
+            dst = dst[.. dst_bytes_per_row]
+        }
+
+        this.swizzler.swizzle_interleaved_from_slice!(
+                dst: dst,
+                dst_palette: args.dst.palette(),
+                src: src)
+
+        y += 1
+    }
+
+    return ok
+}
+
+pub func decoder.frame_dirty_rect() base.rect_ie_u32 {
+    return this.util.make_rect_ie_u32(
+            min_incl_x: 0,
+            min_incl_y: 0,
+            max_excl_x: this.width,
+            max_excl_y: this.height)
+}
+
+pub func decoder.num_animation_loops() base.u32 {
+    return 0
+}
+
+pub func decoder.num_decoded_frame_configs() base.u64 {
+    if this.call_sequence > 0x20 {
+        return 1
+    }
+    return 0
+}
+
+pub func decoder.num_decoded_frames() base.u64 {
+    if this.call_sequence > 0x40 {
+        return 1
+    }
+    return 0
+}
+
+pub func decoder.restart_frame!(index: base.u64, io_position: base.u64) base.status {
+    if this.call_sequence < 0x20 {
+        return base."#bad call sequence"
+    }
+    if (args.index <> 0) or (args.io_position <> 3) {
+        return base."#bad argument"
+    }
+    this.call_sequence = 0x28
+    return ok
+}
+
+pub func decoder.set_report_metadata!(fourcc: base.u32, report: base.bool) {
+    // No-op. Handsum doesn't support metadata.
+}
+
+pub func decoder.tell_me_more?(dst: base.io_writer, minfo: nptr base.more_information, src: base.io_reader) {
+    return base."#no more information"
+}
+
+pub func decoder.workbuf_len() base.range_ii_u64 {
+    return this.util.make_range_ii_u64(min_incl: 0, max_incl: 0)
+}
+
+pri const PAYLOAD_SIZES : roarray[4] roarray[4] base.u8[..= 171] = [[
+        30, 48, 80, 96,
+],[
+        0, 0, 0, 0,
+],[
+        45, 72, 120, 144,
+],[
+        69, 96, 144, 168,
+]]
+
+pri const NUM_COEFFS : roarray[4] base.u32[..= 15] = [
+        15, 6, 10, 3,
+]
+
+pri const CLAMP_7 : roarray[32] base.u8[..= 7] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07, 0x07,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+]
+
+// For commentary on these constants below, see the lib/handsum and
+// lib/lowleveljpeg Go packages.
+
+pri const ZIGZAG : roarray[2] roarray[15] base.u8[..= 24] = [[
+        0, 1, 5, 10, 6, 2, 3, 7, 11, 15, 20, 16, 12, 8, 4,
+],[
+        0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 0, 0, 0, 0, 0,
+]]
+
+pri const SCALE_AND_BIAS_CHROMA_DOWN : roarray[256] base.u8 = [
+        0x3C, 0x3C, 0x3D, 0x3D, 0x3E, 0x3E, 0x3F, 0x3F, 0x40, 0x40, 0x41, 0x41, 0x42, 0x42, 0x43, 0x43,
+        0x44, 0x44, 0x45, 0x45, 0x46, 0x46, 0x47, 0x47, 0x48, 0x48, 0x49, 0x49, 0x4A, 0x4A, 0x4B, 0x4B,
+        0x4C, 0x4C, 0x4D, 0x4D, 0x4E, 0x4E, 0x4F, 0x4F, 0x50, 0x50, 0x51, 0x51, 0x52, 0x52, 0x53, 0x53,
+        0x54, 0x54, 0x55, 0x55, 0x56, 0x56, 0x57, 0x57, 0x58, 0x58, 0x59, 0x59, 0x5A, 0x5A, 0x5B, 0x5B,
+        0x5C, 0x5C, 0x5D, 0x5D, 0x5E, 0x5E, 0x5F, 0x5F, 0x60, 0x60, 0x61, 0x61, 0x62, 0x62, 0x63, 0x63,
+        0x64, 0x64, 0x65, 0x65, 0x66, 0x66, 0x67, 0x67, 0x68, 0x68, 0x69, 0x69, 0x6A, 0x6A, 0x6B, 0x6B,
+        0x6C, 0x6C, 0x6D, 0x6D, 0x6E, 0x6E, 0x6F, 0x6F, 0x70, 0x70, 0x71, 0x71, 0x72, 0x72, 0x73, 0x73,
+        0x74, 0x74, 0x75, 0x75, 0x76, 0x76, 0x77, 0x77, 0x78, 0x78, 0x79, 0x79, 0x7A, 0x7A, 0x7B, 0x7B,
+
+        0x7C, 0x7C, 0x7D, 0x7D, 0x7E, 0x7E, 0x7F, 0x7F, 0x80, 0x80, 0x81, 0x81, 0x82, 0x82, 0x83, 0x83,
+        0x84, 0x84, 0x85, 0x85, 0x86, 0x86, 0x87, 0x87, 0x88, 0x88, 0x89, 0x89, 0x8A, 0x8A, 0x8B, 0x8B,
+        0x8C, 0x8C, 0x8D, 0x8D, 0x8E, 0x8E, 0x8F, 0x8F, 0x90, 0x90, 0x91, 0x91, 0x92, 0x92, 0x93, 0x93,
+        0x94, 0x94, 0x95, 0x95, 0x96, 0x96, 0x97, 0x97, 0x98, 0x98, 0x99, 0x99, 0x9A, 0x9A, 0x9B, 0x9B,
+        0x9C, 0x9C, 0x9D, 0x9D, 0x9E, 0x9E, 0x9F, 0x9F, 0xA0, 0xA0, 0xA1, 0xA1, 0xA2, 0xA2, 0xA3, 0xA3,
+        0xA4, 0xA4, 0xA5, 0xA5, 0xA6, 0xA6, 0xA7, 0xA7, 0xA8, 0xA8, 0xA9, 0xA9, 0xAA, 0xAA, 0xAB, 0xAB,
+        0xAC, 0xAC, 0xAD, 0xAD, 0xAE, 0xAE, 0xAF, 0xAF, 0xB0, 0xB0, 0xB1, 0xB1, 0xB2, 0xB2, 0xB3, 0xB3,
+        0xB4, 0xB4, 0xB5, 0xB5, 0xB6, 0xB6, 0xB7, 0xB7, 0xB8, 0xB8, 0xB9, 0xB9, 0xBA, 0xBA, 0xBB, 0xBB,
+]
+
+pri const CUBE_ROOT : roarray[256] base.u8 = [
+        0x00, 0x00, 0x01, 0x01, 0x01, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03, 0x04, 0x04, 0x04, 0x05, 0x05,
+        0x06, 0x06, 0x06, 0x07, 0x07, 0x07, 0x08, 0x08, 0x09, 0x09, 0x09, 0x0A, 0x0A, 0x0B, 0x0B, 0x0B,
+        0x0C, 0x0C, 0x0D, 0x0D, 0x0D, 0x0E, 0x0E, 0x0F, 0x0F, 0x0F, 0x10, 0x10, 0x11, 0x11, 0x12, 0x12,
+        0x13, 0x13, 0x13, 0x14, 0x14, 0x15, 0x15, 0x16, 0x16, 0x17, 0x17, 0x18, 0x18, 0x19, 0x19, 0x1A,
+        0x1A, 0x1B, 0x1B, 0x1C, 0x1D, 0x1D, 0x1E, 0x1E, 0x1F, 0x1F, 0x20, 0x21, 0x21, 0x22, 0x22, 0x23,
+        0x24, 0x24, 0x25, 0x26, 0x26, 0x27, 0x28, 0x28, 0x29, 0x2A, 0x2B, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+        0x2F, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3F,
+        0x40, 0x41, 0x43, 0x44, 0x46, 0x48, 0x49, 0x4B, 0x4D, 0x4F, 0x52, 0x55, 0x58, 0x5B, 0x60, 0x67,
+
+        0x80, 0x99, 0xA0, 0xA5, 0xA8, 0xAB, 0xAE, 0xB1, 0xB3, 0xB5, 0xB7, 0xB8, 0xBA, 0xBC, 0xBD, 0xBF,
+        0xC0, 0xC1, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF, 0xD0,
+        0xD1, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD5, 0xD6, 0xD7, 0xD8, 0xD8, 0xD9, 0xDA, 0xDA, 0xDB, 0xDC,
+        0xDC, 0xDD, 0xDE, 0xDE, 0xDF, 0xDF, 0xE0, 0xE1, 0xE1, 0xE2, 0xE2, 0xE3, 0xE3, 0xE4, 0xE5, 0xE5,
+        0xE6, 0xE6, 0xE7, 0xE7, 0xE8, 0xE8, 0xE9, 0xE9, 0xEA, 0xEA, 0xEB, 0xEB, 0xEC, 0xEC, 0xED, 0xED,
+        0xED, 0xEE, 0xEE, 0xEF, 0xEF, 0xF0, 0xF0, 0xF1, 0xF1, 0xF1, 0xF2, 0xF2, 0xF3, 0xF3, 0xF3, 0xF4,
+        0xF4, 0xF5, 0xF5, 0xF5, 0xF6, 0xF6, 0xF7, 0xF7, 0xF7, 0xF8, 0xF8, 0xF9, 0xF9, 0xF9, 0xFA, 0xFA,
+        0xFA, 0xFB, 0xFB, 0xFC, 0xFC, 0xFC, 0xFD, 0xFD, 0xFD, 0xFE, 0xFE, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF,
+]
+
+pri const SMOOTHING_PAIRS_16X16 : roarray[56] base.u8 = [
+        0x07, 0x08,
+        0x17, 0x18,
+        0x27, 0x28,
+        0x37, 0x38,
+        0x47, 0x48,
+        0x57, 0x58,
+        0x67, 0x68,
+
+        0x70, 0x80,
+        0x71, 0x81,
+        0x72, 0x82,
+        0x73, 0x83,
+        0x74, 0x84,
+        0x75, 0x85,
+        0x76, 0x86,
+
+        0x79, 0x89,
+        0x7A, 0x8A,
+        0x7B, 0x8B,
+        0x7C, 0x8C,
+        0x7D, 0x8D,
+        0x7E, 0x8E,
+        0x7F, 0x8F,
+
+        0x97, 0x98,
+        0xA7, 0xA8,
+        0xB7, 0xB8,
+        0xC7, 0xC8,
+        0xD7, 0xD8,
+        0xE7, 0xE8,
+        0xF7, 0xF8,
+]
+
+pri const SMOOTHING_PAIRS_8X8 : roarray[24] base.u8[..= 0x3F] = [
+        0x03, 0x04,
+        0x0B, 0x0C,
+        0x13, 0x14,
+
+        0x18, 0x20,
+        0x19, 0x21,
+        0x1A, 0x22,
+
+        0x1D, 0x25,
+        0x1E, 0x26,
+        0x1F, 0x27,
+
+        0x2B, 0x2C,
+        0x33, 0x34,
+        0x3B, 0x3C,
+]
+
+pri const FIXED_POINT_INV_SQRT_2   : base.u16 = 0xB505
+pri const FIXED_POINT_HALF         : base.u16 = 0x8000
+pri const FIXED_POINT_INV_2_SQRT_2 : base.u16 = 0x5A82
+
+pri const COSINES : roarray[32] base.u32 = [
+        0x0001_0000,
+        0x0000_FB15,
+        0x0000_EC83,
+        0x0000_D4DB,
+        0x0000_B505,
+        0x0000_8E3A,
+        0x0000_61F8,
+        0x0000_31F1,
+        0x0000_0000,
+        0xFFFF_CE0F,
+        0xFFFF_9E08,
+        0xFFFF_71C6,
+        0xFFFF_4AFB,
+        0xFFFF_2B25,
+        0xFFFF_137D,
+        0xFFFF_04EB,
+        0xFFFF_0000,
+        0xFFFF_04EB,
+        0xFFFF_137D,
+        0xFFFF_2B25,
+        0xFFFF_4AFB,
+        0xFFFF_71C6,
+        0xFFFF_9E08,
+        0xFFFF_CE0F,
+        0x0000_0000,
+        0x0000_31F1,
+        0x0000_61F8,
+        0x0000_8E3A,
+        0x0000_B505,
+        0x0000_D4DB,
+        0x0000_EC83,
+        0x0000_FB15,
+]
+
+pri const BIAS_AND_CLAMP : roarray[1024] base.u8 = [
+        0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F,
+        0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9A, 0x9B, 0x9C, 0x9D, 0x9E, 0x9F,
+        0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
+        0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF,
+        0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF,
+        0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF,
+        0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF,
+        0xF0, 0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF,
+
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F,
+        0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F,
+        0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F,
+        0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,
+        0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F,
+        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7A, 0x7B, 0x7C, 0x7D, 0x7E, 0x7F,
+]

@@ -1,0 +1,11 @@
+[templates.ehkcolorscheme]
+input_path = 'SHELL_DIR/matugen/templates/kcolorscheme.colors'
+output_path = 'DATA_DIR/color-schemes/EventMatugen.colors'
+
+[templates.ehlightkcolorscheme]
+input_path = 'SHELL_DIR/matugen/templates/light-kcolorscheme.colors'
+output_path = 'DATA_DIR/color-schemes/EventMatugenLight.colors'
+
+[templates.ehdarkkcolorscheme]
+input_path = 'SHELL_DIR/matugen/templates/dark-kcolorscheme.colors'
+output_path = 'DATA_DIR/color-schemes/EventMatugenDark.colors'

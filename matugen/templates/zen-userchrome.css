@@ -1,0 +1,121 @@
+#zen-tabbox-wrapper,
+#navigator-toolbox {
+  --md-sys-color-primary: {{ colors.primary.default.hex }};
+  --md-sys-color-on-primary: {{ colors.on_primary.default.hex }};
+  --md-sys-color-primary-container: {{ colors.primary_container.default.hex }};
+  --md-sys-color-on-primary-container: {{ colors.on_primary_container.default.hex }};
+  --md-sys-color-secondary: {{ colors.secondary.default.hex }};
+  --md-sys-color-on-secondary: {{ colors.on_secondary.default.hex }};
+  --md-sys-color-secondary-container: {{ colors.secondary_container.default.hex }};
+  --md-sys-color-on-secondary-container: {{ colors.on_secondary_container.default.hex }};
+  --md-sys-color-tertiary: {{ colors.tertiary.default.hex }};
+  --md-sys-color-on-tertiary: {{ colors.on_tertiary.default.hex }};
+  --md-sys-color-tertiary-container: {{ colors.tertiary_container.default.hex }};
+  --md-sys-color-on-tertiary-container: {{ colors.on_tertiary_container.default.hex }};
+  --md-sys-color-error: {{ colors.error.default.hex }};
+  --md-sys-color-on-error: {{ colors.on_error.default.hex }};
+  --md-sys-color-error-container: {{ colors.error_container.default.hex }};
+  --md-sys-color-on-error-container: {{ colors.on_error_container.default.hex }};
+  --md-sys-color-background: {{ colors.background.default.hex }};
+  --md-sys-color-on-background: {{ colors.on_background.default.hex }};
+  --md-sys-color-surface: {{ colors.surface.default.hex }};
+  --md-sys-color-on-surface: {{ colors.on_surface.default.hex }};
+  --md-sys-color-surface-variant: {{ colors.surface_variant.default.hex }};
+  --md-sys-color-on-surface-variant: {{ colors.on_surface_variant.default.hex }};
+  --md-sys-color-outline: {{ colors.outline.default.hex }};
+  --md-sys-color-outline-variant: {{ colors.outline_variant.default.hex }};
+  --md-sys-color-inverse-surface: {{ colors.inverse_surface.default.hex }};
+  --md-sys-color-inverse-on-surface: {{ colors.inverse_on_surface.default.hex }};
+  --md-sys-color-inverse-primary: {{ colors.inverse_primary.default.hex }};
+  --md-sys-color-primary-fixed: {{ colors.primary_fixed.default.hex }};
+  --md-sys-color-on-primary-fixed: {{ colors.on_primary_fixed.default.hex }};
+  --md-sys-color-primary-fixed-dim: {{ colors.primary_fixed_dim.default.hex }};
+  --md-sys-color-on-primary-fixed-variant: {{ colors.on_primary_fixed_variant.default.hex }};
+  --md-sys-color-secondary-fixed: {{ colors.secondary_fixed.default.hex }};
+  --md-sys-color-on-secondary-fixed: {{ colors.on_secondary_fixed.default.hex }};
+  --md-sys-color-secondary-fixed-dim: {{ colors.secondary_fixed_dim.default.hex }};
+  --md-sys-color-on-secondary-fixed-variant: {{ colors.on_secondary_fixed_variant.default.hex }};
+  --md-sys-color-tertiary-fixed: {{ colors.tertiary_fixed.default.hex }};
+  --md-sys-color-on-tertiary-fixed: {{ colors.on_tertiary_fixed.default.hex }};
+  --md-sys-color-tertiary-fixed-dim: {{ colors.tertiary_fixed_dim.default.hex }};
+  --md-sys-color-on-tertiary-fixed-variant: {{ colors.on_tertiary_fixed_variant.default.hex }};
+  --md-sys-color-surface-dim: {{ colors.surface_dim.default.hex }};
+  --md-sys-color-surface-bright: {{ colors.surface_bright.default.hex }};
+  --md-sys-color-surface-container-lowest: {{ colors.surface_container_lowest.default.hex }};
+  --md-sys-color-surface-container-low: {{ colors.surface_container_low.default.hex }};
+  --md-sys-color-surface-container: {{ colors.surface_container.default.hex }};
+  --md-sys-color-surface-container-high: {{ colors.surface_container_high.default.hex }};
+  --md-sys-color-surface-container-highest: {{ colors.surface_container_highest.default.hex }};
+}
+
+#navigator-toolbox {
+  background-color: var(--md-sys-color-surface-container) !important;
+  border-color: var(--md-sys-color-outline-variant) !important;
+}
+
+#urlbar-background,
+#searchbar {
+  background-color: var(--md-sys-color-surface-container-high) !important;
+  border-color: var(--md-sys-color-outline-variant) !important;
+  color: var(--md-sys-color-on-surface) !important;
+}
+
+#urlbar-background:hover,
+#searchbar:hover {
+  background-color: var(--md-sys-color-surface-container-highest) !important;
+}
+
+#urlbar-input,
+#searchbar-input {
+  color: var(--md-sys-color-on-surface) !important;
+}
+
+.tabbrowser-tab {
+  background-color: transparent !important;
+  color: var(--md-sys-color-on-surface-variant) !important;
+}
+
+.tabbrowser-tab[selected] {
+  background-color: var(--md-sys-color-surface-container-highest) !important;
+  color: var(--md-sys-color-on-surface) !important;
+}
+
+.tab-background {
+  border-radius: 8px !important;
+}
+
+.tabbrowser-tab:hover > .tab-stack > .tab-background {
+  background-color: var(--md-sys-color-surface-container-high) !important;
+}
+
+.tab-icon-image,
+.tabbrowser-tab .tab-icon {
+  color: var(--md-sys-color-primary) !important;
+}
+
+#sidebar-main,
+#zen-sidebar-splitter {
+  background-color: var(--md-sys-color-surface-container) !important;
+  border-color: var(--md-sys-color-outline-variant) !important;
+  color: var(--md-sys-color-on-surface) !important;
+}
+
+#vertical-tabs .tab-content {
+  color: var(--md-sys-color-on-surface-variant) !important;
+}
+
+#vertical-tabs .tab[selected] .tab-content {
+  color: var(--md-sys-color-on-surface) !important;
+  background-color: var(--md-sys-color-primary-container) !important;
+}
+
+#zen-tabbox-wrapper .tabbrowser-tab[selected] .tab-context-line {
+  background-color: var(--md-sys-color-primary) !important;
+}
+
+.findbar-textbox,
+#urlbar ::selection,
+#searchbar ::selection {
+  background-color: var(--md-sys-color-tertiary-container) !important;
+  color: var(--md-sys-color-on-tertiary-container) !important;
+}

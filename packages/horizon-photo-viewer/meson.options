@@ -1,0 +1,26 @@
+option('jpeg', type: 'feature', value: 'enabled',
+  description: 'libjpeg-turbo JPEG decode with IDCT scaling')
+option('webp', type: 'feature', value: 'enabled',
+  description: 'WebP decode support')
+option('heif', type: 'feature', value: 'auto',
+  description: 'HEIC/HEIF decode via libheif')
+option('avif', type: 'feature', value: 'auto',
+  description: 'AVIF decode via libavif')
+option('raw', type: 'feature', value: 'auto',
+  description: 'Camera RAW decode via LibRaw')
+option('jxl', type: 'feature', value: 'auto',
+  description: 'JPEG-XL decode via libjxl')
+option('metadata', type: 'feature', value: 'auto',
+  description: 'EXIF/IPTC/XMP metadata via exiv2')
+option('color_management', type: 'feature', value: 'auto',
+  description: 'ICC color management via lcms2')
+option('librsvg', type: 'feature', value: 'auto',
+  description: 'librsvg backend for full SVG support (handles embedded images, CSS)')
+option('libpng', type: 'feature', value: 'auto',
+  description: 'PNG screenshot output via libpng')
+option('libjxl_sc', type: 'feature', value: 'auto',
+  description: 'JPEG-XL screenshot output (HDR capture)')
+option('libdrm', type: 'feature', value: 'auto',
+  description: 'DRM/KMS fallback capture for HDR screenshots')
+option('curl', type: 'feature', value: 'auto',
+  description: 'Image upload support via libcurl (Imgur, etc.)')

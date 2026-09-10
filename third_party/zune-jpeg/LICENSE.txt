@@ -1,0 +1,13 @@
+zune_jpeg.hpp is a C++ port of the zune-jpeg JPEG decoder
+(https://github.com/etemesi254/zune-jpeg), version 0.5.12 scalar path.
+
+The port retains the upstream license terms: redistribution and modification
+are permitted under the MIT, Apache-2.0, or Zlib license, as stated in the file
+header:
+
+    Copyright (c) 2023.
+
+    This software is free software;
+
+    You can redistribute it or modify it under terms of the MIT,
+    Apache License or Zlib license.

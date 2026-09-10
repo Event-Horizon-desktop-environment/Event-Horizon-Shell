@@ -1,0 +1,3 @@
+[templates.ehemacs]
+input_path = 'SHELL_DIR/matugen/templates/event-emacs.el'
+output_path = 'EMACS_DIR/themes/event-emacs-theme.el'

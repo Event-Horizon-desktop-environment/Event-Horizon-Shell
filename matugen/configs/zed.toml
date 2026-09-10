@@ -1,0 +1,3 @@
+[templates.ehzed]
+input_path = 'SHELL_DIR/matugen/templates/event-zed.json'
+output_path = 'CONFIG_DIR/zed/themes/event-zed-theme.json'

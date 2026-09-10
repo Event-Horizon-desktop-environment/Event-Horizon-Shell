@@ -1,0 +1,3 @@
+[templates.ehfirefox]
+input_path = 'SHELL_DIR/matugen/templates/firefox-userchrome.css'
+output_path = 'CONFIG_DIR/EventHorizon/firefox.css'

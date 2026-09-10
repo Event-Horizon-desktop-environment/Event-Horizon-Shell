@@ -1,0 +1,3 @@
+[templates.ehptyxis]
+input_path = 'SHELL_DIR/matugen/templates/ptyxis.palette'
+output_path = 'DATA_DIR/org.gnome.Ptyxis/palettes/eh-ptyxis.palette'

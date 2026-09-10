@@ -1,0 +1,363 @@
+version: 2.1
+
+executors:
+  fedora:
+    docker:
+      - image: fedora:43
+
+commands:
+  install-deps:
+    steps:
+      - run:
+          name: Install dependencies
+          command: |
+            dnf install -y \
+              git \
+              meson ninja-build gcc-c++ ccache cmake just mold \
+              wayland-devel wayland-protocols-devel \
+              cairo-devel pango-devel \
+              freetype-devel fontconfig-devel \
+              libxkbcommon-devel \
+              sdbus-cpp-devel \
+              pipewire-devel \
+              pam-devel libcurl-devel libwebp-devel libpng-devel \
+              vulkan-loader-devel vulkan-headers \
+              librsvg2-devel libdrm-devel \
+              polkit-devel glib2-devel \
+              openssl-devel libjpeg-turbo-devel \
+              dbus-devel \
+              poppler-glib-devel libarchive-devel \
+              jemalloc-devel lcms2-devel \
+              ruby ruby-devel \
+              lz4-devel \
+              liburing-devel \
+              ffmpegthumbnailer-devel \
+              rpm-build zstd dpkg bsdtar
+            gem install --no-document fpm
+
+  configure-debug:
+    steps:
+      - run:
+          name: Configure debug
+          command: |
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            meson setup build-debug \
+              --buildtype=debug \
+              -Dnative_march=false
+
+  build-debug:
+    steps:
+      - run:
+          name: Build debug
+          command: meson compile -C build-debug
+
+  configure-release:
+    steps:
+      - run:
+          name: Configure release
+          command: |
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            meson setup build-release \
+              --buildtype=release \
+              -Dnative_march=false
+
+  build-release:
+    steps:
+      - run:
+          name: Build release
+          command: meson compile -C build-release
+
+  install-staging:
+    steps:
+      - run:
+          name: Install to staging
+          command: |
+            DESTDIR=$PWD/staging-debug   meson install -C build-debug
+            DESTDIR=$PWD/staging-release meson install -C build-release
+
+  get-version:
+    steps:
+      - run:
+          name: Get version
+          command: |
+            VER=$(grep "^ *version:" meson.build | sed "s/.*'\(.*\)'.*/\1/")
+            echo "$VER" > .version
+            echo "export VERSION=$VER" >> $BASH_ENV
+
+jobs:
+  build:
+    executor: fedora
+    steps:
+      - run:
+          name: Install git and ssh
+          command: dnf install -y git openssh-clients
+      - checkout
+      - install-deps
+      - run:
+          name: Initialize submodules
+          command: |
+            set -euo pipefail
+            git submodule sync
+            git submodule update --init --depth 1 || true
+
+            # Workaround for incomplete submodule registration:
+            # .gitmodules declares several third_party/ and subprojects/ as submodules,
+            # but only nanosvg is recorded as a gitlink (160000) in the tree.
+            # The rest rely on this step populating them, and are .gitignore'd.
+            # In a fresh clone (CircleCI), `submodule update` only handles real gitlinks.
+            # Force-populate any that are still missing by cloning (shallow) from the
+            # URLs recorded in .gitmodules. This gets us the default branch tip,
+            # which is acceptable for these mostly-header/protocol libraries.
+            git config --file .gitmodules --get-regexp 'submodule\..*\.path' \
+            | while read -r cfgkey path; do
+                if [ ! -d "$path" ] || { [ ! -e "$path/.git" ] && [ ! -f "$path/meson.build" ] && [ ! -f "$path/README.md" ]; }; then
+                  url=$(git config --file .gitmodules --get "${cfgkey%.path}.url")
+                  echo "Force-populating missing submodule: $path from $url"
+                  rm -rf "$path"
+                  git clone --depth 1 "$url" "$path"
+                fi
+              done
+
+            # Update packages to latest Stable branch
+            git -C packages/horizon-shot fetch --depth 1 origin Stable 2>/dev/null || true
+            git -C packages/horizon-shot checkout origin/Stable 2>/dev/null || true
+            git -C packages/horizon-files fetch --depth 1 origin main 2>/dev/null || true
+            git -C packages/horizon-files checkout origin/main 2>/dev/null || true
+            git -C packages/horizon-photo-viewer fetch --depth 1 origin Stable 2>/dev/null || true
+            git -C packages/horizon-photo-viewer checkout origin/Stable 2>/dev/null || true
+            # Init nested submodules inside horizon-files (tomlplusplus, nanosvg, stb, ffmpegthumbnailer)
+            cd packages/horizon-files && git submodule update --init --depth 1 || true && cd ../..
+      - run:
+          name: Remove non-Meson subprojects
+          command: |
+            rm -rf subprojects/ffmpegthumbnailer third_party/ffmpegthumbnailer
+      - configure-debug
+      - build-debug
+      - configure-release
+      - build-release
+      - install-staging
+      - run:
+          name: Build horizon-shot
+          command: |
+            meson setup packages/horizon-shot/build-debug   packages/horizon-shot --buildtype=debug
+            meson setup packages/horizon-shot/build-release packages/horizon-shot --buildtype=release
+            meson compile -C packages/horizon-shot/build-debug
+            meson compile -C packages/horizon-shot/build-release
+            DESTDIR=$PWD/staging-shot-debug   meson install -C packages/horizon-shot/build-debug
+            DESTDIR=$PWD/staging-shot-release meson install -C packages/horizon-shot/build-release
+      - run:
+          name: Build horizon-files
+          command: |
+            meson setup packages/horizon-files/build-debug   packages/horizon-files --buildtype=debug
+            meson setup packages/horizon-files/build-release packages/horizon-files --buildtype=release
+            meson compile -C packages/horizon-files/build-debug
+            meson compile -C packages/horizon-files/build-release
+            DESTDIR=$PWD/staging-files-debug   meson install -C packages/horizon-files/build-debug
+            DESTDIR=$PWD/staging-files-release meson install -C packages/horizon-files/build-release
+      - run:
+          name: Build horizon-photo-viewer
+          command: |
+            meson setup packages/horizon-photo-viewer/build-debug   packages/horizon-photo-viewer --buildtype=debug
+            meson setup packages/horizon-photo-viewer/build-release packages/horizon-photo-viewer --buildtype=release
+            meson compile -C packages/horizon-photo-viewer/build-debug
+            meson compile -C packages/horizon-photo-viewer/build-release
+            DESTDIR=$PWD/staging-photo-viewer-debug   meson install -C packages/horizon-photo-viewer/build-debug
+            DESTDIR=$PWD/staging-photo-viewer-release meson install -C packages/horizon-photo-viewer/build-release
+      - get-version
+      - run:
+          name: Get shot version
+          command: |
+            SHOT_VER=$(grep "^ *version:" packages/horizon-shot/meson.build | sed "s/.*'\(.*\)'.*/\1/")
+            echo "$SHOT_VER" > .shot-version
+            echo "export SHOT_VERSION=$SHOT_VER" >> $BASH_ENV
+      - run:
+          name: Get files version
+          command: |
+            FILES_VER=$(grep "^ *version:" packages/horizon-files/meson.build | sed "s/.*'\(.*\)'.*/\1/")
+            echo "$FILES_VER" > .files-version
+            echo "export FILES_VERSION=$FILES_VER" >> $BASH_ENV
+      - run:
+          name: Get photo-viewer version
+          command: |
+            PHOTO_VER=$(grep "^ *version:" packages/horizon-photo-viewer/meson.build | sed "s/.*'\(.*\)'.*/\1/")
+            echo "$PHOTO_VER" > .photo-viewer-version
+            echo "export PHOTO_VIEWER_VERSION=$PHOTO_VER" >> $BASH_ENV
+      - persist_to_workspace:
+          root: .
+          paths:
+            - staging-debug
+            - staging-release
+            - staging-shot-debug
+            - staging-shot-release
+            - staging-files-debug
+            - staging-files-release
+            - staging-photo-viewer-debug
+            - staging-photo-viewer-release
+            - .version
+            - .shot-version
+            - .files-version
+            - .photo-viewer-version
+
+  package-arch:
+    executor: fedora
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install fpm
+          command: |
+            dnf install -y ruby ruby-devel zstd bsdtar
+            gem install --no-document fpm
+      - run:
+          name: Create Arch packages
+          command: |
+            VER=$(cat .version)
+            SHOT_VER=$(cat .shot-version)
+            FILES_VER=$(cat .files-version)
+            PHOTO_VER=$(cat .photo-viewer-version)
+            mkdir -p packages
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name event-horizon-de --version "$VER" --iteration 1 --architecture x86_64 \
+              --description "Event Horizon Desktop Environment" \
+              --license "MIT" \
+              --url "https://github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" \
+              --depends wayland,cairo,pango,freetype2,fontconfig,libxkbcommon,sdbus-cpp,pipewire,pam,libcurl,libwebp,openssl,vulkan-icd-loader,hicolor-icon-theme,glib2,lz4 \
+              -C staging-release -p "packages/event-horizon-de-${VER}-1-x86_64.pkg.tar.zst"
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name event-horizon-de-debug --version "$VER" --iteration 1 --architecture x86_64 \
+              --description "Event Horizon DE (debug symbols)" \
+              --license "MIT" \
+              --url "https://github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" \
+              -C staging-debug -p "packages/event-horizon-de-debug-${VER}-1-x86_64.pkg.tar.zst"
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name horizon-shot --version "$SHOT_VER" --iteration 1 --architecture x86_64 \
+              --description "Horizon Screenshot Tool - Wayland-native region/window/screen capture" \
+              --license "MIT" \
+              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-shot" \
+              --depends wayland,cairo,libxkbcommon,libdrm \
+              -C staging-shot-release -p "packages/horizon-shot-${SHOT_VER}-1-x86_64.pkg.tar.zst"
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name horizon-shot-debug --version "$SHOT_VER" --iteration 1 --architecture x86_64 \
+              --description "Horizon Screenshot Tool (debug symbols)" \
+              --license "MIT" \
+              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-shot" \
+              -C staging-shot-debug -p "packages/horizon-shot-debug-${SHOT_VER}-1-x86_64.pkg.tar.zst"
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name horizon-files --version "$FILES_VER" --iteration 1 --architecture x86_64 \
+              --description "Horizon File Manager - Wayland-native file browser" \
+              --license "MIT" \
+              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-File-Manager" \
+              --depends wayland,cairo,pango,libxkbcommon,sdbus-cpp,libwebp,libjpeg-turbo,openssl,fontconfig,glib2 \
+              -C staging-files-release -p "packages/horizon-files-${FILES_VER}-1-x86_64.pkg.tar.zst"
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name horizon-files-debug --version "$FILES_VER" --iteration 1 --architecture x86_64 \
+              --description "Horizon File Manager (debug symbols)" \
+              --license "MIT" \
+              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-File-Manager" \
+              -C staging-files-debug -p "packages/horizon-files-debug-${FILES_VER}-1-x86_64.pkg.tar.zst"
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name horizon-photo-viewer --version "$PHOTO_VER" --iteration 1 --architecture x86_64 \
+              --description "Horizon Photo Viewer - Wayland-native image viewer with Vulkan rendering" \
+              --license "MIT" \
+              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-Photo-Viewer" \
+              --depends wayland,cairo,libxkbcommon,dbus,vulkan-icd-loader \
+              -C staging-photo-viewer-release -p "packages/horizon-photo-viewer-${PHOTO_VER}-1-x86_64.pkg.tar.zst"
+            fpm -s dir -t pacman --pacman-compression zstd \
+              --name horizon-photo-viewer-debug --version "$PHOTO_VER" --iteration 1 --architecture x86_64 \
+              --description "Horizon Photo Viewer (debug symbols)" \
+              --license "MIT" \
+              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-Photo-Viewer" \
+              -C staging-photo-viewer-debug -p "packages/horizon-photo-viewer-debug-${PHOTO_VER}-1-x86_64.pkg.tar.zst"
+      - store_artifacts:
+          path: packages
+          destination: arch
+
+  package-debian:
+    docker:
+      - image: ubuntu:24.04
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install fpm
+          command: |
+            apt-get update && apt-get install -y ruby-full binutils liblz4-dev
+            gem install --no-document fpm
+      - run:
+          name: Create Debian packages
+          command: |
+            VER=$(cat .version)
+            SHOT_VER=$(cat .shot-version)
+            FILES_VER=$(cat .files-version)
+            PHOTO_VER=$(cat .photo-viewer-version)
+            mkdir -p packages
+            fpm -s dir -t deb -n event-horizon-de -v "$VER" --architecture amd64 \
+              -C staging-release -p "packages/event-horizon-de_${VER}_amd64.deb"
+            fpm -s dir -t deb -n event-horizon-de-debug -v "$VER" --architecture amd64 \
+              -C staging-debug -p "packages/event-horizon-de-debug_${VER}_amd64.deb"
+            fpm -s dir -t deb -n horizon-shot -v "$SHOT_VER" --architecture amd64 \
+              -C staging-shot-release -p "packages/horizon-shot_${SHOT_VER}_amd64.deb"
+            fpm -s dir -t deb -n horizon-shot-dbgsym -v "$SHOT_VER" --architecture amd64 \
+              -C staging-shot-debug -p "packages/horizon-shot-dbgsym_${SHOT_VER}_amd64.deb"
+            fpm -s dir -t deb -n horizon-files -v "$FILES_VER" --architecture amd64 \
+              -C staging-files-release -p "packages/horizon-files_${FILES_VER}_amd64.deb"
+            fpm -s dir -t deb -n horizon-files-dbgsym -v "$FILES_VER" --architecture amd64 \
+              -C staging-files-debug -p "packages/horizon-files-dbgsym_${FILES_VER}_amd64.deb"
+            fpm -s dir -t deb -n horizon-photo-viewer -v "$PHOTO_VER" --architecture amd64 \
+              -C staging-photo-viewer-release -p "packages/horizon-photo-viewer_${PHOTO_VER}_amd64.deb"
+            fpm -s dir -t deb -n horizon-photo-viewer-dbgsym -v "$PHOTO_VER" --architecture amd64 \
+              -C staging-photo-viewer-debug -p "packages/horizon-photo-viewer-dbgsym_${PHOTO_VER}_amd64.deb"
+      - store_artifacts:
+          path: packages
+          destination: debian
+
+  package-rpm:
+    executor: fedora
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install fpm
+          command: |
+            dnf install -y ruby ruby-devel rpm-build
+            gem install --no-document fpm
+      - run:
+          name: Create RPM packages
+          command: |
+            VER=$(cat .version)
+            SHOT_VER=$(cat .shot-version)
+            FILES_VER=$(cat .files-version)
+            PHOTO_VER=$(cat .photo-viewer-version)
+            mkdir -p packages
+            fpm -s dir -t rpm -n event-horizon-de -v "$VER" --architecture x86_64 \
+              -C staging-release -p "packages/event-horizon-de-${VER}-1.x86_64.rpm"
+            fpm -s dir -t rpm -n event-horizon-de-debug -v "$VER" --architecture x86_64 \
+              -C staging-debug -p "packages/event-horizon-de-debug-${VER}-1.x86_64.rpm"
+            fpm -s dir -t rpm -n horizon-shot -v "$SHOT_VER" --architecture x86_64 \
+              -C staging-shot-release -p "packages/horizon-shot-${SHOT_VER}-1.x86_64.rpm"
+            fpm -s dir -t rpm -n horizon-shot-debug -v "$SHOT_VER" --architecture x86_64 \
+              -C staging-shot-debug -p "packages/horizon-shot-debug-${SHOT_VER}-1.x86_64.rpm"
+            fpm -s dir -t rpm -n horizon-files -v "$FILES_VER" --architecture x86_64 \
+              -C staging-files-release -p "packages/horizon-files-${FILES_VER}-1.x86_64.rpm"
+            fpm -s dir -t rpm -n horizon-files-debug -v "$FILES_VER" --architecture x86_64 \
+              -C staging-files-debug -p "packages/horizon-files-debug-${FILES_VER}-1.x86_64.rpm"
+            fpm -s dir -t rpm -n horizon-photo-viewer -v "$PHOTO_VER" --architecture x86_64 \
+              -C staging-photo-viewer-release -p "packages/horizon-photo-viewer-${PHOTO_VER}-1.x86_64.rpm"
+            fpm -s dir -t rpm -n horizon-photo-viewer-debug -v "$PHOTO_VER" --architecture x86_64 \
+              -C staging-photo-viewer-debug -p "packages/horizon-photo-viewer-debug-${PHOTO_VER}-1.x86_64.rpm"
+      - store_artifacts:
+          path: packages
+          destination: rpm
+
+workflows:
+  build-and-package:
+    jobs:
+      - build
+      - package-arch:
+          requires: [build]
+      - package-debian:
+          requires: [build]
+      - package-rpm:
+          requires: [build]

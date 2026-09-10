@@ -1,0 +1,3 @@
+[templates.ehotter]
+input_path = 'SHELL_DIR/matugen/templates/otter-term-matugen.conf'
+output_path = 'CONFIG_DIR/otter-shell/otter-term-matugen.conf'

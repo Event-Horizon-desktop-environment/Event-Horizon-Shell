@@ -1,0 +1,3 @@
+[templates.ehkittytabs]
+input_path = 'SHELL_DIR/matugen/templates/kitty-tabs.conf'
+output_path = 'CONFIG_DIR/kitty/event-tabs.conf'

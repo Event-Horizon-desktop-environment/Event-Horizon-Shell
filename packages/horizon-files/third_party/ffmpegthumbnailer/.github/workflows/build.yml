@@ -1,0 +1,42 @@
+name: Build
+
+on: [push]
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Clone repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Enable Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+
+      - name: Build with Nix
+        run: nix build .#default
+
+      - name: Static build
+        run: nix build .#static
+
+      - name: Windows build
+        if: matrix.os == 'ubuntu-latest'
+        run: nix build .#windows
+
+      - name: Run tests with Nix
+        run: nix flake check

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Horizon Live Wallpaper
+Comment=Live wallpaper picker and gallery browser
+Exec=horizon-live-wallpaper %F
+Icon=horizon-wallpaper
+Type=Application
+Categories=Settings;DesktopSettings;
+StartupNotify=true
+Terminal=false

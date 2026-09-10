@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Event Horizon Settings
+Comment=Configure your desktop environment
+Exec=horizon-settings
+Icon=event-horizon-settings
+Type=Application
+Categories=Settings;DesktopSettings;
+Terminal=false
+StartupNotify=true

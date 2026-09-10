@@ -1,0 +1,3 @@
+[templates.ehkitty]
+input_path = 'SHELL_DIR/matugen/templates/kitty.conf'
+output_path = 'CONFIG_DIR/kitty/event-theme.conf'

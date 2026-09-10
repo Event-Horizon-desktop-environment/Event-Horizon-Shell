@@ -1,0 +1,8 @@
+[templates.ehgtk_shell_gtk4]
+input_path  = 'SHELL_DIR/matugen/templates/gtk.css'
+output_path = 'CONFIG_DIR/gtk-4.0/gtk.css'
+
+[templates.ehgtk_shell_gtk3dark]
+input_path  = 'SHELL_DIR/matugen/templates/gtk-dark.css'
+output_path = 'CONFIG_DIR/gtk-3.0/gtk-dark.css'
+

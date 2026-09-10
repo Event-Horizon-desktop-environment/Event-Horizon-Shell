@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Horizon-Disks
+Comment=Manage drives and block devices
+Exec=horizon-disks
+Icon=horizon-disks
+Type=Application
+Categories=Utility;System;Filesystem;
+Terminal=false
+StartupNotify=true

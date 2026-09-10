@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 512 512" height="512" width="512">
+  
+  <rect stroke-width="32" stroke="#1E2937" fill="#0F172A" rx="68" height="416" width="416" y="48" x="48"></rect>
+
+  
+  <rect fill="#1E2937" rx="32" height="360" width="360" y="76" x="76"></rect>
+
+  
+  <defs>
+    <linearGradient gradientUnits="userSpaceOnUse" y2="256" x2="76" y1="76" x1="76" id="sky">
+      <stop stop-color="#0EA5E9" offset="0%"></stop>
+      <stop stop-color="#1E40AF" offset="100%"></stop>
+    </linearGradient>
+  </defs>
+  <rect fill="url(#sky)" rx="12" height="172" width="344" y="84" x="84"></rect>
+
+  
+  <line stroke-opacity="0.95" stroke-width="8" stroke="#F1F5F9" y2="256" x2="428" y1="256" x1="84"></line>
+
+  
+  <circle fill="#FDE047" r="42" cy="160" cx="340"></circle>
+  <circle fill="#FACC15" r="26" cy="160" cx="340"></circle>
+
+  
+  <path opacity="0.9" fill="#334155" d="M84 256 Q180 220 260 265 Q340 215 428 256 L428 360 L84 360 Z"></path>
+
+  
+  
+  <rect stroke-width="14" stroke="#E2E8F0" fill="#1E2937" rx="18" height="92" width="168" y="292" x="172"></rect>
+  
+  
+  <circle stroke-width="12" stroke="#E2E8F0" fill="#0F172A" r="38" cy="338" cx="256"></circle>
+  <circle fill="#94A3B8" r="22" cy="338" cx="256"></circle>
+  <circle fill="#F1F5F9" r="10" cy="338" cx="256"></circle>
+
+  
+  <rect fill="#F87171" rx="4" height="12" width="88" y="278" x="212"></rect>
+
+  
+  <rect opacity="0.18" stroke-width="6" stroke="#67E8F9" fill="none" rx="32" height="360" width="360" y="76" x="76"></rect>
+</svg>

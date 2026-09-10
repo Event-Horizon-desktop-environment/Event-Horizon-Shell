@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Horizon Archive Manager
+Comment=View, extract, create, and convert archives
+Exec=horizon-archive gui %f
+Icon=horizon-archive-manager
+Terminal=false
+StartupNotify=true
+Categories=Utility;Archiving;FileManager;
+MimeType=application/x-tar;application/x-gzip;application/x-bzip2;application/x-xz;application/x-lzma;application/x-zstd;application/x-lz4;application/x-7z-compressed;application/x-rar-compressed;application/x-zip-compressed;application/x-iso9660-image;application/x-cpio;application/x-archive;application/x-cabinet;application/vnd.debian.binary-package;application/x-rpm;application/x-lha;application/x-lzh;application/x-alz;application/x-arj;application/x-compress;application/zlib;application/x-bzip;application/x-lzip;application/x-msdos-program;application/vnd.ms-cab-compressed;

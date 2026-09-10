@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Screenshot
+Name[de]=Bildschirmfoto
+Comment=Capture screenshots - focused window, windows, screen, or selection
+Comment[de]=Bildschirmfotos aufnehmen - fokussiertes Fenster, Fenster, Bildschirm oder Auswahl
+Exec=horizon-shot
+Icon=horizon-shot
+Categories=Utility;Graphics;
+Terminal=false
+StartupNotify=true
