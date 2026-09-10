@@ -120,14 +120,7 @@ jobs:
                 fi
               done
 
-            # Update packages to latest Stable branch
-            git -C packages/horizon-files fetch --depth 1 origin main 2>/dev/null || true
-            git -C packages/horizon-files checkout origin/main 2>/dev/null || true
-            git -C packages/horizon-photo-viewer fetch --depth 1 origin Stable 2>/dev/null || true
-            git -C packages/horizon-photo-viewer checkout origin/Stable 2>/dev/null || true
-            # Init nested submodules inside horizon-files (tomlplusplus, nanosvg, stb, ffmpegthumbnailer)
-            cd packages/horizon-files && git submodule update --init --depth 1 || true && cd ../..
-      - run:
+            - run:
           name: Remove non-Meson subprojects
           command: |
             rm -rf subprojects/ffmpegthumbnailer third_party/ffmpegthumbnailer
@@ -136,49 +129,13 @@ jobs:
       - configure-release
       - build-release
       - install-staging
-      - run:
-          name: Build horizon-files
-          command: |
-            meson setup packages/horizon-files/build-debug   packages/horizon-files --buildtype=debug
-            meson setup packages/horizon-files/build-release packages/horizon-files --buildtype=release
-            meson compile -C packages/horizon-files/build-debug
-            meson compile -C packages/horizon-files/build-release
-            DESTDIR=$PWD/staging-files-debug   meson install -C packages/horizon-files/build-debug
-            DESTDIR=$PWD/staging-files-release meson install -C packages/horizon-files/build-release
-      - run:
-          name: Build horizon-photo-viewer
-          command: |
-            meson setup packages/horizon-photo-viewer/build-debug   packages/horizon-photo-viewer --buildtype=debug
-            meson setup packages/horizon-photo-viewer/build-release packages/horizon-photo-viewer --buildtype=release
-            meson compile -C packages/horizon-photo-viewer/build-debug
-            meson compile -C packages/horizon-photo-viewer/build-release
-            DESTDIR=$PWD/staging-photo-viewer-debug   meson install -C packages/horizon-photo-viewer/build-debug
-            DESTDIR=$PWD/staging-photo-viewer-release meson install -C packages/horizon-photo-viewer/build-release
       - get-version
-      - run:
-          name: Get files version
-          command: |
-            FILES_VER=$(grep "^ *version:" packages/horizon-files/meson.build | sed "s/.*'\(.*\)'.*/\1/")
-            echo "$FILES_VER" > .files-version
-            echo "export FILES_VERSION=$FILES_VER" >> $BASH_ENV
-      - run:
-          name: Get photo-viewer version
-          command: |
-            PHOTO_VER=$(grep "^ *version:" packages/horizon-photo-viewer/meson.build | sed "s/.*'\(.*\)'.*/\1/")
-            echo "$PHOTO_VER" > .photo-viewer-version
-            echo "export PHOTO_VIEWER_VERSION=$PHOTO_VER" >> $BASH_ENV
       - persist_to_workspace:
           root: .
           paths:
             - staging-debug
             - staging-release
-            - staging-files-debug
-            - staging-files-release
-            - staging-photo-viewer-debug
-            - staging-photo-viewer-release
             - .version
-            - .files-version
-            - .photo-viewer-version
 
   package-arch:
     executor: fedora
@@ -194,8 +151,6 @@ jobs:
           name: Create Arch packages
           command: |
             VER=$(cat .version)
-            FILES_VER=$(cat .files-version)
-            PHOTO_VER=$(cat .photo-viewer-version)
             mkdir -p packages
             fpm -s dir -t pacman --pacman-compression zstd \
               --name event-horizon-de --version "$VER" --iteration 1 --architecture x86_64 \
@@ -210,32 +165,6 @@ jobs:
               --license "MIT" \
               --url "https://github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}" \
               -C staging-debug -p "packages/event-horizon-de-debug-${VER}-1-x86_64.pkg.tar.zst"
-            fpm -s dir -t pacman --pacman-compression zstd \
-              --name horizon-files --version "$FILES_VER" --iteration 1 --architecture x86_64 \
-              --description "Horizon File Manager - Wayland-native file browser" \
-              --license "MIT" \
-              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-File-Manager" \
-              --depends wayland,cairo,pango,libxkbcommon,sdbus-cpp,libwebp,libjpeg-turbo,openssl,fontconfig,glib2 \
-              -C staging-files-release -p "packages/horizon-files-${FILES_VER}-1-x86_64.pkg.tar.zst"
-            fpm -s dir -t pacman --pacman-compression zstd \
-              --name horizon-files-debug --version "$FILES_VER" --iteration 1 --architecture x86_64 \
-              --description "Horizon File Manager (debug symbols)" \
-              --license "MIT" \
-              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-File-Manager" \
-              -C staging-files-debug -p "packages/horizon-files-debug-${FILES_VER}-1-x86_64.pkg.tar.zst"
-            fpm -s dir -t pacman --pacman-compression zstd \
-              --name horizon-photo-viewer --version "$PHOTO_VER" --iteration 1 --architecture x86_64 \
-              --description "Horizon Photo Viewer - Wayland-native image viewer with Vulkan rendering" \
-              --license "MIT" \
-              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-Photo-Viewer" \
-              --depends wayland,cairo,libxkbcommon,dbus,vulkan-icd-loader \
-              -C staging-photo-viewer-release -p "packages/horizon-photo-viewer-${PHOTO_VER}-1-x86_64.pkg.tar.zst"
-            fpm -s dir -t pacman --pacman-compression zstd \
-              --name horizon-photo-viewer-debug --version "$PHOTO_VER" --iteration 1 --architecture x86_64 \
-              --description "Horizon Photo Viewer (debug symbols)" \
-              --license "MIT" \
-              --url "https://github.com/Event-Horizon-desktop-environment/Horizon-Photo-Viewer" \
-              -C staging-photo-viewer-debug -p "packages/horizon-photo-viewer-debug-${PHOTO_VER}-1-x86_64.pkg.tar.zst"
       - store_artifacts:
           path: packages
           destination: arch
@@ -255,21 +184,11 @@ jobs:
           name: Create Debian packages
           command: |
             VER=$(cat .version)
-            FILES_VER=$(cat .files-version)
-            PHOTO_VER=$(cat .photo-viewer-version)
             mkdir -p packages
             fpm -s dir -t deb -n event-horizon-de -v "$VER" --architecture amd64 \
               -C staging-release -p "packages/event-horizon-de_${VER}_amd64.deb"
             fpm -s dir -t deb -n event-horizon-de-debug -v "$VER" --architecture amd64 \
               -C staging-debug -p "packages/event-horizon-de-debug_${VER}_amd64.deb"
-            fpm -s dir -t deb -n horizon-files -v "$FILES_VER" --architecture amd64 \
-              -C staging-files-release -p "packages/horizon-files_${FILES_VER}_amd64.deb"
-            fpm -s dir -t deb -n horizon-files-dbgsym -v "$FILES_VER" --architecture amd64 \
-              -C staging-files-debug -p "packages/horizon-files-dbgsym_${FILES_VER}_amd64.deb"
-            fpm -s dir -t deb -n horizon-photo-viewer -v "$PHOTO_VER" --architecture amd64 \
-              -C staging-photo-viewer-release -p "packages/horizon-photo-viewer_${PHOTO_VER}_amd64.deb"
-            fpm -s dir -t deb -n horizon-photo-viewer-dbgsym -v "$PHOTO_VER" --architecture amd64 \
-              -C staging-photo-viewer-debug -p "packages/horizon-photo-viewer-dbgsym_${PHOTO_VER}_amd64.deb"
       - store_artifacts:
           path: packages
           destination: debian
@@ -288,21 +207,11 @@ jobs:
           name: Create RPM packages
           command: |
             VER=$(cat .version)
-            FILES_VER=$(cat .files-version)
-            PHOTO_VER=$(cat .photo-viewer-version)
             mkdir -p packages
             fpm -s dir -t rpm -n event-horizon-de -v "$VER" --architecture x86_64 \
               -C staging-release -p "packages/event-horizon-de-${VER}-1.x86_64.rpm"
             fpm -s dir -t rpm -n event-horizon-de-debug -v "$VER" --architecture x86_64 \
               -C staging-debug -p "packages/event-horizon-de-debug-${VER}-1.x86_64.rpm"
-            fpm -s dir -t rpm -n horizon-files -v "$FILES_VER" --architecture x86_64 \
-              -C staging-files-release -p "packages/horizon-files-${FILES_VER}-1.x86_64.rpm"
-            fpm -s dir -t rpm -n horizon-files-debug -v "$FILES_VER" --architecture x86_64 \
-              -C staging-files-debug -p "packages/horizon-files-debug-${FILES_VER}-1.x86_64.rpm"
-            fpm -s dir -t rpm -n horizon-photo-viewer -v "$PHOTO_VER" --architecture x86_64 \
-              -C staging-photo-viewer-release -p "packages/horizon-photo-viewer-${PHOTO_VER}-1.x86_64.rpm"
-            fpm -s dir -t rpm -n horizon-photo-viewer-debug -v "$PHOTO_VER" --architecture x86_64 \
-              -C staging-photo-viewer-debug -p "packages/horizon-photo-viewer-debug-${PHOTO_VER}-1.x86_64.rpm"
       - store_artifacts:
           path: packages
           destination: rpm
