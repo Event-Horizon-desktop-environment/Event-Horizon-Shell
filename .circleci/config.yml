@@ -3,7 +3,7 @@ version: 2.1
 executors:
   fedora:
     docker:
-      - image: fedora:43
+      - image: fedora:44
 
 commands:
   install-deps:
