@@ -2,7 +2,7 @@ project(
   'event-horizon',
   ['c', 'cpp'],
   version: '0.9.5-beta1',
-  meson_version: '>=1.11.0',
+  meson_version: '>=1.8.5',
   default_options: [
     'prefix=/usr',
     'warning_level=3',
