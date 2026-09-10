@@ -1,0 +1,11 @@
+Basic Installation
+==================
+
+Perform cmake configuration:
+cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_GIO=ON -DENABLE_THUMBNAILER=ON .
+
+Build the code:
+make
+
+Install:
+make install

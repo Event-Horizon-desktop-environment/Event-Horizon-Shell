@@ -1,0 +1,3 @@
+[templates.ehcalendar]
+input_path = 'SHELL_DIR/matugen/templates/horizon-calendar-matugen.conf'
+output_path = 'CONFIG_DIR/event-horizon/horizon-calendar-matugen.conf'

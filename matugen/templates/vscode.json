@@ -1,0 +1,31 @@
+{
+  "material-code.colors": {
+    "primary": "{{colors.primary.dark.hex}}",
+    "foreground": "{{colors.on_surface.dark.hex}}",
+    "mutedForeground": "{{colors.on_surface_variant.dark.hex}}",
+    "background": "{{colors.surface.dark.hex}}",
+    "card": "{{colors.surface_container.dark.hex}}",
+    "popover": "{{colors.surface_container_high.dark.hex}}",
+    "hover": "{{colors.surface_container_highest.dark.hex}}",
+    "border": "{{colors.outline_variant.dark.hex}}",
+    "primaryForeground": "{{colors.on_primary.dark.hex}}",
+    "secondary": "{{colors.secondary_container.dark.hex}}",
+    "secondaryForeground": "{{colors.on_secondary_container.dark.hex}}",
+    "error": "{{colors.error.dark.hex}}",
+    "errorForeground": "{{colors.on_error.dark.hex}}",
+    "success": "{{colors.inverse_primary.dark.hex}}",
+    "warning": "{{colors.tertiary.dark.hex}}",
+    "syntax.comment": "{{colors.outline.dark.hex}}",
+    "syntax.string": "{{colors.tertiary.dark.hex}}",
+    "syntax.keyword": "{{colors.primary.dark.hex}}",
+    "syntax.variable": "{{colors.on_surface.dark.hex}}",
+    "syntax.attribute": "{{colors.secondary.dark.hex}}",
+    "syntax.property": "{{colors.on_surface_variant.dark.hex}}",
+    "syntax.function": "{{colors.primary_container.dark.hex}}",
+    "syntax.constant": "{{colors.tertiary_container.dark.hex}}",
+    "syntax.bracket1": "{{colors.primary.dark.hex}}",
+    "syntax.bracket2": "{{colors.secondary.dark.hex}}",
+    "syntax.bracket3": "{{colors.tertiary.dark.hex}}",
+    "syntax.bracket4": "{{colors.inverse_primary.dark.hex}}"
+  }
+}

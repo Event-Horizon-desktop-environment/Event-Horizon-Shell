@@ -1,0 +1,3 @@
+[templates.ehfiles]
+input_path = 'SHELL_DIR/matugen/templates/horizon-files-matugen.conf'
+output_path = 'CONFIG_DIR/event-horizon/horizon-files-matugen.conf'

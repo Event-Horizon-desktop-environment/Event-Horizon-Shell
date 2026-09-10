@@ -1,0 +1,3 @@
+[templates.ehvscodematerial]
+input_path = 'SHELL_DIR/matugen/templates/vscode.json'
+output_path = 'VSCODE_USER_DIR/material-code-colors.matugen.json'

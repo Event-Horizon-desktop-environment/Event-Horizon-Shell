@@ -1,0 +1,39 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# meson_bing_wallpaper.build  —  add these lines to your existing meson.build
+#
+# Prerequisites already satisfied by EventHorizon's meson.build:
+#   dependency('libcurl', required: true)   ← already present
+#   nlohmann/json                            ← already in third_party/
+#   std::filesystem                          ← C++17, already used project-wide
+#
+# If you use Qt (for the QML bridge):
+#   dependency('Qt6Core', required: true)
+#   dependency('Qt6Qml',  required: true)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Add bing_wallpaper.cpp to your existing sources list — example:
+#
+# eh_sources = [
+#   ...
+#   'src/shell/services/bing/bing_wallpaper.cpp',
+#   ...
+# ]
+#
+# If you use the QML bridge (header-only, but moc must process it):
+#
+# qt6 = import('qt6')
+# moc_files = qt6.compile_moc(
+#   headers : ['src/shell/services/bing/bing_wallpaper_qml_bridge.hpp'],
+#   dependencies : [qt6_dep],
+# )
+# eh_sources += moc_files
+#
+# No extra dependencies needed beyond libcurl (already linked) and
+# nlohmann/json (header-only, already in include path).
+#
+# Suggested file layout (mirrors weather / network services):
+#
+#   src/shell/services/bing/
+#     bing_wallpaper.hpp
+#     bing_wallpaper.cpp
+#     bing_wallpaper_qml_bridge.hpp   (header-only QObject wrapper)

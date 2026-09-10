@@ -1,0 +1,116 @@
+/* Event Horizon theme for Heroic Games Launcher.
+ * Rendered by the Event Horizon shell from the active material scheme.
+ * Place this file in the Custom Themes folder configured in
+ * Heroic -> Settings -> Accessibility -> Custom Themes Path and select
+ * "Event Horizon" under Select Theme.
+ */
+
+body.event-horizon {
+    --background: {{ colors.surface_container_lowest.default.hex }};
+    --background-darker: {{ colors.surface_container_lowest.default.hex }};
+    --background-darker-80: {{ colors.surface_container_lowest.default.hex }};
+    --background-lighter: {{ colors.surface_container_high.default.hex }};
+    --background-light: {{ colors.surface_container_highest.default.hex }};
+    --background-secondary: {{ colors.surface_container_low.default.hex }};
+
+    --navbar-background: {{ colors.surface_container_lowest.default.hex }};
+    --navbar-accent: {{ colors.on_surface_variant.default.hex }};
+    --navbar-active: {{ colors.primary.default.hex }};
+    --navbar-active-background: {{ colors.surface_container_high.default.hex }};
+    --navbar-inactive: {{ colors.outline_variant.default.hex }};
+
+    --body-background: {{ colors.surface_container_lowest.default.hex }};
+    --current-background: {{ colors.surface_container_low.default.hex }};
+    --gradient-body-background: {{ colors.surface_container_lowest.default.hex }};
+    --gradient-gamecard: {{ colors.primary_container.default.hex }};
+
+    --text-default: {{ colors.on_surface.default.hex }};
+    --text-secondary: {{ colors.on_surface_variant.default.hex }};
+    --text-tertiary: {{ colors.outline_variant.default.hex }};
+    --text-quartenary: {{ colors.outline.default.hex }};
+    --text-title: {{ colors.on_surface.default.hex }};
+    --text-gametitle: {{ colors.on_surface.default.hex }};
+    --text-hover: {{ colors.on_surface.default.hex }};
+    --text-log: {{ colors.on_surface_variant.default.hex }};
+    --text-danger: {{ colors.error.default.hex }};
+    --text-warning: {{ colors.tertiary.default.hex }};
+
+    --accent: {{ colors.primary.default.hex }};
+    --accent-overlay: {{ colors.primary.default.hex }};
+    --primary: {{ colors.primary.default.hex }};
+    --primary-hover: {{ colors.primary_fixed.default.hex }};
+    --secondary: {{ colors.secondary.default.hex }};
+
+    --success: {{ colors.secondary.default.hex }};
+    --success-hover: {{ colors.secondary_container.default.hex }};
+    --success-button: {{ colors.secondary.default.hex }};
+    --status-success-hover: {{ colors.secondary_container.default.hex }};
+    --status-warning: {{ colors.tertiary.default.hex }};
+
+    --danger: {{ colors.error.default.hex }};
+    --danger-hover: {{ colors.error_container.default.hex }};
+
+    --cancel-button: {{ colors.tertiary.default.hex }};
+    --cancel-button-overlay: {{ colors.tertiary_container.default.hex }};
+
+    --input-background: {{ colors.surface_container_low.default.hex }};
+    --search-bar-background: {{ colors.surface_container_low.default.hex }};
+    --search-bar-border: {{ colors.outline_variant.default.hex }};
+
+    --modal-background: {{ colors.surface_container_high.default.hex }};
+    --modal-border: {{ colors.outline_variant.default.hex }};
+    --modal-backdrop: {{ colors.surface_container_lowest.default.hex }};
+
+    --divider: {{ colors.outline_variant.default.hex }};
+    --button-stroke: {{ colors.outline_variant.default.hex }};
+    --icon-disabled: {{ colors.outline_variant.default.hex }};
+    --icon-disabled-overlay: {{ colors.outline_variant.default.hex }};
+    --icons-background: {{ colors.surface_container_high.default.hex }};
+    --link-highlight: {{ colors.primary.default.hex }};
+    --brand-text-01: {{ colors.on_surface.default.hex }};
+    --neutral-03: {{ colors.outline_variant.default.hex }};
+    --neutral-06: {{ colors.on_surface_variant.default.hex }};
+
+    --play-button: {{ colors.primary.default.hex }};
+    --primary-button: {{ colors.primary.default.hex }};
+    --secondary-button: {{ colors.secondary_container.default.hex }};
+    --secondary-button-overlay: {{ colors.secondary_container.default.hex }};
+    --tertiary-button: {{ colors.tertiary.default.hex }};
+    --tertiary-button-overlay: {{ colors.tertiary_container.default.hex }};
+    --download-button: {{ colors.tertiary.default.hex }};
+    --download-button-overlay: {{ colors.tertiary_container.default.hex }};
+    --install-button: {{ colors.secondary.default.hex }};
+    --disabled-button: {{ colors.surface_container_low.default.hex }};
+    --disabled-button-overlay: {{ colors.surface_container_low.default.hex }};
+
+    --action-icon: {{ colors.on_surface_variant.default.hex }};
+    --action-icon-hover: {{ colors.on_surface.default.hex }};
+    --action-icon-active: {{ colors.primary.default.hex }};
+
+    --anticheat-supported: {{ colors.secondary.default.hex }};
+    --anticheat-denied: {{ colors.error.default.hex }};
+    --anticheat-broken: {{ colors.tertiary.default.hex }};
+    --anticheat-running: {{ colors.on_surface_variant.default.hex }};
+    --anticheat-planned: {{ colors.tertiary_container.default.hex }};
+    --anticheat-unknown: {{ colors.outline.default.hex }};
+
+    --alphabet-filter-accent-color: {{ colors.primary.default.hex }};
+    --alphabet-filter-accent-hover: {{ colors.primary_container.default.hex }};
+    --controller-hints-background: {{ colors.surface_container_high.default.hex }};
+    --gamecard-title-color: {{ colors.on_surface.default.hex }};
+
+    --osk-background: {{ colors.surface_container_high.default.hex }};
+    --osk-button-background: {{ colors.surface_container.default.hex }};
+    --osk-button-border: {{ colors.outline_variant.default.hex }};
+
+    --titlebar-color: {{ colors.surface_container_lowest.default.hex }};
+    --titlebar-symbol-color: {{ colors.on_surface_variant.default.hex }};
+
+    --tour-popup-background: {{ colors.surface_container_high.default.hex }};
+    --tour-popup-title: {{ colors.on_surface.default.hex }};
+    --tour-popup-skip-color: {{ colors.outline.default.hex }};
+    --tour-popup-skip-color-hover: {{ colors.on_surface.default.hex }};
+    --tour-button-color: {{ colors.primary.default.hex }};
+    --tour-bullet-active: {{ colors.primary.default.hex }};
+    --tour-bullet-inactive: {{ colors.outline_variant.default.hex }};
+}

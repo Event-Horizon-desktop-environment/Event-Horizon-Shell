@@ -1,0 +1,3 @@
+[templates.ehsteam]
+input_path  = 'SHELL_DIR/matugen/templates/steam.css'
+output_path = '~/.config/steam/matugen-colors.css'

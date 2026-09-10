@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Horizon Photo Viewer
+Comment=Photo viewer with Vulkan rendering and zoom/pan
+Exec=horizon-photo-viewer %F
+Icon=com.horizon.photo-viewer
+Terminal=false
+Categories=Graphics;Photography;Viewer;
+StartupNotify=true
+MimeType=image/jpeg;image/png;image/gif;image/bmp;image/webp;image/tiff;image/heic;image/heif;image/avif;image/jxl;image/x-dcraw;image/x-canon-cr2;image/x-nikon-nef;image/x-sony-arw;image/x-panasonic-rw2;image/x-adobe-dng;image/x-fuji-raf;image/x-olympus-orf;image/x-pentax-pef;image/x-samsung-srw;image/vnd.microsoft.icon;image/x-portable-pixmap;image/x-portable-graymap;image/x-portable-bitmap;image/x-portable-anymap;image/x-tga;image/x-xcf;image/x-xpixmap;image/svg+xml;
+InitialPreference=9

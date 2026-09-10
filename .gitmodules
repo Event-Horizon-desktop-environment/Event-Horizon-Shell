@@ -1,0 +1,5 @@
+[submodule "assets/fonts/inter"]
+	path = assets/fonts/inter
+	url = https://github.com/rsms/inter.git
+	branch = v4.0
+	shallow = true

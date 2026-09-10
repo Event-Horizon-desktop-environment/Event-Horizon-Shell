@@ -1,0 +1,79 @@
+<svg aria-labelledby="title desc" viewBox="0 0 200 200" height="200" width="200" xmlns="http://www.w3.org/2000/svg">
+  <title>Horizon Wallpaper Icon</title>
+  <desc id="desc">Minimalist horizon landscape with sunset, mountains, water reflections, enhanced sun glow + bloom, and rounded style.</desc>
+  
+  
+  <defs>
+    
+    <linearGradient y2="100%" x2="0%" y1="0%" x1="0%" id="skyGradient">
+      <stop stop-color="#FF6B4A" offset="0%"></stop>
+      <stop stop-color="#FF8C42" offset="35%"></stop>
+      <stop stop-color="#FFB74D" offset="55%"></stop>
+      <stop stop-color="#4A90E2" offset="78%"></stop>
+      <stop stop-color="#2C5F9E" offset="100%"></stop>
+    </linearGradient>
+    
+    
+    <radialGradient fy="27%" fx="58%" r="38%" cy="32%" cx="65%" id="sunBloom1">
+      <stop stop-opacity="0.95" stop-color="#FFEE9E" offset="0%"></stop>
+      <stop stop-opacity="0.75" stop-color="#FFCC6E" offset="35%"></stop>
+      <stop stop-opacity="0.35" stop-color="#FF8C42" offset="65%"></stop>
+      <stop stop-opacity="0" stop-color="#FF6B4A" offset="100%"></stop>
+    </radialGradient>
+    
+    <radialGradient fy="27%" fx="58%" r="48%" cy="32%" cx="65%" id="sunBloom2">
+      <stop stop-opacity="0.65" stop-color="#FFEE9E" offset="0%"></stop>
+      <stop stop-opacity="0.4" stop-color="#FFB74D" offset="45%"></stop>
+      <stop stop-opacity="0" stop-color="#FF6B4A" offset="100%"></stop>
+    </radialGradient>
+    
+    
+    <radialGradient r="50%" cy="50%" cx="50%" id="sunCore">
+      <stop stop-color="#FFEE9E" offset="0%"></stop>
+      <stop stop-color="#FFCC6E" offset="70%"></stop>
+      <stop stop-color="#FF8C42" offset="100%"></stop>
+    </radialGradient>
+  </defs>
+
+  
+  <rect stroke-width="8" stroke="#1F2A38" fill="none" ry="28" rx="28" height="192" width="192" y="4" x="4"></rect>
+
+  
+  <rect fill="url(#skyGradient)" rx="20" height="112" width="184" y="8" x="8"></rect>
+
+  
+  <circle fill="url(#sunCore)" r="29" cy="55" cx="130"></circle>
+  <circle fill="url(#sunBloom1)" r="42" cy="55" cx="130"></circle>
+  <circle fill="url(#sunBloom2)" r="52" cy="55" cx="130"></circle>
+
+  
+  
+  <path fill="#2C3E50" d="M0 120 L38 62 L82 120 Z"></path>
+  
+  <path fill="#34495E" d="M48 120 L95 44 L148 120 Z"></path>
+  
+  <path fill="#2C3E50" d="M118 120 L167 68 L200 120 Z"></path>
+
+  
+  <rect fill="#1F2A38" height="6" width="200" y="118" x="0"></rect>
+
+  
+  <rect fill="#1E4B7A" rx="8" height="78" width="200" y="122" x="0"></rect>
+
+  
+  
+  <path opacity="0.75" fill="none" stroke-width="4" stroke="#7CC6FF" d="M8 130 Q38 124 72 133 Q115 127 162 139 Q195 134 200 140"></path>
+  
+  
+  <path opacity="0.65" fill="none" stroke-width="3" stroke="#5AA8E8" d="M12 140 Q45 135 79 147 Q125 139 168 150 Q192 145 198 152"></path>
+  
+  
+  <path opacity="0.5" fill="none" stroke-width="2.5" stroke="#4A9EDB" d="M5 150 Q35 145 68 157 Q110 149 155 161 Q188 155 200 163"></path>
+  
+  
+  <path opacity="0.35" fill="none" stroke-width="2" stroke="#7CC6FF" d="M18 158 Q55 153 88 165 Q130 157 175 170"></path>
+
+  
+  <path opacity="0.88" fill="#1F2A38" d="M0 122 L18 104 L48 122 L72 96 L98 122 L128 105 L158 122 L182 107 L200 122 Z"></path>
+
+</svg>

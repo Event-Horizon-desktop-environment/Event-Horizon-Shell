@@ -1,0 +1,56 @@
+option(
+  'native_march',
+  type: 'boolean',
+  value: true,
+  description: 'Release only: add -march=native -mtune=native (faster on *this* CPU; binaries are not portable). Use -Dnative_march=false for generic packages. Pair with -Dbuildtype=release.',
+)
+
+option(
+  'release_omit_frame_pointer',
+  type: 'boolean',
+  value: true,
+  description: 'Release only: add -fomit-frame-pointer (typical release win; backtraces may lack frame pointers). Ignored when buildtype != release.',
+)
+
+option(
+  'jpeg',
+  type: 'boolean',
+  value: false,
+  description: 'Link libjpeg (album art / thumbnails). Set true to enable libjpeg-turbo support.',
+)
+
+option(
+  'embed_assets',
+  type: 'boolean',
+  value: false,
+  description: 'Compile Event-Horizon-logo.png and MaterialSymbolsRounded.ttf into the binary (.rodata). Default false: assets are installed under share/ and loaded from disk (saves ~15 MB of resident memory per process). Set true only for fully-portable single-file builds.',
+)
+
+option(
+  'polkit_agent',
+  type: 'boolean',
+  value: true,
+  description: 'Embed a PolicyKit-1 session authentication agent (libpolkit-agent + GLib) with an Event Horizon layer-shell password dialog (default on). Disable other session agents (e.g. polkit-gnome) to avoid conflicts. Adds glib/gobject + polkit runtime deps; use -Dpolkit_agent=false to omit.',
+)
+
+option(
+  'jemalloc',
+  type: 'feature',
+  value: 'auto',
+  description: 'Use jemalloc to reduce memory fragmentation on glibc builds. auto=enables when jemalloc is detected on the system.',
+)
+
+option(
+  'disable_mangowm_log',
+  type: 'boolean',
+  value: false,
+  description: 'Disable all MANGOWM diagnostic logging (MANGOWM_TRACE/DEBUG/INFO/etc.). Set true to strip log calls at compile time.',
+)
+
+option(
+  'jxl',
+  type: 'boolean',
+  value: false,
+  description: 'Enable JPEG XL decode support (libjxl).',
+)
+

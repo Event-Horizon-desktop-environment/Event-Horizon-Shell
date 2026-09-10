@@ -1,0 +1,11 @@
+[templates.ehvscodedark]
+input_path = 'SHELL_DIR/matugen/templates/vscode-eh-dark.json'
+output_path = 'VSCODE_EXT_EH_THEMES_DIR/matugen-eh-dark.json'
+
+[templates.ehvscodelight]
+input_path = 'SHELL_DIR/matugen/templates/vscode-eh-light.json'
+output_path = 'VSCODE_EXT_EH_THEMES_DIR/matugen-eh-light.json'
+
+[templates.ehvscodedefault]
+input_path = 'SHELL_DIR/matugen/templates/vscode-eh-default.json'
+output_path = 'VSCODE_EXT_EH_THEMES_DIR/matugen-eh-default.json'

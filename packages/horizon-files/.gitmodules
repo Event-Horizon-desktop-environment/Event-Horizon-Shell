@@ -1,0 +1,12 @@
+[submodule "third_party/nanosvg"]
+	path = third_party/nanosvg
+	url = https://github.com/memononen/nanosvg.git
+[submodule "third_party/stb"]
+	path = third_party/stb
+	url = https://github.com/nothings/stb.git
+[submodule "third_party/tomlplusplus"]
+	path = third_party/tomlplusplus
+	url = https://github.com/marzer/tomlplusplus.git
+[submodule "third_party/ffmpegthumbnailer"]
+	path = third_party/ffmpegthumbnailer
+	url = https://github.com/dirkvdb/ffmpegthumbnailer.git

@@ -1,0 +1,138 @@
+{
+  "name": "Event Horizon Default",
+  "type": "dark",
+  "colors": {
+    "focusBorder": "{{ colors.primary.default.hex }}",
+    "foreground": "{{ colors.on_surface.default.hex }}",
+    "descriptionForeground": "{{ colors.on_surface_variant.default.hex }}",
+    "disabledForeground": "{{ colors.outline.default.hex }}",
+    "errorForeground": "{{ colors.error.default.hex }}",
+    "icon.foreground": "{{ colors.on_surface_variant.default.hex }}",
+    "editor.background": "{{ colors.surface.default.hex }}",
+    "editor.foreground": "{{ colors.on_surface.default.hex }}",
+    "editor.lineHighlightBackground": "{{ colors.surface_container.default.hex }}",
+    "editor.selectionBackground": "{{ colors.primary_container.default.hex }}",
+    "editor.wordHighlightBackground": "{{ colors.secondary_container.default.hex }}",
+    "editor.findMatchBackground": "{{ colors.tertiary_container.default.hex }}",
+    "editorCursor.foreground": "{{ colors.primary.default.hex }}",
+    "editorLineNumber.foreground": "{{ colors.outline.default.hex }}",
+    "editorLineNumber.activeForeground": "{{ colors.primary.default.hex }}",
+    "editorIndentGuide.background1": "{{ colors.surface_container_highest.default.hex }}",
+    "editorWidget.background": "{{ colors.surface_container_high.default.hex }}",
+    "editorWidget.border": "{{ colors.outline_variant.default.hex }}",
+    "editorGroupHeader.tabsBackground": "{{ colors.surface_container.default.hex }}",
+    "scrollbarSlider.background": "{{ colors.surface_container_highest.default.hex }}",
+    "tab.activeBackground": "{{ colors.surface_container_high.default.hex }}",
+    "tab.activeForeground": "{{ colors.on_surface.default.hex }}",
+    "tab.inactiveBackground": "{{ colors.surface_container.default.hex }}",
+    "tab.inactiveForeground": "{{ colors.on_surface_variant.default.hex }}",
+    "tab.border": "{{ colors.outline_variant.default.hex }}",
+    "sideBar.background": "{{ colors.surface_container.default.hex }}",
+    "sideBar.foreground": "{{ colors.on_surface_variant.default.hex }}",
+    "sideBarSectionHeader.foreground": "{{ colors.on_surface.default.hex }}",
+    "activityBar.background": "{{ colors.surface_container.default.hex }}",
+    "activityBar.foreground": "{{ colors.on_surface_variant.default.hex }}",
+    "activityBarBadge.background": "{{ colors.primary.default.hex }}",
+    "activityBarBadge.foreground": "{{ colors.on_primary.default.hex }}",
+    "statusBar.background": "{{ colors.primary_container.default.hex }}",
+    "statusBar.foreground": "{{ colors.on_primary_container.default.hex }}",
+    "titleBar.activeBackground": "{{ colors.surface_container.default.hex }}",
+    "titleBar.activeForeground": "{{ colors.on_surface.default.hex }}",
+    "titleBar.inactiveBackground": "{{ colors.surface_container_low.default.hex }}",
+    "titleBar.inactiveForeground": "{{ colors.on_surface_variant.default.hex }}",
+    "menu.background": "{{ colors.surface_container_high.default.hex }}",
+    "menu.foreground": "{{ colors.on_surface.default.hex }}",
+    "menu.selectionBackground": "{{ colors.primary_container.default.hex }}",
+    "menu.selectionForeground": "{{ colors.on_primary_container.default.hex }}",
+    "input.background": "{{ colors.surface_container_high.default.hex }}",
+    "input.foreground": "{{ colors.on_surface.default.hex }}",
+    "input.border": "{{ colors.outline_variant.default.hex }}",
+    "input.placeholderForeground": "{{ colors.on_surface_variant.default.hex }}",
+    "dropdown.background": "{{ colors.surface_container_high.default.hex }}",
+    "button.background": "{{ colors.primary.default.hex }}",
+    "button.foreground": "{{ colors.on_primary.default.hex }}",
+    "button.hoverBackground": "{{ base16.base08.dark.hex | lighten: 6.0 }}",
+    "list.activeSelectionBackground": "{{ colors.primary_container.default.hex }}",
+    "list.activeSelectionForeground": "{{ colors.on_primary_container.default.hex }}",
+    "list.hoverBackground": "{{ colors.surface_container_high.default.hex }}",
+    "list.focusBackground": "{{ colors.surface_container_high.default.hex }}",
+    "list.highlightForeground": "{{ colors.primary.default.hex }}",
+    "quickInput.background": "{{ colors.surface_container_high.default.hex }}",
+    "quickInput.foreground": "{{ colors.on_surface.default.hex }}",
+    "quickInputList.focusBackground": "{{ colors.primary_container.default.hex }}",
+    "panel.background": "{{ colors.surface.default.hex }}",
+    "panel.border": "{{ colors.outline_variant.default.hex }}",
+    "terminal.background": "{{ colors.surface.default.hex }}",
+    "terminal.foreground": "{{ colors.on_surface.default.hex }}",
+    "terminal.ansiBlack": "{{ base16.base00.dark.hex }}",
+    "terminal.ansiBrightBlack": "{{ base16.base08.dark.hex }}",
+    "terminal.ansiRed": "{{ base16.base08.dark.hex }}",
+    "terminal.ansiBrightRed": "{{ base16.base08.dark.hex }}",
+    "terminal.ansiGreen": "{{ base16.base0b.dark.hex }}",
+    "terminal.ansiBrightGreen": "{{ base16.base0b.dark.hex }}",
+    "terminal.ansiYellow": "{{ base16.base0a.dark.hex }}",
+    "terminal.ansiBrightYellow": "{{ base16.base0a.dark.hex }}",
+    "terminal.ansiBlue": "{{ base16.base0d.dark.hex }}",
+    "terminal.ansiBrightBlue": "{{ base16.base0d.dark.hex }}",
+    "terminal.ansiMagenta": "{{ base16.base0e.dark.hex }}",
+    "terminal.ansiBrightMagenta": "{{ base16.base0e.dark.hex }}",
+    "terminal.ansiCyan": "{{ base16.base0c.dark.hex }}",
+    "terminal.ansiBrightCyan": "{{ base16.base0c.dark.hex }}",
+    "terminal.ansiWhite": "{{ base16.base05.dark.hex }}",
+    "terminal.ansiBrightWhite": "{{ base16.base07.dark.hex }}"
+  },
+  "tokenColors": [
+    {
+      "scope": ["comment", "punctuation.definition.comment"],
+      "settings": { "foreground": "{{ colors.outline.default.hex }}", "fontStyle": "italic" }
+    },
+    {
+      "scope": ["string", "string.quoted", "string.regexp", "string.template"],
+      "settings": { "foreground": "{{ colors.tertiary.default.hex }}" }
+    },
+    {
+      "scope": ["constant.numeric", "constant.language", "constant.character"],
+      "settings": { "foreground": "{{ colors.tertiary_fixed.default.hex }}" }
+    },
+    {
+      "scope": ["keyword", "storage.type", "storage.modifier", "keyword.control"],
+      "settings": { "foreground": "{{ colors.primary.default.hex }}" }
+    },
+    {
+      "scope": ["entity.name.type", "entity.name.class", "support.type", "support.class"],
+      "settings": { "foreground": "{{ colors.primary_fixed.default.hex }}" }
+    },
+    {
+      "scope": ["entity.name.function", "support.function", "entity.name.tag"],
+      "settings": { "foreground": "{{ colors.primary_container.default.hex }}" }
+    },
+    {
+      "scope": ["variable", "variable.other", "variable.parameter"],
+      "settings": { "foreground": "{{ colors.on_surface.default.hex }}" }
+    },
+    {
+      "scope": ["variable.language", "variable.parameter.function"],
+      "settings": { "foreground": "{{ colors.secondary.default.hex }}" }
+    },
+    {
+      "scope": ["variable.other.constant", "variable.other.property"],
+      "settings": { "foreground": "{{ colors.secondary_fixed.default.hex }}" }
+    },
+    {
+      "scope": ["entity.other.attribute-name"],
+      "settings": { "foreground": "{{ colors.tertiary_container.default.hex }}" }
+    },
+    {
+      "scope": ["punctuation", "operator", "keyword.operator"],
+      "settings": { "foreground": "{{ colors.on_surface_variant.default.hex }}" }
+    },
+    {
+      "scope": ["meta.embedded", "entity.name.section"],
+      "settings": { "foreground": "{{ colors.inverse_primary.default.hex }}" }
+    },
+    {
+      "scope": ["invalid.illegal", "invalid.deprecated"],
+      "settings": { "foreground": "{{ colors.error.default.hex }}" }
+    }
+  ]
+}
