@@ -5,6 +5,8 @@ Single binary: **`EventHorizon`**.
 
 Works with **Hyprland**, **Niri**, **Mango (mangowm)**, Sway, Labwc, and Triad.
 
+Latest release: **[0.9.5 (Beta 1)](https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell/releases/tag/0.9.5)**.
+
 ## Quick start
 
 ```bash
@@ -35,3 +37,10 @@ cd Event-Horizon-Shell
 - `EventHorizon --dock` — dock only
 - `EventHorizon --eh-settings` — standalone settings app
 - `EventHorizon --eh-screenshot [file.png]` — screenshot to PNG
+
+## Bonus: Event Horizon manages your Hyprland config
+
+On Hyprland the shell ships its own full **Hyprland settings editor** (the
+Hyprland tab in settings): window rules, binds, monitor config, animations,
+blur, gaps, and more are read, edited, and written back to
+`~/.config/hypr/hyprland(.conf|lua)` directly — no hand-editing needed.
