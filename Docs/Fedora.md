@@ -56,18 +56,15 @@ you skipped step 2.
 ## 5. Run
 
 Event Horizon is a layer-shell client — it must run inside a Wayland session
-(Hyprland, Niri, Sway, Mango, Labwc, or Triad). Add it to your compositor's
-startup config, e.g. Hyprland:
-
-```ini
-exec-once = EventHorizon
-```
-
-or launch it manually in a terminal from inside the session:
+(Hyprland, Niri, Sway, Mango, Labwc, or Triad). To test it before wiring up
+autostart, open a terminal in your session and run:
 
 ```bash
 EventHorizon
 ```
+
+You should see the dock + panel appear. Then add your compositor's exact
+autostart line + optional color matching — see [Setup.md](Setup.md) → "Make it autostart".
 
 ## Optional image codecs
 
@@ -76,12 +73,20 @@ EventHorizon
 
 ```bash
 sudo dnf install libjpeg-turbo-devel libjxl-devel
-meson configure build-release -Djpeg=true -Djxl=true
+sudo meson configure build-release -Djpeg=true -Djxl=true
 sudo just install
 ```
 
+> The `sudo` on `meson configure` matters: after a `sudo just install` the
+> `build-release/` dir is owned by root, so a plain `meson configure` fails
+> with `PermissionError … cmd_line.txt` and the flags silently don't apply.
+
 ## Troubleshooting
 
+- **`ERROR: File assets/fonts/inter/docs/font-files/InterVariable.ttf does
+  not exist.`** You cloned without `--recursive` (or an older clone doesn't
+  have the submodule checked out). In the repo root run
+  `git submodule update --init --recursive`, then re-run step 3.
 - **`sudo dnf install` errors "No match for argument: <pkg>`**: the package
   name doesn't exist in Fedora (or the repo list is stale). Double-check the
   spelling, then `sudo dnf --refresh install <list>`.
