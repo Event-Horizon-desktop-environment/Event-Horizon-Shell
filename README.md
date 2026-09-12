@@ -5,7 +5,7 @@ Wayland shell (dock, panel, desktop, embedded settings) for wlroots-style compos
 ## Quick start
 
 ```bash
-git clone https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell.git
+git clone --recursive https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell.git
 cd Event-Horizon-Shell
 git submodule update --init --recursive
 ```
