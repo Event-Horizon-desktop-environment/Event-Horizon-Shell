@@ -7,6 +7,7 @@ Wayland shell (dock, panel, desktop, embedded settings) for wlroots-style compos
 ```bash
 git clone https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell.git
 cd Event-Horizon-Shell
+git submodule update --init --recursive
 ```
 
 Install your distro's dependency packages (one copy-paste block each), then
