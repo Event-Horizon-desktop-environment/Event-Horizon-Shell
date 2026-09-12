@@ -26,6 +26,9 @@ sudo pacman -S --needed meson just cmake mold \
   librsvg poppler-glib libarchive lcms2 \
   vulkan-headers vulkan-icd-loader
 ```
+```
+sudo pacman -S hyprland
+```
 
 `--needed` skips anything already installed. `gcc` is part of `base-devel`,
 which every Arch install already has.
