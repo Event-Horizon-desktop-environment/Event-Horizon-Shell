@@ -512,6 +512,14 @@ void truncate_label(cairo_t* cr, const std::string& text, double max_w, std::str
   *out = ell;
 }
 
+// Strip a dotted app-ID namespace off a display name (e.g. "com.blackmagicdesign.resolve"
+// -> "resolve") so a label that fell back to the file stem shows the leaf, not the namespace.
+static std::string strip_namespace_leaf(std::string s) {
+  const size_t dot = s.rfind('.');
+  if (dot != std::string::npos && dot != 0 && dot + 1 < s.size()) s.erase(0, dot + 1);
+  return s;
+}
+
 static std::string decode_mount_escapes(const std::string& s) {
   std::string r;
   r.reserve(s.size());
@@ -728,7 +736,7 @@ void rescan(DesktopApp& app) {
       std::error_code ec2;
       it.desktop_path = fs::weakly_canonical(p, ec2).string();
       if (it.desktop_path.empty()) it.desktop_path = fs::absolute(p, ec2).string();
-      it.name = pd.name.empty() ? p.stem().string() : pd.name;
+      it.name = strip_namespace_leaf(pd.name.empty() ? p.stem().string() : pd.name);
       it.icon_key = pd.icon.empty() ? eh_app_drawer_desktop_stem_from_path(it.desktop_path) : pd.icon;
       std::string exec = strip_exec_field_codes(pd.exec);
       if (exec.empty()) continue;
@@ -810,6 +818,8 @@ void paint_icon_item(DesktopApp& app, cairo_t* cr, const DesktopIconItem& ic, bo
     cairo_clip(cr);
     cairo_push_group(cr);
   }
+
+  
 
   if (!app.iconDragging && !app.marqueeDragging && !app.marqueeVisible && !app.desktopMenuOpen && !app.iconCtxMenuOpen) {
     cairo_save(cr);

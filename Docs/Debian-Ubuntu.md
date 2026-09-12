@@ -9,7 +9,7 @@ Everything below is copy-paste. Run each block in order from a terminal.
 ## 1. Get the source
 
 ```bash
-git clone https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell.git
+git clone --recursive https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell.git
 cd Event-Horizon-Shell
 ```
 

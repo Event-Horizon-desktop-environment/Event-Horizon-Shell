@@ -16,7 +16,7 @@ The copy-paste path — exact dependency commands for your distro live in
 [Arch-Linux](Arch-Linux.md), [Fedora](Fedora.md), and [Debian-Ubuntu](Debian-Ubuntu.md):
 
 ```sh
-git clone https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell.git
+git clone --recursive https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell.git
 cd Event-Horizon-Shell
 # <install your distro's dependency packages — see the distro guides>
 sudo just install
