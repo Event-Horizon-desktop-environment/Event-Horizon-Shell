@@ -11,7 +11,7 @@ git clone https://github.com/Event-Horizon-desktop-environment/Event-Horizon-She
 cd Event-Horizon-Shell
 ```
 
-## 2. Install dependencies
+## 2. Install dependencies to compile.
 
 ```bash
 sudo pacman -S --needed meson just cmake mold \
