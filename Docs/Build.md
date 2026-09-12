@@ -23,6 +23,12 @@ sudo just install
 EventHorizon --version    # verify: prints "Event Horizon 0.9.5-beta1"
 ```
 
+> **`--recursive` is required.** Skipping it makes the very last build step
+> fail with `ERROR: File assets/fonts/inter/docs/font-files/InterVariable.ttf
+> does not exist.` — that's the Inter font submodule not being checked out.
+> Recovery: `git submodule update --init --recursive`, then re-run
+> `sudo just install`.
+
 `sudo just install` configures `build-release/` (`--buildtype=release`,
 `--prefix=/usr`), compiles, and installs in one command. Everything in the
 `## Build Commands` section below is the manual, low-level equivalent.
