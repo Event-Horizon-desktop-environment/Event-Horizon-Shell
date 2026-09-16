@@ -3,6 +3,7 @@
 
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/common/bench/debug_profile.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/palette/matugen_palette.hpp"
 
 #include <nlohmann/json.hpp>
@@ -48,11 +49,14 @@ namespace {
 void matugen_trace(const char* fmt, ...) {
    
   if (!matugen_trace_enabled()) return;
+  char line[2048];
   va_list ap;
   va_start(ap, fmt);
-  std::fputs("[eh-matugen] ", stderr);
-  std::vfprintf(stderr, fmt, ap);
+  std::vsnprintf(line, sizeof(line), fmt, ap);
   va_end(ap);
+  std::size_t len = std::strlen(line);
+  while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+  debug_log("hc_palette", "[eh-matugen] %s", line);
 }
 
 [[nodiscard]] std::string config_dir() {
@@ -278,8 +282,7 @@ void merge_vesktop_vencord_settings_after_matugen(const fs::path& vesktop_data_d
         root = nlohmann::json::parse(raw, nullptr, true, true, true);
       } catch (const nlohmann::json::parse_error& e) {
         matugen_trace("vesktop merge: parse error: %s\n", e.what());
-        std::fprintf(stderr,
-                     "[event-horizon] matugen: %s: JSON parse error (%s) — treating as empty object\n",
+        debug_log("hc_palette", "matugen: %s: JSON parse error (%s) — treating as empty object",
                      settings_path.string().c_str(), e.what());
         root = nlohmann::json::object();
       }
@@ -324,7 +327,7 @@ void merge_vesktop_vencord_settings_after_matugen(const fs::path& vesktop_data_d
                   static_cast<unsigned long long>(ec_sz ? 0ULL : sz), ec_sz.value());
   } catch (const std::exception& e) {
     matugen_trace("vesktop merge: exception: %s\n", e.what());
-    std::fprintf(stderr, "[event-horizon] matugen: Vesktop settings merge failed: %s\n", e.what());
+    debug_log("hc_palette", "matugen: Vesktop settings merge failed: %s", e.what());
   }
 }
 
@@ -340,8 +343,7 @@ void merge_vscode_user_settings_after_matugen(const fs::path& user_dir, const fs
       try {
         root = nlohmann::json::parse(raw, nullptr, true, true, true);
       } catch (const nlohmann::json::parse_error& e) {
-        std::fprintf(stderr,
-                     "[event-horizon] matugen: %s: JSON parse error (%s) — treating as empty object\n",
+        debug_log("hc_palette", "matugen: %s: JSON parse error (%s) — treating as empty object",
                      settings_path.string().c_str(), e.what());
         root = nlohmann::json::object();
       }
@@ -364,7 +366,7 @@ void merge_vscode_user_settings_after_matugen(const fs::path& user_dir, const fs
     if (!out) return;
     out << root.dump(2) << '\n';
   } catch (const std::exception& e) {
-    std::fprintf(stderr, "[event-horizon] matugen: VS Code settings merge failed: %s\n", e.what());
+    debug_log("hc_palette", "matugen: VS Code settings merge failed: %s", e.what());
   }
 }
 
@@ -399,7 +401,7 @@ void merge_heroic_prefs(const fs::path& heroic_dir) {
       }
     }
   } catch (const std::exception& e) {
-    std::fprintf(stderr, "[event-horizon] Heroic prefs merge failed: %s\n", e.what());
+    debug_log("hc_palette", "Heroic prefs merge failed: %s", e.what());
   }
 }
 
@@ -469,7 +471,7 @@ void merge_fluxer_prefs(const std::string& cfg_main, const std::string& home) {
       }
     }
   } catch (const std::exception& e) {
-    std::fprintf(stderr, "[event-horizon] Fluxer prefs merge failed: %s\n", e.what());
+    debug_log("hc_palette", "Fluxer prefs merge failed: %s", e.what());
   }
 }
 
@@ -578,7 +580,7 @@ if (trim_end.back() == ']') {
     matugen_trace("alacritty sync: %s\n",
                   existed ? "added import to existing config" : "created config with event-horizon import");
   } catch (const std::exception& e) {
-    std::fprintf(stderr, "[event-horizon] Alacritty sync failed: %s\n", e.what());
+    debug_log("hc_palette", "Alacritty sync failed: %s", e.what());
   }
 }
 

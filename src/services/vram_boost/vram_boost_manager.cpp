@@ -1,6 +1,7 @@
 #include "services/vram_boost/vram_boost_manager.hpp"
 
 #include "configuration/shell_config.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -32,17 +33,15 @@ bool vram_trace_enabled() {
 
 void vram_trace(const std::string& msg) {
   if (!vram_trace_enabled()) return;
-  std::cerr << "[vramboost] " << msg << '\n';
-  std::ofstream log("/tmp/eh-vramboost.log", std::ios::app);
-  if (log) log << msg << '\n';
+  debug_log("vram", "%s", msg.c_str());
 }
 
 void warn_once_no_permission() {
   static bool warned = false;
   if (warned) return;
   warned = true;
-  std::cerr << "[vramboost] cannot write dmem cgroup limits — VRAM boost disabled. "
-               "The user account needs write access to the target cgroup\'s dmem.* files.\n";
+  debug_log("vram", "cannot write dmem cgroup limits — VRAM boost disabled. "
+                    "The user account needs write access to the target cgroup's dmem.* files.");
 }
 
 } // namespace

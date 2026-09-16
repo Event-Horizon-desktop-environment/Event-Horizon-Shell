@@ -20,6 +20,7 @@
 
 #include "configuration/shell_config.hpp"
 #include "configuration/shell_renderer_backend.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/shared/popup/popup_position.hpp"
 
 #include <toml++/toml.hpp>
@@ -1235,7 +1236,7 @@ void draw(App& app) {
     std::cerr << line;
     static FILE* s_log = nullptr;
     if (!s_log) {
-      s_log = fopen("/tmp/eh_menu_bench.log", "w");
+      s_log = fopen((std::string(eh_log::dir()) + "/menu-bench.log").c_str(), "w");
       if (s_log) {
         time_t now_t = time(nullptr);
         fprintf(s_log, "# Event Horizon Menu Bench  %s", ctime(&now_t));

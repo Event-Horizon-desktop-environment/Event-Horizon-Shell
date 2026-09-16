@@ -1,5 +1,6 @@
 #include "wl/capture/toplevel_stream.hpp"
 
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/time/mono_time.hpp"
 #include "wl/core/memfd.hpp"
 
@@ -25,7 +26,9 @@ namespace {
 void stream_log(const char* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  FILE* f = fopen("/tmp/eh-shot.log", "a");
+  char path[1024];
+  std::snprintf(path, sizeof(path), "%s/shot.log", eh_log::dir());
+  FILE* f = fopen(path, "a");
   if (f) {
     fprintf(f, "[live] ");
     vfprintf(f, fmt, ap);

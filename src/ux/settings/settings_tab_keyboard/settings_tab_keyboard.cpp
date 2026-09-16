@@ -11,6 +11,7 @@
 #include "ux/settings/settings_tab_keyboard/settings_tab_keyboard.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 #include "ux/settings/utils/scroll/settings_scroll.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 
 extern void draw(App& app);
 extern void save_settings(const Settings& s);
@@ -315,6 +316,9 @@ bool settings_keyboard_consume_pointer_down(App& app, int contentX, int contentW
           }
           app.settingsKeyboardDdKind = -1;
           app.settingsKeyboardDdHoverRow = -1;
+          debug_log("keybinds", "keyboard settings applied: layout='%s' switchShortcut=%d caps=%d compose=%d",
+                    app.settings.keyboardLayout.c_str(), app.settings.keyboardSwitchShortcut,
+                    app.settings.keyboardCapsLockBehavior, app.settings.keyboardComposeKey);
           save_settings(app.settings);
           draw(app);
           return true;

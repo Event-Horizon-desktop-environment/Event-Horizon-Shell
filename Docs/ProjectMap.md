@@ -293,7 +293,7 @@ Files organized into subdirectories by concern:
 | `geom/` | `rect_overlap.hpp` | Rectangle overlap/math helpers |
 | `glyph/` | `bundled_assets.cpp`/`.hpp`, `material_glyph.cpp`/`.hpp` | Material Symbols glyph rendering by name or codepoint |
 | `icon_cache/` | `icon_cache.cpp`/`.hpp` | XDG icon theme resolution and raster cache |
-| `log/` | `debug_log.hpp`, `mangowm_logger.hpp`, `verbose_log.hpp`, `log_file.hpp` | Stub logging macros, crash logging, file logger |
+| `log/` | `debug_log.hpp`, `mangowm_logger.hpp`, `verbose_log.hpp`, `log_file.hpp` | Per-tag `debug_log(tag, ...)` lines split into `~/EH-logs/<tag>.log` (rotation, `eh_log::dir()`), mangowm startup trace, crash logging, file logger |
 | `mem/` | `periodic_trim.cpp`/`.hpp` | Periodic heap trim (jemalloc/malloc_trim) + Pango font cache clearing |
 | `monitor/` | `output_assign.hpp` | Output assignment helpers |
 | `ns/` | `namespaces.hpp` | C++ namespace aliases and using declarations |

@@ -35,14 +35,14 @@ void pm_configure(void* data, zwlr_layer_surface_v1* ls, uint32_t serial, uint32
   pm.configured = true;
   pm.configuredW = static_cast<int>(w);
   pm.configuredH = static_cast<int>(h);
-  if (debug() >= 1) std::fprintf(stderr, "[powermenu] configure serial=%u w=%u h=%u\n", serial, w, h);
+  if (debug() >= 1) debug_log("powermenu", "configure serial=%u w=%u h=%u", serial, w, h);
 }
 
 void pm_closed(void* data, zwlr_layer_surface_v1*) {
    
   auto& pm = *static_cast<PowerMenu*>(data);
   pm.open = false;
-  if (debug() >= 1) std::fprintf(stderr, "[powermenu] closed\n");
+  if (debug() >= 1) debug_log("powermenu", "closed");
 }
 
 static const zwlr_layer_surface_v1_listener kPmListener = {
@@ -77,7 +77,7 @@ bool open(PowerMenu& pm, wl_display* display, wl_compositor* compositor, wl_shm*
    
   if (pm.open) return true;
   if (!compositor || !layerShell || actionIdx < 1 || actionIdx > 3) {
-    if (debug() >= 1) std::fprintf(stderr, "[powermenu] open: invalid args compositor=%p layerShell=%p idx=%d\n",
+    if (debug() >= 1) debug_log("powermenu", "open: invalid args compositor=%p layerShell=%p idx=%d",
                                    static_cast<void*>(compositor), static_cast<void*>(layerShell), actionIdx);
     return false;
   }
@@ -109,7 +109,7 @@ bool open(PowerMenu& pm, wl_display* display, wl_compositor* compositor, wl_shm*
   if (!eh::wayland::create_layer_surface(compositor, layerShell, output, cfg,
                                           &kPmListener, &pm,
                                           &pm.surface, &pm.layerSurface)) {
-    if (debug() >= 1) std::fprintf(stderr, "[powermenu] failed to create layer surface\n");
+    if (debug() >= 1) debug_log("powermenu", " failed to create layer surface");
     return false;
   }
 
@@ -119,13 +119,13 @@ bool open(PowerMenu& pm, wl_display* display, wl_compositor* compositor, wl_shm*
   wl_surface_commit(pm.surface);
   wl_display_roundtrip(display);
   pm.open = true;
-  if (debug() >= 1) std::fprintf(stderr, "[powermenu] opened actionIdx=%d surface=%p\n", actionIdx, static_cast<void*>(pm.surface));
+  if (debug() >= 1) debug_log("powermenu", "opened actionIdx=%d surface=%p", actionIdx, static_cast<void*>(pm.surface));
   return true;
 }
 
 void close(PowerMenu& pm) {
    
-  if (debug() >= 1) std::fprintf(stderr, "[powermenu] close\n");
+  if (debug() >= 1) debug_log("powermenu", "close");
   pm.open = false;
   if (pm.frameCallback) {
     wl_callback_destroy(pm.frameCallback);
@@ -155,7 +155,7 @@ void close(PowerMenu& pm) {
 void draw(PowerMenu& pm, double pointerX, double pointerY) {
    
   if (!pm.open || !pm.configured || !pm.surface || !pm.compositor) {
-    if (debug() >= 2) std::fprintf(stderr, "[powermenu] draw skip open=%d configured=%d surface=%p comp=%p\n",
+    if (debug() >= 2) debug_log("powermenu", "draw skip open=%d configured=%d surface=%p comp=%p",
                                    pm.open, pm.configured, static_cast<void*>(pm.surface), static_cast<void*>(pm.compositor));
     return;
   }
@@ -169,18 +169,18 @@ void draw(PowerMenu& pm, double pointerX, double pointerY) {
                                     : static_cast<double>(bufH);
 
   if (!pm.buf.ensure(pm.shm, "event-horizon-powermenu", bufW, bufH)) {
-    if (debug() >= 1) std::fprintf(stderr, "[powermenu] draw: buf.ensure(%dx%d) failed\n", bufW, bufH);
+    if (debug() >= 1) debug_log("powermenu", "draw: buf.ensure(%dx%d) failed", bufW, bufH);
     return;
   }
   if (pm.buf.busy()) {
     pm.wantRedraw = true;
-    if (debug() >= 2) std::fprintf(stderr, "[powermenu] draw: buf busy\n");
+    if (debug() >= 2) debug_log("powermenu", "draw: buf busy");
     return;
   }
 
   cairo_t* cr = pm.buf.cairo();
   if (!cr) {
-    if (debug() >= 1) std::fprintf(stderr, "[powermenu] draw: null cairo\n");
+    if (debug() >= 1) debug_log("powermenu", "draw: null cairo");
     return;
   }
 
@@ -202,7 +202,7 @@ void draw(PowerMenu& pm, double pointerX, double pointerY) {
   const int remainingSec = (elapsed >= 60000) ? 0 : static_cast<int>(60 - elapsed / 1000);
 
   if (pm.actionIdx >= 1 && pm.actionIdx <= 3) {
-    if (debug() >= 2) std::fprintf(stderr, "[powermenu] draw: paint idx=%d w=%.0f h=%.0f remaining=%d\n",
+    if (debug() >= 2) debug_log("powermenu", "draw: paint idx=%d w=%.0f h=%.0f remaining=%d",
                                    pm.actionIdx, w, h, remainingSec);
     eh::power_confirm::paint(cr, static_cast<double>(w), static_cast<double>(h),
                              pm.actionIdx, pointerX, pointerY, remainingSec, sc);
@@ -223,7 +223,7 @@ void draw(PowerMenu& pm, double pointerX, double pointerY) {
 
   wl_surface_commit(pm.surface);
   if (pm.display) wl_display_flush(pm.display);
-  if (debug() >= 2) std::fprintf(stderr, "[powermenu] draw: committed\n");
+  if (debug() >= 2) debug_log("powermenu", "draw: committed");
 }
 
 ClickResult handle_click(PowerMenu& pm, double pointerX, double pointerY) {
@@ -243,7 +243,7 @@ ClickResult handle_click(PowerMenu& pm, double pointerX, double pointerY) {
 
   if (debug() >= 1) {
     const char* names[] = {"None", "Cancel", "Confirm", "Close"};
-    std::fprintf(stderr, "[powermenu] click pick=%s xy=%.0f,%.0f\n",
+    debug_log("powermenu", "click pick=%s xy=%.0f,%.0f",
                 names[static_cast<int>(pick) + 1], pointerX, pointerY);
   }
 

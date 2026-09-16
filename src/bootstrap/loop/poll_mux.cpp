@@ -1,5 +1,6 @@
 #include "bootstrap/loop/poll_mux.hpp"
 
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/log/mangowm_logger.hpp"
 #include "bootstrap/thread/thread_dispatch.hpp"
 #include "bootstrap/loop/wl_loop_diag.hpp"
@@ -281,7 +282,7 @@ int PollMuxLoop::run(bool* running) const {
       if (revents & POLLNVAL) {
         static thread_local std::unordered_set<int> nval_reported;
         if (nval_reported.insert(fds[i].fd).second) {
-          std::fprintf(stderr, "[poll-mux] ignoring closed fd=%d (POLLNVAL)\n", fds[i].fd);
+          debug_log("core", "ignoring closed fd=%d (POLLNVAL)", fds[i].fd);
         }
         continue;
       }

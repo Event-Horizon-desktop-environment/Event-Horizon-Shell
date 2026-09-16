@@ -1,6 +1,7 @@
 #include "services/global_keyboard/global_keyboard_handler.hpp"
 
 #include "bootstrap/thread/thread_dispatch.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 
 #include <fcntl.h>
 #include <linux/input.h>
@@ -10,7 +11,6 @@
 
 #include <cerrno>
 #include <cstring>
-#include <fstream>
 #include <string>
 #include <vector>
 
@@ -19,30 +19,35 @@ namespace eh::service {
 namespace {
 
 void log(const std::string& msg) {
-  std::ofstream f("/tmp/eh-keyboard.log", std::ios::app);
-  f << msg << std::endl;
+  debug_log("keybinds", "%s", msg.c_str());
 }
 
-bool is_super_keyboard(int fd) {
-  unsigned long ev_bits[EV_MAX / (sizeof(unsigned long) * 8) + 1] = {};
-  unsigned long key_bits[KEY_MAX / (sizeof(unsigned long) * 8) + 1] = {};
+struct KeyboardProbeResult {
+  bool is_super = false;
+  bool has_ev_key = false;
+  bool has_leftmeta = false;
+  char name[256] = {};
+};
 
-  if (::ioctl(fd, EVIOCGBIT(0, sizeof(ev_bits)), ev_bits) < 0) return false;
+KeyboardProbeResult probe_keyboard(int fd) {
+  KeyboardProbeResult r{};
+  ::ioctl(fd, EVIOCGNAME(sizeof(r.name)), r.name);
+
+  unsigned long ev_bits[EV_MAX / (sizeof(unsigned long) * 8) + 1] = {};
+  if (::ioctl(fd, EVIOCGBIT(0, sizeof(ev_bits)), ev_bits) < 0) return r;
 
   const unsigned long ev_key_bit = EV_KEY;
-  if (!(ev_bits[ev_key_bit / (sizeof(unsigned long) * 8)] &
-        (1UL << (ev_key_bit % (sizeof(unsigned long) * 8))))) {
-    return false;
-  }
+  r.has_ev_key = (ev_bits[ev_key_bit / (sizeof(unsigned long) * 8)] &
+                  (1UL << (ev_key_bit % (sizeof(unsigned long) * 8)))) != 0;
+  if (!r.has_ev_key) return r;
 
-  if (::ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) < 0) return false;
+  unsigned long key_bits[KEY_MAX / (sizeof(unsigned long) * 8) + 1] = {};
+  if (::ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) < 0) return r;
 
-  if (!(key_bits[KEY_LEFTMETA / (sizeof(unsigned long) * 8)] &
-        (1UL << (KEY_LEFTMETA % (sizeof(unsigned long) * 8))))) {
-    return false;
-  }
-
-  return true;
+  r.has_leftmeta = (key_bits[KEY_LEFTMETA / (sizeof(unsigned long) * 8)] &
+                    (1UL << (KEY_LEFTMETA % (sizeof(unsigned long) * 8)))) != 0;
+  r.is_super = r.has_leftmeta;
+  return r;
 }
 
 } // namespace
@@ -76,20 +81,34 @@ void GlobalKeyboardHandler::evdev_thread_fn() {
   auto setsFn = settingsFn_;
 
   std::vector<int> fds;
+  int inaccessible = 0;
+  int non_keyboards = 0;
   for (int i = 0; i < 64; ++i) {
     const std::string path = "/dev/input/event" + std::to_string(i);
     const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
-    if (fd < 0) continue;
-    if (!is_super_keyboard(fd)) {
+    if (fd < 0) {
+      if (errno != ENOENT) {
+        ++inaccessible;
+        log("open fail: " + path + " (" + std::string(std::strerror(errno)) + ")");
+      }
+      continue;
+    }
+    KeyboardProbeResult r = probe_keyboard(fd);
+    if (!r.is_super) {
+      ++non_keyboards;
+      log("skip: " + path + " name=" + r.name + " has_ev_key=" + std::to_string(r.has_ev_key) +
+          " has_leftmeta=" + std::to_string(r.has_leftmeta));
       ::close(fd);
       continue;
     }
     fds.push_back(fd);
-    log("opened: " + path);
+    log("opened: " + path + " name=" + r.name);
   }
 
   if (fds.empty()) {
-    log("no evdev keyboard devices found");
+    log("no evdev keyboard devices found — scan: inaccessible=" + std::to_string(inaccessible) +
+        " non_keyboards=" + std::to_string(non_keyboards) +
+        " (this process is likely not in the `input` group / lacks evdev ACLs)");
     active_ = false;
     return;
   }

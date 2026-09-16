@@ -2,6 +2,7 @@
 
 #include "bootstrap/session/detail/unified_shell_session.hpp"
 #include "bootstrap/entry/screenshot_mode.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/log/mangowm_logger.hpp"
 #include "services/ipc/ipc_server.hpp"
 #include "ux/settings/common/embed/settings_embed.hpp"
@@ -17,8 +18,7 @@
 namespace {
 
 void ipc_log(const std::string& msg) {
-  std::ofstream f("/tmp/eh-keyboard.log", std::ios::app);
-  f << msg << std::endl;
+  debug_log("ipc", "%s", msg.c_str());
 }
 
 } // namespace
@@ -33,7 +33,7 @@ static int run_ipc_client(const std::string& command) {
   ipc_log("IPC CLIENT: run_ipc_client called with command='" + command + "'");
   const std::string path = eh::ipc::default_socket_path();
   ipc_log("IPC CLIENT: socket path = " + path);
-  std::cerr << "ipc: connecting to " << path << "\n";
+  debug_log("ipc", "connecting to %s", path.c_str());
 
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;

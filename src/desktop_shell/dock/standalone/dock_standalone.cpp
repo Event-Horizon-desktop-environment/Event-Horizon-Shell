@@ -16,6 +16,7 @@
 
 #include "bootstrap/loop/poll_mux.hpp"
 #include "configuration/shell_config.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/monitor/output_assign.hpp"
 #include "services/ipc/client.hpp"
 #include "services/ipc/ipc_server.hpp"
@@ -224,9 +225,8 @@ int run_dock_standalone() {
       // detected instead of waiting for idle heuristics to catch up.
       const uint64_t startup_dropped = eh::gpu::force_trim_gpu_pages();
       if (startup_dropped > 0) {
-        std::fprintf(stderr,
-                     "[dock-mem] startup gpu page trim: dropped %.1fMB\n",
-                     static_cast<double>(startup_dropped) / (1024.0 * 1024.0));
+        debug_log("dock", "startup gpu page trim: dropped %.1fMB",
+                  static_cast<double>(startup_dropped) / (1024.0 * 1024.0));
       }
     }
     dock_try_start_deferred_tray(app);
@@ -266,8 +266,8 @@ int run_dock_standalone() {
           lastGpuTrim = now;
           const uint64_t dropped = eh::gpu::trim_idle_gpu_pages(30000);
           if (dropped > 0) {
-            std::fprintf(stderr, "[dock-mem] gpu page trim: dropped %.1fMB of idle NVIDIA mappings\n",
-                         static_cast<double>(dropped) / (1024.0 * 1024.0));
+            debug_log("dock", "gpu page trim: dropped %.1fMB of idle NVIDIA mappings",
+                       static_cast<double>(dropped) / (1024.0 * 1024.0));
           }
         }
       }

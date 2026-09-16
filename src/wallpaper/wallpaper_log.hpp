@@ -1,5 +1,7 @@
 #pragma once
 
+#include "desktop_shell/common/log/debug_log.hpp"
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -17,7 +19,9 @@ inline std::mutex& log_mutex() {
 
 inline FILE* log_file() {
   static FILE* f = []() {
-    FILE* fp = fopen("/tmp/wallpaper.log", "w");
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/wallpaper.log", eh_log::dir());
+    FILE* fp = fopen(path, "w");
     if (fp) {
       setvbuf(fp, nullptr, _IONBF, 0);
       fprintf(fp, "=== WALLPAPER TRACE LOG ===\n");

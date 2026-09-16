@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -21,6 +22,8 @@
 #include <curl/curl.h>
 
 #include <cairo/cairo.h>
+#include <sys/stat.h>
+#include <webp/decode.h>
 
 #ifdef EH_HAVE_LIBJPEG
 #include <jpeglib.h>
@@ -172,6 +175,51 @@ cairo_surface_t* load_png_from_bytes(const uint8_t* bytes, size_t len) {
   return s;
 }
 
+[[nodiscard]] bool read_le32(const uint8_t* p, uint32_t& out) noexcept {
+  if (p == nullptr) return false;
+  out = static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8U) |
+        (static_cast<uint32_t>(p[2]) << 16U) | (static_cast<uint32_t>(p[3]) << 24U);
+  return true;
+}
+
+cairo_surface_t* load_webp_from_bytes(const uint8_t* data, size_t len) {
+    
+  if (!data || len < 12) return nullptr;
+  const bool isWebp = data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
+                      data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P';
+  if (!isWebp) return nullptr;
+  int w = 0, h = 0;
+  if (!WebPGetInfo(data, len, &w, &h) || !album_art_pixel_count_ok(w, h)) return nullptr;
+  uint8_t* rgba = WebPDecodeRGBA(data, len, &w, &h);
+  if (!rgba) return nullptr;
+  cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+  if (!surf || cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+    WebPFree(rgba);
+    cairo_surface_destroy(surf);
+    return nullptr;
+  }
+  uint8_t* dst = cairo_image_surface_get_data(surf);
+  const int stride = cairo_image_surface_get_stride(surf);
+  const size_t srcRow = static_cast<size_t>(w) * 4u;
+  for (int y = 0; y < h; ++y) {
+    const uint8_t* src = rgba + static_cast<size_t>(y) * srcRow;
+    uint8_t* line = dst + static_cast<size_t>(y) * static_cast<size_t>(stride);
+    for (int x = 0; x < w; ++x) {
+      const uint32_t r = src[x * 4u + 0u];
+      const uint32_t g = src[x * 4u + 1u];
+      const uint32_t b = src[x * 4u + 2u];
+      const uint32_t a = src[x * 4u + 3u];
+      line[x * 4u + 0u] = static_cast<uint8_t>((b * a + 127u) / 255u);
+      line[x * 4u + 1u] = static_cast<uint8_t>((g * a + 127u) / 255u);
+      line[x * 4u + 2u] = static_cast<uint8_t>((r * a + 127u) / 255u);
+      line[x * 4u + 3u] = static_cast<uint8_t>(a);
+    }
+  }
+  cairo_surface_mark_dirty(surf);
+  WebPFree(rgba);
+  return surf;
+}
+
 #ifdef EH_HAVE_LIBJPEG
 struct JpegErrorMgr {
   struct jpeg_error_mgr pub;
@@ -261,6 +309,9 @@ cairo_surface_t* decode_image_bytes(const uint8_t* data, size_t len) {
   }
   if (data[0] == 0xff && data[1] == 0xd8) {
     return load_jpeg_from_bytes(data, len);
+  }
+  if (data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F') {
+    return load_webp_from_bytes(data, len);
   }
   return nullptr;
 }
@@ -374,6 +425,156 @@ std::string youtube_thumb_from_xesam_url(std::string_view sourceUrl) {
   return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
 }
 
+std::vector<std::string> cider_cache_data_dirs() {
+    
+  std::vector<std::string> out;
+  const std::string home = getenv_str("HOME");
+  if (home.empty()) return out;
+  out.push_back(home + "/.var/app/sh.cider.Cider/config/sh.cider.genten/Cache/Cache_Data");
+  out.push_back(home + "/.config/sh.cider.genten/Cache/Cache_Data");
+  return out;
+}
+
+std::pair<int, int> url_resolution_token(const std::string& u) {
+    
+  int w = 0, h = 0;
+  const size_t n = u.size();
+  size_t i = 0;
+  while (i + 2 < n) {
+    if (u[i] >= '0' && u[i] <= '9') {
+      const size_t a = i;
+      while (i < n && u[i] >= '0' && u[i] <= '9') ++i;
+      if (i < n && u[i] == 'x') {
+        const size_t b = i + 1;
+        size_t j = b;
+        while (j < n && u[j] >= '0' && u[j] <= '9') ++j;
+        if (j > b) {
+          int nw = 0, nh = 0;
+          for (size_t k = a; k < i; ++k) nw = nw * 10 + (u[k] - '0');
+          for (size_t k = b; k < j; ++k) nh = nh * 10 + (u[k] - '0');
+          w = nw;
+          h = nh;
+          i = j;
+          continue;
+        }
+      }
+    } else {
+      ++i;
+    }
+  }
+  return {w, h};
+}
+
+struct CiderCoverCandidate {
+  std::vector<uint8_t> payload;
+  int urlW = 0;
+  int urlH = 0;
+  int pixW = 0;
+  int pixH = 0;
+  int64_t mtime = 0;
+};
+
+std::vector<CiderCoverCandidate> scan_cider_cache_covers() {
+    
+  std::vector<CiderCoverCandidate> out;
+  for (const auto& dir : cider_cache_data_dirs()) {
+    std::error_code ec;
+    std::filesystem::directory_iterator it(dir, ec);
+    if (ec) continue;
+    const std::filesystem::directory_iterator end;
+    for (; it != end; it.increment(ec)) {
+      if (ec) break;
+      const std::filesystem::directory_entry& de = *it;
+      if (!de.is_regular_file()) continue;
+      const std::string entry = de.path().filename().string();
+      if (entry.size() < 3 || entry.compare(entry.size() - 2, 2, "_0") != 0) continue;
+      std::vector<uint8_t> bytes = read_file_all(de.path().c_str());
+      if (bytes.size() < 40) continue;
+      if (!(bytes[0] == 0x30 && bytes[1] == 0x5c && bytes[2] == 0x72 && bytes[3] == 0xa7)) continue;
+      uint32_t keyLen = 0;
+      if (!read_le32(bytes.data() + 12, keyLen)) continue;
+      if (keyLen < 8 || keyLen > 2048) continue;
+      const size_t off = 24u + static_cast<size_t>(keyLen);
+      if (off + 12u > bytes.size()) continue;
+      if (!(bytes[off] == 'R' && bytes[off + 1] == 'I' && bytes[off + 2] == 'F' && bytes[off + 3] == 'F')) continue;
+      if (!(bytes[off + 8] == 'W' && bytes[off + 9] == 'E' && bytes[off + 10] == 'B' && bytes[off + 11] == 'P')) continue;
+      const std::string key(reinterpret_cast<const char*>(bytes.data() + 24), keyLen);
+      if (key.find("mzstatic.com/image/thumb/") == std::string::npos) continue;
+      const auto [uw, uh] = url_resolution_token(key);
+      uint32_t riff = 0;
+      size_t webpLen = bytes.size() - off;
+      if (read_le32(bytes.data() + off + 4, riff)) {
+        webpLen = std::min(webpLen, static_cast<size_t>(riff) + 8u);
+      }
+      if (webpLen < 12) continue;
+      int pw = 0, ph = 0;
+      if (!WebPGetInfo(bytes.data() + off, webpLen, &pw, &ph)) continue;
+      if (pw <= 0 || ph <= 0 || !album_art_pixel_count_ok(pw, ph)) continue;
+      int64_t mt = 0;
+      struct stat st { };
+      if (::stat(de.path().c_str(), &st) == 0) mt = static_cast<int64_t>(st.st_mtim.tv_sec);
+      CiderCoverCandidate cand;
+      cand.payload.assign(bytes.begin() + static_cast<std::ptrdiff_t>(off),
+                          bytes.begin() + static_cast<std::ptrdiff_t>(off + webpLen));
+      cand.urlW = uw;
+      cand.urlH = uh;
+      cand.pixW = pw;
+      cand.pixH = ph;
+      cand.mtime = mt;
+      out.push_back(std::move(cand));
+    }
+  }
+  return out;
+}
+
+cairo_surface_t* load_cider_cached_album_art_surface(int max_px) {
+    
+  std::vector<CiderCoverCandidate> covers = scan_cider_cache_covers();
+  if (covers.empty()) return nullptr;
+  CiderCoverCandidate* best = nullptr;
+  int64_t bestArea = -1;
+  for (auto& c : covers) {
+    const int rw = c.urlW > 0 ? c.urlW : c.pixW;
+    const int rh = c.urlH > 0 ? c.urlH : c.pixH;
+    const int64_t area = static_cast<int64_t>(rw) * static_cast<int64_t>(rh);
+    if (best == nullptr || area > bestArea ||
+        (area == bestArea && c.mtime > best->mtime)) {
+      best = &c;
+      bestArea = area;
+    }
+  }
+  if (best == nullptr) return nullptr;
+  cairo_surface_t* raw = load_webp_from_bytes(best->payload.data(), best->payload.size());
+  if (!raw) return nullptr;
+  return scale_surface_to_max(raw, max_px);
+}
+
+bool mzstatic_webp_variant(std::string_view url, std::string& out) {
+    
+  if (url.find("mzstatic.com/image/thumb/") == std::string_view::npos) return false;
+  const size_t slash = url.rfind('/');
+  if (slash == std::string_view::npos) return false;
+  const std::string_view seg = url.substr(slash + 1);
+  size_t i = 0;
+  bool hasDigits = false;
+  while (i < seg.size()) {
+    if (seg[i] >= '0' && seg[i] <= '9') {
+      hasDigits = true;
+      ++i;
+    } else if (seg[i] == 'x' && hasDigits) {
+      ++i;
+      break;
+    } else {
+      break;
+    }
+  }
+  if (!hasDigits) return false;
+  std::string ret(url.substr(0, slash + 1));
+  ret += "1024x1024bb.webp";
+  out = std::move(ret);
+  return true;
+}
+
 }
 
 std::string derive_youtube_thumbnail_url(std::string_view sourceUrl) { return youtube_thumb_from_xesam_url(sourceUrl); }
@@ -408,6 +609,8 @@ std::string resolve_mpris_art_url(std::string_view dbus_art_url) {
     }
   }
 
+  if (starts_with_ci(path, "cider-cache://")) return path;
+
   if (starts_with_ci(path, "http")) return path;
   if (!path.empty() && path.front() == '/') return path;
   return {};
@@ -417,8 +620,18 @@ cairo_surface_t* load_album_art_surface(const std::string& resolved_url, int max
    
   if (resolved_url.empty() || max_edge_px < 16) return nullptr;
 
+  if (starts_with_ci(resolved_url, "cider-cache://")) {
+    return load_cider_cached_album_art_surface(max_edge_px);
+  }
+
   std::vector<uint8_t> bytes;
   if (starts_with_ci(resolved_url, "http")) {
+    std::string webpVariant;
+    if (mzstatic_webp_variant(resolved_url, webpVariant) && curl_fetch_url(webpVariant, bytes)) {
+      cairo_surface_t* webpRaw = load_webp_from_bytes(bytes.data(), bytes.size());
+      if (webpRaw) return scale_surface_to_max(webpRaw, max_edge_px);
+      bytes.clear();
+    }
     if (!curl_fetch_url(resolved_url, bytes)) return nullptr;
   } else {
     bytes = read_file_all(resolved_url.c_str());

@@ -915,6 +915,7 @@ executable(
 executable(
   'eh-ipc',
   sources: 'src/ipc_client/main.cpp',
+  include_directories: 'src',
   install: true,
   install_mode: 'rwxr-xr-x'
 )

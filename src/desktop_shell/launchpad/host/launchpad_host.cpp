@@ -2,6 +2,7 @@
 
 #include "desktop_shell/dock/core/dock_app.h"
 #include "desktop_shell/dock/output/dock_layer_outputs.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/shared/popup/chrome/chrome.hpp"
 #include "desktop_shell/shared/popup/geometry/margins.hpp"
 #include "desktop_shell/shared/popup/session/session.hpp"
@@ -33,9 +34,8 @@
 #include <cstring>
 
 static void lp_log(std::string_view msg) {
-  static FILE* f = nullptr;
-  if (!f) f = fopen("/tmp/eh-launchpad.log", "w");
-  if (f) { fprintf(f, "%s\n", msg.data()); fflush(f); }
+  if (!msg.empty() && msg.back() == '\n') msg.remove_suffix(1);
+  debug_log("launchpad", "%s", std::string(msg).c_str());
 }
 #include <filesystem>
 #include <fstream>

@@ -1,4 +1,5 @@
 #include "backends/hyprland/hyprland_backends.h"
+#include "desktop_shell/common/log/debug_log.hpp"
 
 #include <algorithm>
 #include <array>
@@ -20,7 +21,7 @@ namespace wspace::hyprland {
 namespace {
 
 void logWarning(const std::string& msg) {
-  std::cerr << "[hyprland] " << msg << "\n";
+  debug_log("hyprland", "%s", msg.c_str());
 }
 
 }

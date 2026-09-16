@@ -219,9 +219,9 @@ void launch_settings_app(DockApp& app) {
     app.launch_settings_override();
     return;
   }
-  std::fprintf(stderr,
-               "[dock] Settings open requires EventHorizon (embedded); running without unified "
-               "entry did not configure them.\n");
+  debug_log("dock",
+            "Settings open requires EventHorizon (embedded); running without unified "
+            "entry did not configure them.");
 }
 
 static const DockOutputSlot* dock_output_slot_for(const DockApp& app, const wl_output* out);
@@ -521,7 +521,7 @@ void popup_draw_surface(DockApp& app) {
       std::cerr << line;
       static FILE* s_log = nullptr;
       if (!s_log) {
-        s_log = fopen("/tmp/eh_menu_bench.log", "w");
+        s_log = fopen((std::string(eh_log::dir()) + "/menu-bench.log").c_str(), "w");
         if (s_log) {
           time_t now_t = time(nullptr);
           fprintf(s_log, "# Event Horizon Dock-Menu Bench  %s", ctime(&now_t));
