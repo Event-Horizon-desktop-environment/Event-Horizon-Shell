@@ -1,5 +1,7 @@
 #pragma once
 
+#include "desktop_shell/common/log/debug_log.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -121,9 +123,7 @@ private:
 
   OverviewProfiler() {
     enabled_ = true;
-    const char* home = std::getenv("HOME");
-    if (home)
-      std::snprintf(path_, sizeof(path_), "%s/event-horizon-overview-profile.log", home);
+    std::snprintf(path_, sizeof(path_), "%s/overview-profile.log", eh_log::dir());
     FILE* fp = std::fopen(path_, "w");
     if (fp) std::fclose(fp);
   }

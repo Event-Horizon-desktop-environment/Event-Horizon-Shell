@@ -23,9 +23,9 @@ bool trace_enabled() {
 void trace_geom(const char* tag, double W, double H, double us, double px, double py) {
   if (!trace_enabled()) return;
   const CardGeom g = layout(W, H, us);
-  std::fprintf(stderr,
-      "[power-confirm] %s W=%.0f H=%.0f us=%.3f ptr=(%.1f,%.1f) card=(%.0f,%.0f %.0fx%.0f) "
-      "cancel=(%.0f,%.0f) confirm=(%.0f,%.0f) close=(%.0f,%.0f)\n",
+  debug_log("power_confirm",
+      "%s W=%.0f H=%.0f us=%.3f ptr=(%.1f,%.1f) card=(%.0f,%.0f %.0fx%.0f) "
+      "cancel=(%.0f,%.0f) confirm=(%.0f,%.0f) close=(%.0f,%.0f)",
       tag, W, H, us, px, py, g.cx, g.cy, g.cw, g.ch,
       g.cancelX, g.cancelY, g.confirmX, g.confirmY, g.closeX, g.closeY);
 }

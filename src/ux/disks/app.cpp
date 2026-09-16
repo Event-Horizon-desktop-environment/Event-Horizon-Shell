@@ -17,6 +17,7 @@
 #include <wayland-client.h>
 
 #include "configuration/shell_config.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "ux/disks/manager.hpp"
 #include "ux/disks/drive.hpp"
 #include "ux/disks/block.hpp"
@@ -101,7 +102,9 @@ std::vector<std::shared_ptr<Block>> filter_blocks(
 
 void disk_log(const char* fmt, ...) {
   static FILE* logf = [] {
-    FILE* f = fopen("/tmp/horizon-disks.log", "w");
+    char path[1024];
+    std::snprintf(path, sizeof(path), "%s/disks.log", eh_log::dir());
+    FILE* f = fopen(path, "w");
     return f ? f : stderr;
   }();
   va_list ap;

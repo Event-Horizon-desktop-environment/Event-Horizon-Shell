@@ -1726,7 +1726,7 @@ void draw(App& app) {
     std::cerr << line;
     static FILE* s_log = nullptr;
     if (!s_log) {
-      s_log = fopen("/tmp/eh_settings_bench.log", "w");
+      s_log = fopen((std::string(eh_log::dir()) + "/settings-bench.log").c_str(), "w");
       if (s_log) {
         time_t now_t = time(nullptr);
         fprintf(s_log, "# Event Horizon Settings Bench  session=%u  %s", s_settings_bench_session, ctime(&now_t));

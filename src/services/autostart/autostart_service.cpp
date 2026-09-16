@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -13,6 +15,8 @@
 #include <iostream>
 #include <thread>
 #include <unordered_map>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <unordered_set>
 #include <vector>
 
@@ -36,14 +40,31 @@ bool env_true(const char* name) {
   return false;
 }
 
-void debug_log(const char* fmt, ...) {
+FILE* autostart_log_file() {
+  static FILE* f = [] {
+    const char* home = std::getenv("HOME");
+    const std::string dir = std::string(home && *home ? home : "/tmp") + "/EH-logs";
+    ::mkdir(dir.c_str(), 0755);
+    return fopen((dir + "/autostart.log").c_str(), "a");
+  }();
+  return f;
+}
+
+void autostart_log(const char* fmt, ...) {
   if (!g_debug && !env_true("EH_AUTOSTART_DEBUG")) return;
+  char line[2048];
   va_list ap;
   va_start(ap, fmt);
-  std::fprintf(stderr, "[autostart] ");
-  std::vfprintf(stderr, fmt, ap);
-  std::fprintf(stderr, "\n");
+  std::vsnprintf(line, sizeof(line), fmt, ap);
   va_end(ap);
+  std::size_t len = std::strlen(line);
+  while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+  if (FILE* f = autostart_log_file()) {
+    std::fwrite(line, 1, len, f);
+    std::fwrite("\n", 1, 1, f);
+    std::fflush(f);
+    std::fclose(f);
+  }
 }
 
 std::vector<std::string> xdg_autostart_dirs() {
@@ -122,7 +143,7 @@ std::vector<AutostartEntry> scan_autostart_entries() {
 
   auto dirs = xdg_autostart_dirs();
 
-  debug_log("scanning %zu autostart dirs", dirs.size());
+  autostart_log("scanning %zu autostart dirs", dirs.size());
 
   for (const auto& dir : dirs) {
     std::error_code ec;
@@ -163,7 +184,7 @@ std::vector<AutostartEntry> scan_autostart_entries() {
     }
   }
 
-  debug_log("found %zu autostart .desktop candidates", out.size());
+  autostart_log("found %zu autostart .desktop candidates", out.size());
   return out;
 }
 
@@ -242,7 +263,7 @@ void launch_autostart_entry(const AutostartEntry& e) {
     }
   }
 
-  debug_log("launching: %s (delay=%ds)", stem.c_str(), e.delaySec);
+  autostart_log("launching: %s (delay=%ds)", stem.c_str(), e.delaySec);
 
   // Fire and forget (uses the project's standard detached launcher)
   eh::shell::desktop::xdg::spawn_sh_lc_detached(script);
@@ -250,19 +271,19 @@ void launch_autostart_entry(const AutostartEntry& e) {
 
 void launch_all_autostart(const std::vector<AutostartEntry>& entries) {
   const std::string de = current_desktop_env();
-  debug_log("launch_all_autostart: de='%s', total candidates=%zu", de.c_str(), entries.size());
+  autostart_log("launch_all_autostart: de='%s', total candidates=%zu", de.c_str(), entries.size());
 
   for (const auto& e : entries) {
     if (!e.effectiveEnabled) {
-      debug_log("  skip (disabled): %s", basename_no_ext(e.desktopPath).c_str());
+      autostart_log("  skip (disabled): %s", basename_no_ext(e.desktopPath).c_str());
       continue;
     }
     if (!should_show_in_current_desktop(e)) {
-      debug_log("  skip (OnlyShowIn/NotShowIn): %s", basename_no_ext(e.desktopPath).c_str());
+      autostart_log("  skip (OnlyShowIn/NotShowIn): %s", basename_no_ext(e.desktopPath).c_str());
       continue;
     }
     if (!try_exec_ok(e)) {
-      debug_log("  skip (TryExec failed): %s", basename_no_ext(e.desktopPath).c_str());
+      autostart_log("  skip (TryExec failed): %s", basename_no_ext(e.desktopPath).c_str());
       continue;
     }
 
@@ -272,7 +293,7 @@ void launch_all_autostart(const std::vector<AutostartEntry>& entries) {
         std::this_thread::sleep_for(std::chrono::seconds(e.delaySec));
         launch_autostart_entry(e);
       }).detach();
-      debug_log("  queued with delay %ds: %s", e.delaySec, basename_no_ext(e.desktopPath).c_str());
+      autostart_log("  queued with delay %ds: %s", e.delaySec, basename_no_ext(e.desktopPath).c_str());
     } else {
       launch_autostart_entry(e);
     }

@@ -15,7 +15,7 @@ option(
 option(
   'jpeg',
   type: 'boolean',
-  value: false,
+  value: true,
   description: 'Link libjpeg (album art / thumbnails). Set true to enable libjpeg-turbo support.',
 )
 

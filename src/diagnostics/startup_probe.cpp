@@ -412,8 +412,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  const std::string debugLog = std::string(getenv("HOME") ? getenv("HOME") : "/tmp") +
-                               "/event-horizon-debug.log";
+  const std::string debugLogDir = std::string(getenv("HOME") ? getenv("HOME") : "/tmp") +
+                                  "/EH-logs";
 
   {
     std::ostringstream hdr;
@@ -525,13 +525,27 @@ int main(int argc, char** argv) {
       prevLogSize[name] = size;
       log << log_tail_section(path);
     }
-    log << "[supervisor debug log]\n";
+    log << "[EH-logs]\n";
     {
-      struct stat st{};
-      if (::stat(debugLog.c_str(), &st) == 0)
-        log << "  size=" << st.st_size << " tail:\n" << tail_file(debugLog, 2500) << "\n";
-      else
-        log << "  missing\n";
+      long long total = 0;
+      std::string largest;
+      long long best = -1;
+      std::error_code ec;
+      for (const auto& e : fs::directory_iterator(debugLogDir, ec)) {
+        if (!e.is_regular_file(ec)) continue;
+        const std::string name = e.path().filename().string();
+        if (name.size() < 4 || name.compare(name.size() - 4, 4, ".log") != 0) continue;
+        const long long sz = static_cast<long long>(e.file_size(ec));
+        total += sz;
+        if (sz > best) { best = sz; largest = e.path().string(); }
+      }
+      log << "  bytes=" << total;
+      if (!largest.empty()) {
+        log << " largest=" << fs::path(largest).filename().string() << "\n"
+            << tail_file(largest, 2500) << "\n";
+      } else {
+        log << " (no .log files yet)\n";
+      }
     }
 
     log << clients_section();

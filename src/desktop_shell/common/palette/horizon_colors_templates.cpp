@@ -2,6 +2,7 @@
 
 #include "color/horizon_colors.hpp"
 #include "configuration/shell_config.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/palette/matugen_palette.hpp"
 
 #include <nlohmann/json.hpp>
@@ -953,7 +954,7 @@ void sync_horizon_files(const std::string& cfg_main) {
   std::ofstream out(settings_path, std::ios::binary | std::ios::trunc);
   if (!out) return;
   for (const auto& l : settings_lines) out << l << '\n';
-  std::fprintf(stderr, "[eh-hc-tpl] horizon-files: synced %d color fields to %s\n",
+  debug_log("hc_palette", "horizon-files: synced %d color fields to %s",
                replaced / 3, settings_path.string().c_str());
 }
 
@@ -1016,7 +1017,7 @@ void sync_horizon_photo(const std::string& cfg_main) {
     out << m.g_key << " = " << fmt_float(g) << "\n";
     out << m.b_key << " = " << fmt_float(b) << "\n\n";
   }
-  std::fprintf(stderr, "[eh-hc-tpl] horizon-photo: wrote M3 theme colors to %s\n",
+  debug_log("hc_palette", "horizon-photo: wrote M3 theme colors to %s",
                color_path.string().c_str());
 }
 
@@ -1096,7 +1097,7 @@ void sync_horizon_calendar(const std::string& cfg_main) {
   std::ofstream out(theme_path, std::ios::binary | std::ios::trunc);
   if (!out) return;
   out << body;
-  std::fprintf(stderr, "[eh-hc-tpl] horizon-calendar: wrote %zu colors to %s [%s]\n", entries.size(),
+  debug_log("hc_palette", "horizon-calendar: wrote %zu colors to %s [%s]", entries.size(),
                theme_path.string().c_str(), section.c_str());
 }
 
@@ -1112,7 +1113,7 @@ void sync_alacritty(const std::string& cfg_main) {
         if (!ln.empty() && ln.back() == '\r') ln.pop_back();
         lines.push_back(ln);
         if (ln.find("event-theme.toml") != std::string::npos) {
-          std::fprintf(stderr, "[eh-hc-tpl] alacritty sync: already imported, nothing to do\n");
+          debug_log("hc_palette", "alacritty sync: already imported, nothing to do");
           return;
         }
       }
@@ -1201,7 +1202,7 @@ void sync_alacritty(const std::string& cfg_main) {
       first = false;
     }
     out << '\n';
-    std::fprintf(stderr, "[eh-hc-tpl] alacritty sync: %s\n",
+    debug_log("hc_palette", "alacritty sync: %s",
                  existed ? "added import to existing config" : "created config with event-horizon import");
   } catch (...) {}
 }
@@ -1301,7 +1302,7 @@ void merge_fluxer_prefs(const std::string& cfg_main, const std::string& home) {
         }
       }
       if (changed) {
-        std::fprintf(stderr, "[eh-hc-tpl] fluxer post: seeded themes + allowlist in %s\n", user_dir.c_str());
+        debug_log("hc_palette", "fluxer post: seeded themes + allowlist in %s", user_dir.c_str());
       }
     }
   } catch (...) {}
@@ -1343,21 +1344,21 @@ void merge_vscode_user_settings(const fs::path& user_dir, const fs::path& materi
 
 void apply_native_templates(const eh::config::ShellConfig& config) {
   const auto& ap = config.appearance;
-  std::fprintf(stderr, "[eh-hc-tpl] apply_native_templates: hcNative=%d paletteOk=%d matugenEnabled=%d matugenOk=%d\n",
+  debug_log("hc_palette", "apply_native_templates: hcNative=%d paletteOk=%d matugenEnabled=%d matugenOk=%d",
                ap.horizonColorsNative ? 1 : 0, ap.horizonColorsPaletteOk ? 1 : 0,
                ap.matugenThemingEnabled ? 1 : 0, ap.matugenPaletteOk ? 1 : 0);
   if (!ap.horizonColorsNative || !ap.horizonColorsPaletteOk) {
-    std::fprintf(stderr, "[eh-hc-tpl] EXIT EARLY: not active (native=%d paletteOk=%d)\n",
+    debug_log("hc_palette", "EXIT EARLY: not active (native=%d paletteOk=%d)",
                  ap.horizonColorsNative ? 1 : 0, ap.horizonColorsPaletteOk ? 1 : 0);
     return;
   }
 
   const auto root = bundle_root();
   if (!root) {
-    std::fprintf(stderr, "[eh-hc-tpl] EXIT EARLY: no bundle_root found\n");
+    debug_log("hc_palette", "EXIT EARLY: no bundle_root found");
     return;
   }
-  std::fprintf(stderr, "[eh-hc-tpl] bundle_root=%s\n", root->string().c_str());
+  debug_log("hc_palette", "bundle_root=%s", root->string().c_str());
 
   const std::string cfg_main = config_dir();
   const std::string home = getenv_str("HOME");
@@ -1416,7 +1417,7 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
   maybe_append(T.vesktop, "vesktop.toml", [&] {
     const bool exe = exe_on_path("vesktop");
     const bool dir = fs::exists(fs::path(cfg_main) / "vesktop");
-    std::fprintf(stderr, "[eh-hc-tpl] vesktop gate: toggle=%d exe=%d dir=%d\n",
+    debug_log("hc_palette", "vesktop gate: toggle=%d exe=%d dir=%d",
                  T.vesktop ? 1 : 0, exe ? 1 : 0, dir ? 1 : 0);
     return exe && dir;
   });
@@ -1453,35 +1454,35 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
 
   std::string body = merged.str();
   fix_paths(body, *root, cfg_main, home, vscode_ud, vscode_ext_eh_dir.string());
-  std::fprintf(stderr, "[eh-hc-tpl] merged TOML size=%zu contains vesktop=%d\n",
+  debug_log("hc_palette", "merged TOML size=%zu contains vesktop=%d",
                body.size(),
                body.find("[templates.vesktop]") != std::string::npos ? 1 : 0);
 
   // Generate palette from wallpaper
   const std::string wp = eh::config::normalize_wallpaper_path_for_matugen(config.wallpaperImage);
   if (wp.empty() || ::access(wp.c_str(), R_OK) != 0) {
-    std::fprintf(stderr, "[eh-hc-tpl] EXIT EARLY: wallpaper not accessible '%s'\n", wp.c_str());
+    debug_log("hc_palette", "EXIT EARLY: wallpaper not accessible '%s'", wp.c_str());
     return;
   }
   const std::string scheme = eh::matugen::normalize_matugen_scheme(ap.matugenScheme);
   const std::string modeNorm = eh::matugen::normalize_matugen_mode(ap.matugenMode);
-  std::fprintf(stderr, "[eh-hc-tpl] wallpaper='%s' scheme='%s' mode='%s'\n",
+  debug_log("hc_palette", "wallpaper='%s' scheme='%s' mode='%s'",
                wp.c_str(), scheme.c_str(), modeNorm.c_str());
   const bool is_dark = (modeNorm != "light");
   const eh::color::PaletteResult palette =
       eh::color::generate_palette_from_image_cached(wp, eh::color::scheme_variant_from_name(scheme), is_dark);
   if (!palette.ok) {
-    std::fprintf(stderr, "[eh-hc-tpl] EXIT EARLY: palette generation failed\n");
+    debug_log("hc_palette", "EXIT EARLY: palette generation failed");
     return;
   }
-  std::fprintf(stderr, "[eh-hc-tpl] palette OK: sourceColor=0x%08x roles=%zu\n",
+  debug_log("hc_palette", "palette OK: sourceColor=0x%08x roles=%zu",
                palette.sourceColorArgb, palette.roles.size());
 
   // Parse template entries from merged TOML
   auto entries = parse_template_entries(body);
-  std::fprintf(stderr, "[eh-hc-tpl] parsed %zu template entries\n", entries.size());
+  debug_log("hc_palette", "parsed %zu template entries", entries.size());
   for (const auto& e : entries) {
-    std::fprintf(stderr, "[eh-hc-tpl]   entry: name=%s input=%s output=%s\n",
+    debug_log("hc_palette", "  entry: name=%s input=%s output=%s",
                  e.name.c_str(), e.input_path.c_str(), e.output_path.c_str());
   }
 
@@ -1496,14 +1497,14 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
     const fs::path output(entry.output_path);
 
     if (!fs::is_regular_file(input)) {
-      std::fprintf(stderr, "[eh-hc-tpl] SKIP %s: input not found '%s'\n",
+      debug_log("hc_palette", "SKIP %s: input not found '%s'",
                    entry.name.c_str(), input.string().c_str());
       continue;
     }
 
     std::ifstream in(input);
     if (!in) {
-      std::fprintf(stderr, "[eh-hc-tpl] SKIP %s: can't open input\n", entry.name.c_str());
+      debug_log("hc_palette", "SKIP %s: can't open input", entry.name.c_str());
       continue;
     }
     std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
@@ -1514,17 +1515,17 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
     fs::create_directories(output.parent_path(), ec);
     std::ofstream out(output, std::ios::binary | std::ios::trunc);
     if (!out) {
-      std::fprintf(stderr, "[eh-hc-tpl] FAILED to write %s\n", output.string().c_str());
+      debug_log("hc_palette", "FAILED to write %s", output.string().c_str());
       continue;
     }
     out << content;
     ++processed;
-    std::fprintf(stderr, "[eh-hc-tpl] WROTE %s (%zu bytes)\n", output.string().c_str(), content.size());
+    debug_log("hc_palette", "WROTE %s (%zu bytes)", output.string().c_str(), content.size());
   }
-  std::fprintf(stderr, "[eh-hc-tpl] processed %d/%zu templates\n", processed, entries.size());
+  debug_log("hc_palette", "processed %d/%zu templates", processed, entries.size());
 
   // Run post-hooks
-  std::fprintf(stderr, "[eh-hc-tpl] post-hooks: otter=%d btop=%d vesktop=%d vscode=%d\n",
+  debug_log("hc_palette", "post-hooks: otter=%d btop=%d vesktop=%d vscode=%d",
                T.otterTerm ? 1 : 0, (T.btop && exe_on_path("btop")) ? 1 : 0,
                (T.vesktop && fs::exists(fs::path(cfg_main) / "vesktop")) ? 1 : 0,
                want_vscode ? 1 : 0);
@@ -1534,7 +1535,7 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
   if (T.horizonCalendar) sync_horizon_calendar(cfg_main);
   if (T.btop && exe_on_path("btop")) sync_btop(cfg_main);
   if (T.vesktop && fs::exists(fs::path(cfg_main) / "vesktop")) {
-    std::fprintf(stderr, "[eh-hc-tpl] vesktop post-hook: merge + bump mtime\n");
+    debug_log("hc_palette", "vesktop post-hook: merge + bump mtime");
     merge_vesktop_vencord_settings(fs::path(cfg_main) / "vesktop");
     bump_mtime_now(fs::path(cfg_main) / "vesktop" / "themes" / "midnight.theme.css");
   }
@@ -1547,14 +1548,14 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
     bump_mtime_now(fs::path(vscode_ud) / "settings.json");
   }
   if (T.heroic && fs::exists(fs::path(cfg_main) / "heroic" / "themes" / "event-horizon.css")) {
-    std::fprintf(stderr, "[eh-hc-tpl] heroic post-hook: flipping theme selection to event-horizon\n");
+    debug_log("hc_palette", "heroic post-hook: flipping theme selection to event-horizon");
     merge_heroic_prefs(fs::path(cfg_main) / "heroic");
   }
   if (T.alacritty && fs::exists(fs::path(cfg_main) / "alacritty" / "event-theme.toml")) {
     sync_alacritty(cfg_main);
   }
   if (T.fluxer && fs::exists(fs::path(cfg_main) / "fluxer" / "themes" / "event-horizon.css")) {
-    std::fprintf(stderr, "[eh-hc-tpl] fluxer post-hook: seeding themes + allowlist\n");
+    debug_log("hc_palette", "fluxer post-hook: seeding themes + allowlist");
     merge_fluxer_prefs(cfg_main, home);
   }
 }

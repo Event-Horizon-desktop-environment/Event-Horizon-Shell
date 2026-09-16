@@ -101,11 +101,48 @@ static std::vector<std::string> split_comma_list(std::string_view raw) {
 }
 
 static std::string lower_copy(std::string_view s) {
-   
+    
   std::string r;
   r.reserve(s.size());
   for (char c : s) r.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
   return r;
+}
+
+static bool bus_name_is_cider(std::string_view bus_name) {
+    
+  const std::string l = lower_copy(bus_name);
+  return l.find("cider") != std::string::npos;
+}
+
+static bool cider_art_source_broken(const std::string& raw_art_url) {
+    
+  return raw_art_url.empty() || raw_art_url.find(".org.chromium.Chromium") != std::string::npos;
+}
+
+static std::string fnv1a_hex(std::string_view s) {
+    
+  uint64_t h = 1469598103934665603ULL;
+  for (char c : s) {
+    h ^= static_cast<uint8_t>(c);
+    h *= 1099511628211ULL;
+  }
+  char buf[17];
+  std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
+  return std::string(buf);
+}
+
+static std::string cider_fallback_art_url(const PlayerSnapshot& snap) {
+    
+  std::string stamp = snap.title;
+  stamp.push_back('|');
+  stamp += snap.artist;
+  stamp.push_back('|');
+  stamp += snap.album;
+  stamp.push_back('|');
+  stamp += snap.track_url_raw;
+  stamp.push_back('|');
+  stamp += snap.art_url_raw;
+  return "cider-cache://" + fnv1a_hex(stamp);
 }
 
 static bool bus_blacklisted(std::string_view bus_lower, const std::vector<std::string>& tokens_lower) {
@@ -954,6 +991,9 @@ bool DockMpris::poll_refresh_impl(int sig_before) {
       if (art_src.empty()) {
         const std::string yt = derive_youtube_thumbnail_url(best.track_url_raw);
         if (!yt.empty()) art_src = yt;
+      }
+      if (bus_name_is_cider(best.bus_name) && cider_art_source_broken(best.art_url_raw)) {
+        art_src = cider_fallback_art_url(best);
       }
       best.art_url_resolved = resolve_mpris_art_url(art_src);
     }

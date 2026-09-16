@@ -1,5 +1,6 @@
 #include "backends/hyprland/hyprland_workspace_manager.h"
 #include "backends/hyprland/hyprland_backends.h"
+#include "desktop_shell/common/log/debug_log.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -53,7 +54,7 @@ void HyprlandWorkspaceManager::jumpTo(const std::string& id) {
     ? std::format("dispatch hl.dsp.focus({{workspace = {}}})", wsId)
     : std::format("dispatch workspace {}", wsId);
   if (!m_backend.sendCommand(cmd)) {
-    std::cerr << "[hyprland-workspace] jumpTo failed: \"" << cmd << "\" no response\n";
+    debug_log("hyprland", "workspace jumpTo failed: %s no response", cmd.c_str());
   }
 }
 

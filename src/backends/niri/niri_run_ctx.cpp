@@ -1,4 +1,5 @@
 #include "backends/niri/niri_backends.h"
+#include "desktop_shell/common/log/debug_log.hpp"
 
 #include <array>
 #include <cerrno>
@@ -64,7 +65,9 @@ NiriRuntime::ReplyInfo NiriRuntime::transmit(std::string_view req) const {
     ssize_t n = ::write(fd, req.data() + off, req.size() - off);
     if (n <= 0) {
       if (n < 0 && errno == EINTR) { continue; }
+      const int e = errno;
       ::close(fd);
+      debug_log("niri", "tx write failed: %s", std::strerror(e));
       return {ReplyInfo::Tag::WriteFail, std::nullopt};
     }
     off += static_cast<std::size_t>(n);
@@ -81,7 +84,9 @@ NiriRuntime::ReplyInfo NiriRuntime::transmit(std::string_view req) const {
     }
     if (n == 0) { break; }
     if (errno == EINTR) { continue; }
+    const int e = errno;
     ::close(fd);
+    debug_log("niri", "tx read failed: %s", std::strerror(e));
     return {ReplyInfo::Tag::ReadFail, std::nullopt};
   }
 
@@ -92,7 +97,10 @@ NiriRuntime::ReplyInfo NiriRuntime::transmit(std::string_view req) const {
   if (resp.empty()) { return {ReplyInfo::Tag::NoContent, std::nullopt}; }
 
   try { return {ReplyInfo::Tag::Ok, nlohmann::json::parse(resp)}; }
-  catch (nlohmann::json::exception const&) { return {ReplyInfo::Tag::BadJson, std::nullopt}; }
+  catch (nlohmann::json::exception const&) {
+    debug_log("niri", "reply JSON parse failed: %s", resp.substr(0, 160).c_str());
+    return {ReplyInfo::Tag::BadJson, std::nullopt};
+  }
 }
 
 void NiriRuntime::rescan() {

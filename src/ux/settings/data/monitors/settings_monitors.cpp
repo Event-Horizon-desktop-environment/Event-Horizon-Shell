@@ -1,6 +1,7 @@
 #include "ux/settings/data/monitors/settings_monitors.hpp"
 #include "ux/settings/utils/monitors/settings_monitors_drm_probe.hpp"
 
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
 
 #include <algorithm>
@@ -1245,6 +1246,7 @@ void merge_caps_niri_output(std::string_view obj, OutputCaps* caps) {
 void MonitorsTabState::refresh_from_system() {
    
   kind = detect_compositor_kind();
+  debug_log("monitors", "refresh_from_system: compositor=%d outputs=%zu", static_cast<int>(kind), outputs.size());
   caps.clear();
   outputs.clear();
   preamble.clear();
@@ -1432,6 +1434,8 @@ bool MonitorsTabState::save_and_reload(std::string& err_out) {
     err_out = ec.message();
     return false;
   }
+  debug_log("monitors", "save_and_reload: writing '%s' (%zu outputs)",
+            conf_path.c_str(), outputs.size());
 
   std::ostringstream body;
   if (kind == CompositorKind::Hyprland) {
@@ -1452,6 +1456,7 @@ bool MonitorsTabState::save_and_reload(std::string& err_out) {
     out.close();
     int rc = std::system("hyprctl reload 2>/dev/null");
     (void)rc;
+    debug_log("monitors", "save_and_reload: hyprland wrote '%s' rc=%d", conf_path.c_str(), rc);
     dirty = false;
     preamble = pre;
     capture_baseline();
@@ -1469,6 +1474,7 @@ bool MonitorsTabState::save_and_reload(std::string& err_out) {
     out << body.str();
     out.close();
     std::system("niri msg action reload-config-or-panic 2>/dev/null");
+    debug_log("monitors", "save_and_reload: niri wrote '%s'", conf_path.c_str());
     dirty = false;
     capture_baseline();
     status.clear();

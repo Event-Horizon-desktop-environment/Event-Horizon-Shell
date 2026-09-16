@@ -1,5 +1,7 @@
 #include "services/audio/pipewire_service.hpp"
 
+#include "desktop_shell/common/log/debug_log.hpp"
+
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
@@ -732,9 +734,8 @@ void PipeWireService::start() {
     void* bt[10];
     const int n = backtrace(bt, 10);
     char** syms = backtrace_symbols(bt, n);
-    for (int i = 1; i < n && i < 7; i++) fprintf(stderr, "[pw-trace] %d %s\n", i, syms[i] ? syms[i] : "?");
+    for (int i = 1; i < n && i < 7; i++) debug_log("audio", "[pw-trace] %d %s", i, syms[i] ? syms[i] : "?");
     free(syms);
-    fflush(stderr);
   }
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (started_) return;
