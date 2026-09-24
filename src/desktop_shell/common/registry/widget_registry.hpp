@@ -12,7 +12,7 @@ class WidgetRegistry {
 public:
   using ActivateFn = std::function<void()>;
 
-  // Register a widget: role is the canonical type (e.g. "launchpad"),
+  // Register a widget: role is the canonical type (e.g. "app_drawer"),
   // fn is how to activate it, component is which shell component hosts it.
   // Multiple components can register the same role.
   void add(const std::string& role, ActivateFn fn, const std::string& component);

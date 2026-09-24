@@ -30,10 +30,6 @@ namespace eh::wayland {
 class GammaService;
 }
 
-namespace eh::shell::launchpad {
-class Host;
-}
-
 namespace eh::shell::desktop {
 struct DesktopApp;
 }
@@ -119,7 +115,6 @@ struct WaylandState {
   std::unordered_map<std::string, bool> trayMissingLogged{};
 
   // Desktop integration
-  eh::shell::launchpad::Host* launchpad = nullptr;
   eh::shell::desktop::DesktopApp* desktopForOutputRebind = nullptr;
 
   // App tracking

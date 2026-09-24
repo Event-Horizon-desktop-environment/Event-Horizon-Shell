@@ -37,7 +37,16 @@ static constexpr double kCtrlCardRad = 16.0;
 static constexpr int kCtrlCardH = 60;
 static constexpr int kOpenPickerH = 48;
 static constexpr int kActBtnH = 44;
-static constexpr int kHeroH = 220;
+static constexpr int kHeroH = 300;
+static constexpr double kHeroRadius = 20.0;
+// Floating toolbar inside the hero.
+static constexpr int kToolBarH = 56;
+static constexpr int kToolBtnS = 40;
+static constexpr int kToolComboW = 128;
+static constexpr int kToolComboH = 34;
+static constexpr int kPickerH = 48;
+static constexpr int kGalleryBarH = 32;
+static constexpr int kViewPanelH = 148;
 
 static constexpr const char* kWallpaperModeLabels[] = {"Fill", "Fit", "Stretch", "Center", "Tile"};
 
@@ -224,11 +233,12 @@ static int wp_tab_logical_bottom_px(App& app, int contentX, int contentW) {
     ensure_wallpaper_gallery(app);
   }
   const WallpaperVerticalMetrics wm =
-      wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW));
+      wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW),
+                                 app.wallpaperViewOptionsOpen);
   const int cardInsetXi = contentX + 8;
   const WallpaperTabLayout wl = wallpaper_tab_layout(app, cardInsetXi, contentW, wm.galleryGridTop);
   if (app.wallpaperUiSubTab == 1) {
-    return wm.subTabY + 48 + 88 + 28 + 12 + 5 * 48 + 8 + 24 + 36 + 28 + 24;
+    return wm.subTabY + 48 + 88 + 28 + 12 + 5 * 48 + 8 + 24;
   }
   const int rowStride = wl.thumbH + kWpThumbLabelH + 6;
   const int gridBottom = wl.galleryTop + wl.rows * rowStride;
@@ -303,7 +313,8 @@ bool wallpaper_thumb_needs_followup_frame(App& app) {
   const int contentX = kSpacingL + kSidebarW + kSpacingL;
   const int contentW = app.width - contentX - kSpacingL;
   const int cardInsetXi = contentX + 8;
-  const WallpaperVerticalMetrics vm = wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW));
+  const WallpaperVerticalMetrics vm = wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW),
+                                                             app.wallpaperViewOptionsOpen);
   const WallpaperTabLayout wl = wallpaper_tab_layout(app, cardInsetXi, contentW, vm.galleryGridTop);
   wallpaper_clamp_page(app, wl.perPage);
   const size_t gallOff = static_cast<size_t>(std::max(0, app.wallpaperGalleryPage)) * static_cast<size_t>(wl.perPage);
@@ -319,36 +330,82 @@ bool wallpaper_thumb_needs_followup_frame(App& app) {
 
 // Layout helpers.
 
-WallpaperVerticalMetrics wallpaper_vertical_metrics(double contentX, double contentW) {
+WallpaperVerticalMetrics wallpaper_vertical_metrics(double contentX, double contentW, bool viewOpen) {
   WP_SCOPE();
   WallpaperVerticalMetrics m;
   m.subTabY = kContentTop + 96;
-  m.heroX = static_cast<double>(contentX + kCardPad);
+  // Full-width hero.
+  m.heroX = contentX + kCardPad;
   m.heroY = m.subTabY + 52;
-  m.heroW = (contentW - 2.0 * static_cast<double>(kCardPad) - 12.0) * 8.0 / 12.0;
-  m.heroW = std::max(m.heroW, 400.0);
-  m.ctrlW = static_cast<int>(contentW - 2 * kCardPad - 12 - static_cast<int>(m.heroW));
-  m.ctrlY = m.heroY;
-  m.modeRowY = m.ctrlY + (kCtrlCardH - 28) / 2;
-  m.galleryHeaderY = m.heroY + kHeroH + 12;
-  m.sortPillsY = m.galleryHeaderY + 20;
-  m.galleryGridTop = m.sortPillsY + 28 + 36;
+  m.heroW = static_cast<int>(contentW - 2.0 * static_cast<double>(kCardPad));
+  m.heroH = kHeroH;
+
+  // Floating toolbar overlaid at the hero bottom.
+  m.toolBarH = kToolBarH;
+  m.toolBarW = m.heroW - 24;
+  m.toolBarX = static_cast<int>(m.heroX) + 12;
+  m.toolBarY = m.heroY + kHeroH - 12 - kToolBarH;
+  m.toolIconY = m.toolBarY + (kToolBarH - kToolBtnS) / 2;
+  m.toolPrevX = m.toolBarX + 8;
+  m.toolNextX = m.toolPrevX + kToolBtnS + 8;
+  m.toolDeleteX = m.toolBarX + m.toolBarW - 8 - kToolBtnS;
+  m.toolFolderX = m.toolDeleteX - 8 - kToolBtnS;
+  m.toolTuneX = m.toolFolderX - 8 - kToolBtnS;
+  m.toolComboW = kToolComboW;
+  m.toolComboH = kToolComboH;
+  m.toolComboX = m.toolTuneX - 8 - kToolComboW;
+  m.toolComboY = m.toolBarY + (kToolBarH - kToolComboH) / 2;
+  m.toolTextX = m.toolNextX + kToolBtnS + 12;
+  m.toolTextW = std::max(40, m.toolComboX - 8 - m.toolTextX);
+
+  // Primary button + gallery toolbar row.
+  m.pickerY = m.heroY + kHeroH + 12;
+  m.galleryToolbarY = m.pickerY + kPickerH + 16;
+  m.sortPillsY = m.galleryToolbarY + (kGalleryBarH - 28) / 2;
+  // Right-aligned: Name(72) Oldest(88) Newest(88) + tune(40), 8px gaps.
+  m.sortPillsX = static_cast<int>(m.heroX) + m.heroW - (72 + 8 + 88 + 8 + 88 + 8 + 40);
+  m.galleryTuneX = m.sortPillsX + 72 + 8 + 88 + 8 + 88 + 8;
+
+  // Collapsible view-options panel.
+  m.viewPanelY = m.galleryToolbarY + kGalleryBarH + 12;
+  m.viewPanelH = viewOpen ? kViewPanelH : 0;
+  m.galleryGridTop = m.viewPanelY + (viewOpen ? m.viewPanelH + 12 : 12);
+
+  // Compat fields.
+  m.galleryHeaderY = m.galleryToolbarY;
+  m.modeRowY = m.toolComboY;
+  m.ctrlY = m.pickerY;
+  m.ctrlW = m.heroW;
   return m;
 }
 
+// Geometry of one view-panel stepper cell (shared by paint + hit test).
+static void wallpaper_view_cell_geom(const WallpaperVerticalMetrics& wm, int idx,
+                                     int* outX, int* outY, int* outW, int* outH,
+                                     int* outMinusX, int* outPlusX, int* outBtnY) {
+  const int panelX = static_cast<int>(wm.heroX);
+  const int cellW = (wm.heroW - 24 - 3 * 12) / 4;
+  const int cx = panelX + 12 + idx * (cellW + 12);
+  const int cy = wm.viewPanelY;
+  if (outX) *outX = cx;
+  if (outY) *outY = cy;
+  if (outW) *outW = cellW;
+  if (outH) *outH = kViewPanelH;
+  if (outMinusX) *outMinusX = cx;
+  if (outPlusX) *outPlusX = cx + cellW - 44;
+  if (outBtnY) *outBtnY = cy + 96;
+}
+
 void wallpaper_mode_combo_geom(int contentX, int contentW, int modeRowY,
-                              int* outX, int* outY, int* outW, int* outH) {
+                               int* outX, int* outY, int* outW, int* outH) {
   WP_SCOPE();
   (void)modeRowY;
-  const double heroW = (contentW - 2.0 * kCardPad - 12.0) * 8.0 / 12.0;
-  const int ctrlX = contentX + kCardPad + static_cast<int>(heroW) + 12;
-  const int ctrlW = contentW - 2 * kCardPad - 12 - static_cast<int>(heroW);
-  const int comboW = std::min(110, ctrlW - 32);
-  const int comboH = 28;
-  *outX = ctrlX + ctrlW - 16 - comboW;
-  *outY = kContentTop + 96 + 52 + (kCtrlCardH - comboH) / 2;
-  *outW = comboW;
-  *outH = comboH;
+  const WallpaperVerticalMetrics m =
+      wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW));
+  *outX = m.toolComboX;
+  *outY = m.toolComboY;
+  *outW = m.toolComboW;
+  *outH = m.toolComboH;
 }
 
 // Paint function.
@@ -360,7 +417,8 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
   const double pyH = app.pointerY + paintPointerYOffset;
 
   const WallpaperVerticalMetrics WM =
-      wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW));
+      wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW),
+                                 app.wallpaperViewOptionsOpen);
   const int cardInsetXi = contentX + 8;
   // In paint we still call (cheap when valid) because visible thumb requests + precache logic live here.
   // Heavy rescan is avoided by the valid flag inside ensure.
@@ -377,7 +435,7 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
       static_cast<double>(app.height) - static_cast<double>(kContentTop) - static_cast<double>(kSpacingXL);
   const int bottomPx =
       app.wallpaperUiSubTab == 1
-          ? (WM.subTabY + 48 + 88 + 28 + 12 + 5 * 48 + 8 + 24 + 36 + 28 + 24)
+          ? (WM.subTabY + 48 + 88 + 28 + 12 + 5 * 48 + 8 + 24)
           : (WL.showNav ? (WL.navY + WallpaperTabLayout::kNavH + 20)
                         : (WL.galleryTop + WL.rows * (WL.thumbH + kWpThumbLabelH + 6) + 28));
   const double cardLogicalH =
@@ -438,10 +496,10 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
       m3::Box glassCard;
       glassCard.setColor(1, 1, 1, 0.07f);
       glassCard.setRadius(24.0f);
-      glassCard.setGeometry(gsX, gsY, gsW, 480);
+      glassCard.setGeometry(gsX, gsY, gsW, 392);
       glassCard.setGlassy(true);
       glassCard.paint(cr);
-      cairo_round_rect(cr, gsX, gsY, gsW, 480, 24.0);
+      cairo_round_rect(cr, gsX, gsY, gsW, 392, 24.0);
       cairo_set_source_rgba(cr, o_r, o_g, o_b, 0.25);
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
@@ -449,7 +507,7 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
 
     // Heading
     settings_show_text(cr, gsX + 32, gsY + 36, "Grid Layout", 18, 600, t_r, t_g, t_b, 1.0f);
-    settings_show_text(cr, gsX + 32, gsY + 56, "Session only \u2014 not written to shell config.", 12, 400, t_r, t_g, t_b, 0.55f);
+    settings_show_text(cr, gsX + 32, gsY + 56, "Session only \u2014 quick options also on the Wallpaper tab.", 12, 400, t_r, t_g, t_b, 0.55f);
 
     // Folder picker
     const int galPickerY = gsY + 88;
@@ -548,48 +606,30 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
       std::snprintf(pct_buf, sizeof(pct_buf), "%d%%", app.wallpaperUiOpacityPct);
       settings_show_text(cr, gsX + gsW - 32 - 40, ry + 20, pct_buf, 13, 500, t_r, t_g, t_b, 1.0f);
     }
-
-    // Separator + folder dialog section
-    {
-      const int sepY = row0 + 5 * rowPitch + 8;
-      cairo_set_source_rgba(cr, o_r, o_g, o_b, 0.2);
-      cairo_move_to(cr, gsX + 32, sepY);
-      cairo_line_to(cr, gsX + gsW - 32, sepY);
-      cairo_set_line_width(cr, 1.0);
-      cairo_stroke(cr);
-
-      const int fdgY = sepY + 24;
-      settings_show_text(cr, gsX + 32, fdgY + 14, "Folder dialog", 12, 400, t_r, t_g, t_b, 0.55f);
-
-      const int fdgBoxY = fdgY + 28;
-      const int fdgBoxH = 36;
-      m3::Box fdgBox;
-      fdgBox.setColor(0, 0, 0, 0.25f);
-      fdgBox.setRadius(14.0f);
-      fdgBox.setGeometry(gsX + 32, fdgBoxY, gsW - 64, fdgBoxH);
-      fdgBox.setGlassy(true);
-      fdgBox.paint(cr);
-      cairo_round_rect(cr, gsX + 32, fdgBoxY, gsW - 64, fdgBoxH, 14.0);
-      cairo_set_source_rgba(cr, o_r, o_g, o_b, 0.3);
-      cairo_set_line_width(cr, 1.0);
-      cairo_stroke(cr);
-      settings_show_text(cr, gsX + 48, fdgBoxY + 22, "Folder dialog (native / kdialog / \u2026)", 12, 400, t_r, t_g, t_b, 0.5f);
-    }
   } else {
-    // Wallpaper tab (hero, controls, gallery).
+    // Wallpaper tab: full-width hero, floating toolbar, gallery.
     wallpaper_ensure_hero_surface(app);
 
     const int heroX = static_cast<int>(WM.heroX);
     const int heroY = WM.heroY;
-    const int heroW = static_cast<int>(WM.heroW);
+    const int heroW = WM.heroW;
     const int heroH = kHeroH;
-    const int ctrlY = WM.ctrlY;
-    const int ctrlX = static_cast<int>(contentX + kCardPad + WM.heroW + 12);
-    const int ctrlW = contentW - 2 * kCardPad - 12 - static_cast<int>(WM.heroW);
 
-    // ═══ HERO AREA (left) ═══
+    // Current-image index for the toolbar counter.
+    size_t curIdx = 0;
+    bool curFound = false;
+    if (!app.settings.wallpaperImage.empty() && !app.wallpaperGalleryPaths.empty()) {
+      auto it = std::find(app.wallpaperGalleryPaths.begin(), app.wallpaperGalleryPaths.end(),
+                          app.settings.wallpaperImage);
+      if (it != app.wallpaperGalleryPaths.end()) {
+        curIdx = static_cast<size_t>(it - app.wallpaperGalleryPaths.begin());
+        curFound = true;
+      }
+    }
+
+    // ═══ HERO AREA (full width) ═══
     cairo_save(cr);
-    cairo_round_rect(cr, heroX, heroY, heroW, heroH, 16.0);
+    cairo_round_rect(cr, heroX, heroY, heroW, heroH, kHeroRadius);
     cairo_clip(cr);
     paint_src_bg(app, cr, 0.94);
     cairo_paint(cr);
@@ -611,9 +651,21 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
     }
     cairo_restore(cr);
 
-    // Hero border
-    cairo_round_rect(cr, heroX, heroY, heroW, heroH, 16.0);
-    cairo_set_source_rgba(cr, o_r, o_g, o_b, 0.25);
+    // Hero edges: bright inner rim + faint outer hairline.
+    {
+      cairo_pattern_t* rim = cairo_pattern_create_linear(0, heroY, 0, heroY + heroH);
+      cairo_pattern_add_color_stop_rgba(rim, 0.0, 1.0, 1.0, 1.0, 0.38 * glassOv);
+      cairo_pattern_add_color_stop_rgba(rim, 0.35, 1.0, 1.0, 1.0, 0.14 * glassOv);
+      cairo_pattern_add_color_stop_rgba(rim, 0.7, 1.0, 1.0, 1.0, 0.05 * glassOv);
+      cairo_pattern_add_color_stop_rgba(rim, 1.0, 1.0, 1.0, 1.0, 0.12 * glassOv);
+      cairo_set_source(cr, rim);
+      cairo_set_line_width(cr, 1.0);
+      cairo_round_rect(cr, heroX + 1, heroY + 1, heroW - 2, heroH - 2, kHeroRadius - 1.0);
+      cairo_stroke(cr);
+      cairo_pattern_destroy(rim);
+    }
+    cairo_round_rect(cr, heroX + 0.5, heroY + 0.5, heroW - 1, heroH - 1, kHeroRadius);
+    cairo_set_source_rgba(cr, 0, 0, 0, 0.25);
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
 
@@ -634,64 +686,86 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
     cairo_fill(cr);
     cairo_pattern_destroy(gBot);
 
-    // Hero nav arrows
-    {
-      const int navSize = 36;
-      const int nOff = 16;
-      const int navY = heroY + heroH - navSize - nOff;
-      const int nPad = 8;
-      const bool hL = point_in_rect(app.pointerX, pyH, heroX + nPad, navY, navSize, navSize);
-      const bool hR = point_in_rect(app.pointerX, pyH, heroX + heroW - navSize - nPad, navY, navSize, navSize);
-
-      cairo_round_rect(cr, heroX + nPad, navY, navSize, navSize, 10.0);
-      cairo_set_source_rgba(cr, 0, 0, 0, hL ? 0.7 : 0.5);
-      cairo_fill(cr);
-      material_symbols_draw_glyph(cr, heroX + nPad + navSize / 2.0, navY + navSize / 2.0,
-                                  18, "chevron_left", 1, 1, 1, 0.85);
-
-      cairo_round_rect(cr, heroX + heroW - navSize - nPad, navY, navSize, navSize, 10.0);
-      cairo_set_source_rgba(cr, 0, 0, 0, hR ? 0.7 : 0.5);
-      cairo_fill(cr);
-      material_symbols_draw_glyph(cr, heroX + heroW - navSize - nPad + navSize / 2.0, navY + navSize / 2.0,
-                                  18, "chevron_right", 1, 1, 1, 0.85);
+    // "In use" badge, top-left over the hero.
+    if (!app.settings.wallpaperImage.empty()) {
+      m3::Box heroBadge;
+      heroBadge.setColor(s_r, s_g, s_b, 0.35f);
+      heroBadge.setRadius(9.0f);
+      heroBadge.setGeometry(static_cast<float>(heroX + 12), static_cast<float>(heroY + 12), 62.0f, 24.0f);
+      heroBadge.setGlassy(true);
+      heroBadge.paint(cr);
+      settings_show_text(cr, heroX + 20, heroY + 29, "In use", 10, 500, 1, 1, 1, 1.0f);
     }
 
-    // ═══ CONTROLS PANEL (right) ═══
-    // Fill Mode card
+    // ═══ FLOATING TOOLBAR (glass bar overlaid at hero bottom) ═══
     {
-      m3::Box fillCard;
-      fillCard.setColor(1, 1, 1, 0.07f);
-      fillCard.setRadius(kCtrlCardRad);
-      fillCard.setGeometry(ctrlX, ctrlY, ctrlW, kCtrlCardH);
-      fillCard.setGlassy(true);
-      fillCard.paint(cr);
+      m3::Box toolBar;
+      toolBar.setColor(0, 0, 0, 0.45f);
+      toolBar.setRadius(14.0f);
+      toolBar.setGeometry(WM.toolBarX, WM.toolBarY, WM.toolBarW, WM.toolBarH);
+      toolBar.setGlassy(true);
+      toolBar.paint(cr);
 
-      cairo_round_rect(cr, ctrlX, ctrlY, ctrlW, kCtrlCardH, kCtrlCardRad);
-      cairo_set_source_rgba(cr, o_r, o_g, o_b, 0.25);
-      cairo_set_line_width(cr, 1.0);
-      cairo_stroke(cr);
+      auto paint_tool_icon = [&](int bx, const char* glyph, bool filled, bool hov) {
+        m3::Button b;
+        b.setMinSize(0, 0);
+        b.setGlyph(glyph);
+        b.setGeometry(bx, WM.toolIconY, kToolBtnS, kToolBtnS);
+        b.setStyle(filled ? m3::Button::Style::Filled : m3::Button::Style::Outlined);
+        b.setSize(m3::Button::Size::M);
+        b.setAccentColor(a_r, a_g, a_b);
+        b.setOutlineColor(1, 1, 1);
+        b.setHovered(hov);
+        b.paint(cr);
+      };
 
-      settings_show_text(cr, ctrlX + 16, ctrlY + 22, "Fill Mode", 13, 400, t_r, t_g, t_b, 0.55f);
+      const bool hPrev = point_in_rect(app.pointerX, pyH, WM.toolPrevX, WM.toolIconY, kToolBtnS, kToolBtnS);
+      const bool hNext = point_in_rect(app.pointerX, pyH, WM.toolNextX, WM.toolIconY, kToolBtnS, kToolBtnS);
+      paint_tool_icon(WM.toolPrevX, "chevron_left", false, hPrev);
+      paint_tool_icon(WM.toolNextX, "chevron_right", false, hNext);
 
-      const int comboW = std::min(110, ctrlW - 32);
-      const int comboH = 28;
-      const int comboX = ctrlX + ctrlW - 16 - comboW;
-      const int comboY = ctrlY + (kCtrlCardH - comboH) / 2;
-      const int mm = std::clamp(app.settings.wallpaperMode, 0, 4);
-      settings_paint_combo_closed(app, cr, comboX, comboY, comboW, comboH, glassOv,
-                                  kWallpaperModeLabels[mm], app.wallpaperModeDropdownOpen,
-                                  settings_scroll_px_int(app));
+      // Current file + position.
+      {
+        std::string name = app.settings.wallpaperImage.empty()
+                               ? "No wallpaper selected"
+                               : wallpaper_file_basename(app.settings.wallpaperImage);
+        const int maxC = std::clamp(WM.toolTextW / 7, 12, 64);
+        name = wallpaper_truncate_visual(name, static_cast<size_t>(maxC));
+        settings_show_text(cr, WM.toolTextX, WM.toolBarY + 24, name.c_str(), 14, 600, 1, 1, 1, 0.95f);
+        if (curFound && !app.wallpaperGalleryPaths.empty()) {
+          char pos[48];
+          std::snprintf(pos, sizeof(pos), "%zu / %zu", curIdx + 1, app.wallpaperGalleryPaths.size());
+          settings_show_text(cr, WM.toolTextX, WM.toolBarY + 42, pos, 12, 400, 1, 1, 1, 0.65f);
+        } else if (!app.wallpaperGalleryPaths.empty()) {
+          char pos[48];
+          std::snprintf(pos, sizeof(pos), "%zu wallpapers", app.wallpaperGalleryPaths.size());
+          settings_show_text(cr, WM.toolTextX, WM.toolBarY + 42, pos, 12, 400, 1, 1, 1, 0.65f);
+        }
+      }
+
+      // Fill-mode combo.
+      {
+        const int mm = std::clamp(app.settings.wallpaperMode, 0, 4);
+        settings_paint_combo_closed(app, cr, WM.toolComboX, WM.toolComboY, WM.toolComboW, WM.toolComboH,
+                                    glassOv, kWallpaperModeLabels[mm], app.wallpaperModeDropdownOpen,
+                                    settings_scroll_px_int(app));
+      }
+
+      const bool hTune = point_in_rect(app.pointerX, pyH, WM.toolTuneX, WM.toolIconY, kToolBtnS, kToolBtnS);
+      const bool hFolder = point_in_rect(app.pointerX, pyH, WM.toolFolderX, WM.toolIconY, kToolBtnS, kToolBtnS);
+      const bool hDel = point_in_rect(app.pointerX, pyH, WM.toolDeleteX, WM.toolIconY, kToolBtnS, kToolBtnS);
+      paint_tool_icon(WM.toolTuneX, "tune", app.wallpaperViewOptionsOpen, hTune);
+      paint_tool_icon(WM.toolFolderX, "folder", false, hFolder);
+      paint_tool_icon(WM.toolDeleteX, "delete", false, hDel);
     }
 
-    // Open Picker button (Filled style)
+    // Full-width primary action under the hero.
     {
-      const int gap = 12;
-      const int btnY = ctrlY + kCtrlCardH + gap;
-      const bool phov = point_in_rect(app.pointerX, pyH, ctrlX, btnY, ctrlW, kOpenPickerH);
+      const bool phov = point_in_rect(app.pointerX, pyH, heroX, WM.pickerY, heroW, kPickerH);
       m3::Button pickerBtn;
       pickerBtn.setMinSize(0, 0);
-      pickerBtn.setLabel("Open Picker...");
-      pickerBtn.setGeometry(ctrlX, btnY, ctrlW, kOpenPickerH);
+      pickerBtn.setLabel("Open Picker\u2026");
+      pickerBtn.setGeometry(heroX, WM.pickerY, heroW, kPickerH);
       pickerBtn.setStyle(m3::Button::Style::Filled);
       pickerBtn.setSize(m3::Button::Size::M);
       pickerBtn.setAccentColor(a_r, a_g, a_b);
@@ -700,32 +774,8 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
       pickerBtn.paint(cr);
     }
 
-    // Action buttons (folder, grid_view, delete)
-    {
-      const int gap = 12;
-      const int actY = ctrlY + kCtrlCardH + gap + kOpenPickerH + gap;
-      const int actBtnW = (ctrlW - 8) / 3;
-      static const char* kActGlyphs[] = {"folder", "grid_view", "delete"};
-      for (int ai = 0; ai < 3; ++ai) {
-        const int ax = ctrlX + ai * (actBtnW + 4);
-        const bool ahov = point_in_rect(app.pointerX, pyH, ax, actY, actBtnW, kActBtnH);
-        m3::Button actBtn;
-        actBtn.setMinSize(0, 0);
-        actBtn.setGlyph(kActGlyphs[ai]);
-        actBtn.setGeometry(ax, actY, actBtnW, kActBtnH);
-        actBtn.setStyle(m3::Button::Style::Outlined);
-        actBtn.setSize(m3::Button::Size::M);
-        actBtn.setAccentColor(a_r, a_g, a_b);
-        actBtn.setOutlineColor(o_r, o_g, o_b);
-        actBtn.setHovered(ahov);
-        actBtn.paint(cr);
-      }
-    }
-
     // ═══ GALLERY SECTION ═══
-    const int galleryY = WM.galleryHeaderY;
-
-    // Gallery header: full folder path + count
+    // Single toolbar row: folder path + count on the left, sort pills + view toggle right.
     {
       std::ostringstream hd;
       if (app.settings.wallpaperFolder.empty()) {
@@ -734,31 +784,106 @@ void paint_wallpaper_tab(App& app, cairo_t* cr, int contentX, int contentW,
         hd << app.settings.wallpaperFolder;
       }
       hd << "  \u00b7  " << app.wallpaperGalleryPaths.size() << " wallpapers";
-      const std::string hds = hd.str();
-      settings_show_text(cr, contentX + kCardPad, galleryY + 4, hds.c_str(), 13, 400, t_r, t_g, t_b, 0.55f);
+      const int maxC = std::clamp((WM.sortPillsX - 12 - heroX) / 7, 16, 120);
+      const std::string hds = wallpaper_truncate_visual(hd.str(), static_cast<size_t>(maxC));
+      settings_show_text(cr, heroX, WM.galleryToolbarY + 21, hds.c_str(), 13, 500, t_r, t_g, t_b, 0.7f);
     }
 
-    // Sort pills
+    // Sort pills + view-options toggle (right aligned).
     {
       const int pillY = WM.sortPillsY;
       const int pillH = 28;
       const char* plab[] = {"Name", "Oldest", "Newest"};
-      int px = contentX + kCardPad;
+      const int pww[] = {72, 88, 88};
+      int px = WM.sortPillsX;
       for (int pi = 0; pi < 3; ++pi) {
-        const int pww = (pi == 0 ? 72 : 88);
         const bool sel = app.wallpaperGallerySortMode == pi;
-        const bool ph = point_in_rect(app.pointerX, pyH, px, pillY, pww, pillH);
+        const bool ph = point_in_rect(app.pointerX, pyH, px, pillY, pww[pi], pillH);
         m3::Button pillBtn;
         pillBtn.setMinSize(0, 0);
         pillBtn.setLabel(plab[pi]);
-        pillBtn.setGeometry(px, pillY, pww, pillH);
+        pillBtn.setGeometry(px, pillY, pww[pi], pillH);
         pillBtn.setStyle(sel ? m3::Button::Style::Filled : m3::Button::Style::Outlined);
         pillBtn.setSize(m3::Button::Size::XS);
         pillBtn.setAccentColor(a_r, a_g, a_b);
         pillBtn.setOutlineColor(o_r, o_g, o_b);
         pillBtn.setHovered(ph);
         pillBtn.paint(cr);
-        px += pww + 8;
+        px += pww[pi] + 8;
+      }
+      const bool hTune = point_in_rect(app.pointerX, pyH, WM.galleryTuneX, pillY, 40, pillH);
+      m3::Button tuneBtn;
+      tuneBtn.setMinSize(0, 0);
+      tuneBtn.setGlyph("tune");
+      tuneBtn.setGeometry(WM.galleryTuneX, pillY, 40, pillH);
+      tuneBtn.setStyle(app.wallpaperViewOptionsOpen ? m3::Button::Style::Filled
+                                                    : m3::Button::Style::Outlined);
+      tuneBtn.setSize(m3::Button::Size::XS);
+      tuneBtn.setAccentColor(a_r, a_g, a_b);
+      tuneBtn.setOutlineColor(o_r, o_g, o_b);
+      tuneBtn.setHovered(hTune);
+      tuneBtn.paint(cr);
+    }
+
+    // Collapsible view-options panel.
+    if (app.wallpaperViewOptionsOpen) {
+      const int panelX = heroX;
+      const int panelY = WM.viewPanelY;
+      const int panelW = heroW;
+      m3::Box panel;
+      panel.setColor(1, 1, 1, 0.07f);
+      panel.setRadius(20.0f);
+      panel.setGeometry(panelX, panelY, panelW, kViewPanelH);
+      panel.setGlassy(true);
+      panel.paint(cr);
+      cairo_round_rect(cr, panelX, panelY, panelW, kViewPanelH, 20.0);
+      cairo_set_source_rgba(cr, o_r, o_g, o_b, 0.25);
+      cairo_set_line_width(cr, 1.0);
+      cairo_stroke(cr);
+
+      settings_show_text(cr, panelX + 20, panelY + 30, "View options", 14, 600, t_r, t_g, t_b, 0.95f);
+      settings_show_text(cr, panelX + panelW - 20 - 118, panelY + 30, "All settings \u2192", 12, 500,
+                         a_r, a_g, a_b, 0.9f);
+
+      static const char* kViewLabels[] = {"Columns", "Rows", "Scale", "Radius"};
+      for (int vi = 0; vi < 4; ++vi) {
+        int cx, cy, cw, ch, minusX, plusX, btnY;
+        wallpaper_view_cell_geom(WM, vi, &cx, &cy, &cw, &ch, &minusX, &plusX, &btnY);
+        settings_show_text(cr, cx, cy + 62, kViewLabels[vi], 12, 400, t_r, t_g, t_b, 0.6f);
+        char valStr[16];
+        if (vi == 0)
+          std::snprintf(valStr, sizeof(valStr), "%d", app.wallpaperGalleryColumns);
+        else if (vi == 1)
+          std::snprintf(valStr, sizeof(valStr), "%d", app.wallpaperGalleryRows);
+        else if (vi == 2)
+          std::snprintf(valStr, sizeof(valStr), "%d%%", app.wallpaperGalleryScalePct);
+        else
+          std::snprintf(valStr, sizeof(valStr), "%d px", app.wallpaperGalleryThumbRadiusPx);
+        const int valW = cw - 2 * 44 - 16;
+        settings_show_text(cr, cx + 44 + 8, cy + 92, valStr, 15, 600, t_r, t_g, t_b, 1.0f);
+        (void)valW;
+        const bool hm = point_in_rect(app.pointerX, pyH, minusX, btnY, 44, 32);
+        const bool hp = point_in_rect(app.pointerX, pyH, plusX, btnY, 44, 32);
+        m3::Button mBtn;
+        mBtn.setMinSize(0, 0);
+        mBtn.setLabel("\u2212");
+        mBtn.setGeometry(minusX, btnY, 44, 32);
+        mBtn.setStyle(m3::Button::Style::Outlined);
+        mBtn.setSize(m3::Button::Size::M);
+        mBtn.setAccentColor(a_r, a_g, a_b);
+        mBtn.setOutlineColor(o_r, o_g, o_b);
+        mBtn.setHovered(hm);
+        mBtn.paint(cr);
+        m3::Button pBtn;
+        pBtn.setMinSize(0, 0);
+        pBtn.setLabel("+");
+        pBtn.setGeometry(plusX, btnY, 44, 32);
+        pBtn.setStyle(m3::Button::Style::Outlined);
+        pBtn.setSize(m3::Button::Size::M);
+        pBtn.setAccentColor(a_r, a_g, a_b);
+        pBtn.setOutlineColor(o_r, o_g, o_b);
+        pBtn.setHovered(hp);
+        pBtn.paint(cr);
       }
     }
 
@@ -923,12 +1048,12 @@ bool settings_wallpaper_consume_pointer_down(App& app, int contentX, int content
   WP_LOG("subTab=%d x=%f y=%f", app.wallpaperUiSubTab, app.pointerX, app.pointerY);
   const int cardInsetX = contentX + 8;
   const WallpaperVerticalMetrics wm =
-      wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW));
+      wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW),
+                                 app.wallpaperViewOptionsOpen);
   const double pyL = app.pointerY + settings_scroll_px(app);
 
-  const int heroW = static_cast<int>(wm.heroW);
-  const int ctrlX = static_cast<int>(contentX + kCardPad + wm.heroW + 12);
-  const int ctrlW = contentW - 2 * kCardPad - 12 - static_cast<int>(wm.heroW);
+  const int heroX = static_cast<int>(wm.heroX);
+  const int heroW = wm.heroW;
 
   // Sub-tab toggle
   {
@@ -1032,12 +1157,26 @@ bool settings_wallpaper_consume_pointer_down(App& app, int contentX, int content
     return true;
   }
 
-  // Fill Mode combo
+  // Toolbar: prev / next chevrons.
+  if (point_in_rect(app.pointerX, pyL, wm.toolPrevX, wm.toolIconY, kToolBtnS, kToolBtnS)) {
+    wallpaper_cycle_selection(app, -1);
+    wallpaper_invalidate_hero(app);
+    save_settings(app.settings);
+    draw(app);
+    return true;
+  }
+  if (point_in_rect(app.pointerX, pyL, wm.toolNextX, wm.toolIconY, kToolBtnS, kToolBtnS)) {
+    wallpaper_cycle_selection(app, 1);
+    wallpaper_invalidate_hero(app);
+    save_settings(app.settings);
+    draw(app);
+    return true;
+  }
+
+  // Toolbar: fill-mode combo.
   {
-    const int comboW = std::min(110, ctrlW - 32);
-    const int comboH = 28;
-    const int comboX = ctrlX + ctrlW - 16 - comboW;
-    const int comboY = wm.ctrlY + (kCtrlCardH - comboH) / 2;
+    int comboX, comboY, comboW, comboH;
+    wallpaper_mode_combo_geom(contentX, contentW, 0, &comboX, &comboY, &comboW, &comboH);
     if (point_in_rect(app.pointerX, pyL, comboX, comboY, comboW, comboH)) {
       settings_close_mode_dropdowns(app);
       app.wallpaperModeDropdownOpen = true;
@@ -1046,93 +1185,99 @@ bool settings_wallpaper_consume_pointer_down(App& app, int contentX, int content
     }
   }
 
-  // Open Picker button
-  {
-    const int gap = 12;
-    const int btnY = wm.ctrlY + kCtrlCardH + gap;
-    if (point_in_rect(app.pointerX, pyL, ctrlX, btnY, ctrlW, kOpenPickerH)) {
-      settings_close_mode_dropdowns(app);
-      app.wallpaperFolderPickerOpen = true;
+  // Toolbar: tune / folder / delete.
+  if (point_in_rect(app.pointerX, pyL, wm.toolTuneX, wm.toolIconY, kToolBtnS, kToolBtnS)) {
+    app.wallpaperViewOptionsOpen = !app.wallpaperViewOptionsOpen;
+    draw(app);
+    return true;
+  }
+  if (point_in_rect(app.pointerX, pyL, wm.toolFolderX, wm.toolIconY, kToolBtnS, kToolBtnS)) {
+    std::string picked{};
+    if (eh::wallpaper::pick_folder(&picked, app.settings.wallpaperFolderPickerMode)) {
+      app.settings.wallpaperFolder = std::move(picked);
+      app.wallpaperGalleryFolderSynced.clear();
+      app.wallpaperGalleryValid = false;
+      ensure_wallpaper_gallery(app);
+      WallpaperTabLayout wlF = wallpaper_tab_layout(app, cardInsetX, contentW, wm.galleryGridTop);
+      wallpaper_clamp_page(app, wlF.perPage);
+      save_settings(app.settings);
+      draw(app);
+    }
+    return true;
+  }
+  if (point_in_rect(app.pointerX, pyL, wm.toolDeleteX, wm.toolIconY, kToolBtnS, kToolBtnS)) {
+    app.settings.wallpaperImage.clear();
+    app.settings.wallpaperEnabled = false;
+    wallpaper_invalidate_hero(app);
+    save_settings(app.settings);
+    wallpaper_apply_if_digest_changed(app.settings);
+    eh::config::shell_config_reload_from_disk_now();
+    app.settings = load_settings();
+    draw(app);
+    return true;
+  }
+
+  // Full-width Open Picker button.
+  if (point_in_rect(app.pointerX, pyL, heroX, wm.pickerY, heroW, kPickerH)) {
+    settings_close_mode_dropdowns(app);
+    app.wallpaperFolderPickerOpen = true;
+    draw(app);
+    return true;
+  }
+
+  // Gallery toolbar: view-options toggle.
+  if (point_in_rect(app.pointerX, pyL, wm.galleryTuneX, wm.sortPillsY, 40, 28)) {
+    app.wallpaperViewOptionsOpen = !app.wallpaperViewOptionsOpen;
+    draw(app);
+    return true;
+  }
+
+  // View-options panel: steppers + "All settings" link.
+  if (app.wallpaperViewOptionsOpen) {
+    const int linkX = heroX + heroW - 20 - 118;
+    if (point_in_rect(app.pointerX, pyL, linkX, wm.viewPanelY + 8, 118, 26)) {
+      app.wallpaperUiSubTab = 1;
       draw(app);
       return true;
     }
-  }
-
-  // Action buttons
-  {
-    const int gap = 12;
-    const int actY = wm.ctrlY + kCtrlCardH + gap + kOpenPickerH + gap;
-    const int actBtnW = (ctrlW - 8) / 3;
-    for (int ai = 0; ai < 3; ++ai) {
-      const int ax = ctrlX + ai * (actBtnW + 4);
-      if (point_in_rect(app.pointerX, pyL, ax, actY, actBtnW, kActBtnH)) {
-        if (ai == 0) {
-          std::string picked{};
-          if (eh::wallpaper::pick_folder(&picked, app.settings.wallpaperFolderPickerMode)) {
-            app.settings.wallpaperFolder = std::move(picked);
-            app.wallpaperGalleryFolderSynced.clear();
-            app.wallpaperGalleryValid = false;
-            ensure_wallpaper_gallery(app);
-            WallpaperTabLayout wlF =
-                wallpaper_tab_layout(app, cardInsetX, contentW, wm.galleryGridTop);
-            wallpaper_clamp_page(app, wlF.perPage);
-            save_settings(app.settings);
-            draw(app);
-          }
-        } else if (ai == 1) {
-          settings_close_mode_dropdowns(app);
-          app.wallpaperFolderPickerOpen = true;
-          draw(app);
-        } else if (ai == 2) {
-          app.settings.wallpaperImage.clear();
-          app.settings.wallpaperEnabled = false;
-          wallpaper_invalidate_hero(app);
-          save_settings(app.settings);
-          wallpaper_apply_if_digest_changed(app.settings);
-          eh::config::shell_config_reload_from_disk_now();
-          app.settings = load_settings();
-          draw(app);
-        }
+    for (int vi = 0; vi < 4; ++vi) {
+      int cx, cy, cw, ch, minusX, plusX, btnY;
+      wallpaper_view_cell_geom(wm, vi, &cx, &cy, &cw, &ch, &minusX, &plusX, &btnY);
+      if (point_in_rect(app.pointerX, pyL, minusX, btnY, 44, 32)) {
+        if (vi == 0)
+          app.wallpaperGalleryColumns = std::max(1, app.wallpaperGalleryColumns - 1);
+        else if (vi == 1)
+          app.wallpaperGalleryRows = std::max(1, app.wallpaperGalleryRows - 1);
+        else if (vi == 2)
+          app.wallpaperGalleryScalePct = std::max(50, app.wallpaperGalleryScalePct - 5);
+        else
+          app.wallpaperGalleryThumbRadiusPx = std::max(0, app.wallpaperGalleryThumbRadiusPx - 1);
+        draw(app);
+        return true;
+      }
+      if (point_in_rect(app.pointerX, pyL, plusX, btnY, 44, 32)) {
+        if (vi == 0)
+          app.wallpaperGalleryColumns = std::min(10, app.wallpaperGalleryColumns + 1);
+        else if (vi == 1)
+          app.wallpaperGalleryRows = std::min(10, app.wallpaperGalleryRows + 1);
+        else if (vi == 2)
+          app.wallpaperGalleryScalePct = std::min(200, app.wallpaperGalleryScalePct + 5);
+        else
+          app.wallpaperGalleryThumbRadiusPx = std::min(32, app.wallpaperGalleryThumbRadiusPx + 1);
+        draw(app);
         return true;
       }
     }
   }
 
-  // Hero nav arrows
-  {
-    const int heroX = static_cast<int>(wm.heroX);
-    const int heroY = wm.heroY;
-    const int heroH = kHeroH;
-    const int navSize = 36;
-    const int nOff = 16;
-    const int navY = heroY + heroH - navSize - nOff;
-    const int nPad = 8;
-    if (point_in_rect(app.pointerX, pyL, heroX + nPad, navY, navSize, navSize)) {
-      WP_LOG("hero_nav: delta=%d", -1);
-      wallpaper_cycle_selection(app, -1);
-      wallpaper_invalidate_hero(app);
-      save_settings(app.settings);
-      draw(app);  // early for responsiveness; apply follows in some paths
-      return true;
-    }
-    if (point_in_rect(app.pointerX, pyL, heroX + heroW - navSize - nPad, navY, navSize, navSize)) {
-      WP_LOG("hero_nav: delta=%d", 1);
-      wallpaper_cycle_selection(app, 1);
-      wallpaper_invalidate_hero(app);
-      save_settings(app.settings);
-      draw(app);  // early for responsiveness; apply follows in some paths
-      return true;
-    }
-  }
-
-  // Sort pills
+  // Sort pills (right aligned in the gallery toolbar row).
   {
     const int pillY = wm.sortPillsY;
     const int pillH = 28;
-    int px = contentX + kCardPad;
+    const int pww[] = {72, 88, 88};
+    int px = wm.sortPillsX;
     for (int pi = 0; pi < 3; ++pi) {
-      const int pww = (pi == 0 ? 72 : 88);
-      if (point_in_rect(app.pointerX, pyL, px, pillY, pww, pillH)) {
+      if (point_in_rect(app.pointerX, pyL, px, pillY, pww[pi], pillH)) {
         if (app.wallpaperGallerySortMode != pi) {
           app.wallpaperGallerySortMode = pi;
           app.wallpaperGalleryPage = 0;
@@ -1142,7 +1287,7 @@ bool settings_wallpaper_consume_pointer_down(App& app, int contentX, int content
         draw(app);
         return true;
       }
-      px += pww + 8;
+      px += pww[pi] + 8;
     }
   }
 

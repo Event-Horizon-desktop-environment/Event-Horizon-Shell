@@ -13,6 +13,13 @@ using eh::shell::shared::widget_strip_h_scale;
 using eh::shell::shared::strip_surface_x_to_layout;
 using eh::shell::shared::strip_layout_x_to_surface;
 
+// Inner horizontal padding of the widget strip inside the pill. Paint is the
+// visual truth (12 * ui scale); pick and the pin-drag geometry must use the
+// same value or their computed fallback layouts drift from what is on screen.
+[[nodiscard]] inline double dock_strip_inner_margin(const DockSettings& st) {
+  return 12.0 * dock_ui_scale(st);
+}
+
 inline void dock_pill_geometry_dims(const DockApp& app, int cfgW, int cfgH, double& x, double& y, double& boxW,
                                      double& boxH) {
   const double w = static_cast<double>(cfgW);

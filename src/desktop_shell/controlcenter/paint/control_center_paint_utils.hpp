@@ -18,11 +18,14 @@ constexpr double kGlassFillA = 1.00;
 constexpr double kGlassStrokeA = 0.08;
 
 inline void rrect(cairo_t* cr, double x, double y, double w, double h, double r) {
+  // Clamp: r past half the box makes the corner arcs cross, and the stroke's
+  // miter join then spikes out past the corners ("teeth"). Stadium fallback.
+  const double rr = std::clamp(r, 0.0, 0.5 * std::min(w, h));
   cairo_new_path(cr);
-  cairo_arc(cr, x + w - r, y + r, r, -M_PI_2, 0);
-  cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI_2);
-  cairo_arc(cr, x + r, y + h - r, r, M_PI_2, M_PI);
-  cairo_arc(cr, x + r, y + r, r, M_PI, 3.0 * M_PI_2);
+  cairo_arc(cr, x + w - rr, y + rr, rr, -M_PI_2, 0);
+  cairo_arc(cr, x + w - rr, y + h - rr, rr, 0, M_PI_2);
+  cairo_arc(cr, x + rr, y + h - rr, rr, M_PI_2, M_PI);
+  cairo_arc(cr, x + rr, y + rr, rr, M_PI, 3.0 * M_PI_2);
   cairo_close_path(cr);
 }
 
@@ -35,11 +38,33 @@ inline double cc_text_width(cairo_t* cr, const std::string& s) {
 inline void cc_paint_glass_card_mc(cairo_t* cr, double x, double y, double w, double h, double r,
                                     double inner_glass_scale, const eh::config::ChromePaintColors& mc) {
   const double s = std::clamp(inner_glass_scale, 0.0, 1.0);
+  rrect(cr, x, y + 2.0, w, h, r);
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.22 * s);
+  cairo_fill(cr);
   rrect(cr, x, y, w, h, r);
   cairo_set_source_rgba(cr, mc.drawerDimR, mc.drawerDimG, mc.drawerDimB, 0.55 * s);
-  cairo_fill_preserve(cr);
-  cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.13 * s);
+  cairo_fill(cr);
+  // Milky lift so the fill reads frosted, not dark.
+  cairo_save(cr);
+  rrect(cr, x, y, w, h, r);
+  cairo_clip(cr);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.07 * s);
+  cairo_rectangle(cr, x, y, w, h);
+  cairo_fill(cr);
+  cairo_restore(cr);
+  // Bright inner rim, bottom-weighted + faint outer glow.
+  cairo_pattern_t* rim = cairo_pattern_create_linear(0, y, 0, y + h);
+  cairo_pattern_add_color_stop_rgba(rim, 0.0, 1.0, 1.0, 1.0, 0.12 * s);
+  cairo_pattern_add_color_stop_rgba(rim, 0.5, 1.0, 1.0, 1.0, 0.05 * s);
+  cairo_pattern_add_color_stop_rgba(rim, 1.0, 1.0, 1.0, 1.0, 0.42 * s);
+  cairo_set_source(cr, rim);
   cairo_set_line_width(cr, 1.0);
+  rrect(cr, x + 1.0, y + 1.0, w - 2.0, h - 2.0, r > 1.0 ? r - 1.0 : 0.0);
+  cairo_stroke(cr);
+  cairo_pattern_destroy(rim);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08 * s);
+  cairo_set_line_width(cr, 1.0);
+  rrect(cr, x + 0.5, y + 0.5, w - 1.0, h - 1.0, r);
   cairo_stroke(cr);
 }
 

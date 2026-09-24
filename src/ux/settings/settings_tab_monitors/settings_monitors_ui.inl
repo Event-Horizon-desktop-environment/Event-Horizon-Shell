@@ -1,5 +1,44 @@
 #include "dialog/file_chooser_dialog.hpp"
 
+#include <fcntl.h>
+#include <spawn.h>
+#include <unistd.h>
+
+extern "C" char** environ;
+
+// Restart the xdg-desktop-portal user services as a detached shell job so the
+// settings UI never blocks on systemd.
+static void monitors_restart_portals() {
+  posix_spawn_file_actions_t fa{};
+  if (posix_spawn_file_actions_init(&fa) != 0) return;
+  if (posix_spawn_file_actions_addopen(&fa, STDIN_FILENO, "/dev/null", O_RDWR, 0) != 0 ||
+      posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_RDWR, 0) != 0 ||
+      posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_RDWR, 0) != 0) {
+    posix_spawn_file_actions_destroy(&fa);
+    return;
+  }
+  posix_spawnattr_t attr{};
+  if (posix_spawnattr_init(&attr) != 0) {
+    posix_spawn_file_actions_destroy(&fa);
+    return;
+  }
+  (void)posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+
+  char argv0[] = "/bin/sh";
+  char argv1[] = "sh";
+  char argv2[] = "-c";
+  char argv3[] = "systemctl --user restart xdg-desktop-portal && "
+                 "systemctl --user restart xdg-desktop-portal-hyprland";
+  char* argv[] = {argv0, argv1, argv2, argv3, nullptr};
+
+  pid_t pid = -1;
+  const int err = posix_spawnp(&pid, "/bin/sh", &fa, &attr, argv, environ);
+  posix_spawnattr_destroy(&attr);
+  posix_spawn_file_actions_destroy(&fa);
+  (void)err;
+  (void)pid;
+}
+
 static int monitors_section_card_height_rows(int n_rows) {
   return kMonSecTitlePadTop + kMonSecTitleLineH + kMonSecAfterTitle + n_rows * kMonFormRowPitch + kMonSecBottomPad;
 }
@@ -510,6 +549,14 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
     app.monitorsCanvasZoom = 1.0;
     app.monitorsTab.refresh_from_system();
     monitors_clamp_selected(app);
+    settings_clamp_monitors_scroll_px(app);
+    draw(app);
+    return true;
+  }
+  if (point_in_rect(app.pointerX, pyLogical, lay.toolbar_portals_x, lay.toolbar_y, lay.toolbar_portals_w,
+                    lay.toolbar_btn_h)) {
+    monitors_restart_portals();
+    app.monitorsTab.status = "Restarted xdg-desktop-portal + xdg-desktop-portal-hyprland";
     settings_clamp_monitors_scroll_px(app);
     draw(app);
     return true;

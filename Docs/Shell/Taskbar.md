@@ -33,6 +33,11 @@ enum class TaskbarPopupKind : uint8_t {
 
 **Fields:** Same as DockSettings but independent config section: `[taskbar]`. Includes: `iconPx`, `autoHide`, `autoHideDelayMs`, `taskbarPosition` (top/bottom), `taskbarOffset`, `taskbarMargin`, `pinnedAppIds`, `widgetLayout`, `showTray`, `showWorkspaces`, `showTrash`, `popupMargin`, `displayMode`.
 
+**Helpers:**
+- `effective_height_px(settings, globalScale)` - bar height with a guaranteed `8 × ui-scale` of breathing room per side: when `iconSize × scale` would fill the bar edge to edge, the bar grows instead (normalized into `settings.height` on every settings apply, so layer size, exclusive zone, paint, tooltips and popup clearance all agree).
+- `strip_pad_px` / `section_gap_px` - inner padding at the bar's rounded ends and the gap between the left/center/right sections (shared by paint and the fill-mode bar sizing).
+- `popup_bottom_clearance_px` - exact distance from the screen edge to the bar's top (edgeGap + floating inset + painted height) used to place popups above the bar.
+
 ---
 
 ### `taskbar.hpp` (~200 lines)
@@ -77,6 +82,7 @@ enum class TaskbarPopupKind : uint8_t {
   - **Power button**: lock/logout/restart/shutdown with confirmation
   - **Nightlight button**: toggle via gamma service
   - **Other widgets**: open respective popup
+  - **Toggle-close**: any click on the bar first dismisses an open popup and records its kind (`dismissedPopKind`); if that click landed on the widget owning the popup, it is treated as a toggle-close and not reopened (weather, clock/calendar, media player, control center, volume mixer, VPN, battery, Bluetooth, app drawer).
 - `taskbar_handle_pointer_axis()` - scroll (workspaces or app list)
 - `taskbar_handle_key()` - keyboard navigation in popups
 - `taskbar_open_popup(kind)` - creates popup surface
@@ -111,9 +117,11 @@ if (zone == NightlightButton) {
 
 **Purpose:** Taskbar bar rendering.
 
-**Function:** `taskbar_paint(app, cr)` - renders the taskbar bar by calling `paint_widget_bar()` with `WidgetBarLayout::PanelEdgeAligned`.
+**Function:** `taskbar_paint_widget_bar(app, cr, x, y, w, h, leftW, centerW, rightW, ...)` - renders the three widget sections and emits their hit rects (single source of truth for pick).
 
-**Layout:** PanelEdgeAligned means left widgets anchored to left edge, right widgets to right edge, center widgets between them.
+**Layout (panel):** Left widgets anchored `strip_pad_px` from the bar's left end, right widgets the same from the right end, center widgets truly centered on the bar (and therefore on the screen). Fill mode sizes its pill to `center + 2 × (pad + max(left, right) + section_gap)` so the three-zone layout always fits. If the sections would collide (narrow content bar), paint falls back to a single centered strip with horizontal compression (`tb_strip_h_scale`), keeping at least the inner padding at both ends. Fill-mode sizing uses `taskbar_measure_sections()`, which shares paint's slot widths and gap rules (tray packing, `pinnedAppsTrayPill` / `runningAppsTrayPill`, widget keys) so the measured bar never disagrees with what paints.
+
+**Press feedback:** the press overlay covers the full slot width (`slotW + 4`), and the press scale is centered on the slot - wide widgets (weather, media, clock) previously got an icon-sized overlay that only lit up half the item.
 
 ---
 
@@ -122,6 +130,7 @@ if (zone == NightlightButton) {
 **Purpose:** Taskbar surface positioning.
 
 **Functions:**
+- `taskbar_compute_popup_position(app, anchorX, popupW, popupH)` - popup anchor: horizontal clamp into the output, bottom clearance via `popup_bottom_clearance_px` (edge gap + floating inset + bar height), mirrored to the top margin when the bar sits at the top.
 - `taskbar_reposition(app)` - sets layer-shell anchor (top or bottom), margin, exclusive zone, size
 - `taskbar_popup_sync_position(app)` - adjusts popup position when taskbar moves
 

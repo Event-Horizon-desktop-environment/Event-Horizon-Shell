@@ -284,7 +284,6 @@ inc = include_directories(
   'src',
   'src/configuration',
   'src/desktop_shell',
-  'src/desktop_shell/launchpad',
   'src/desktop_shell/Overview',
   'src/desktop_shell/unified',
   'src/desktop_shell/widgets/workspaces',
@@ -560,6 +559,12 @@ shell_cpp_sources = [
   'src/desktop_shell/controlcenter/widgets/mixer/control_center_mixer_widget.cpp',
   'src/desktop_shell/controlcenter/widgets/weather/control_center_weather_widget.cpp',
 
+  'src/desktop_shell/dashboard/dashboard_layout.cpp',
+  'src/desktop_shell/dashboard/dashboard_paint.cpp',
+  'src/desktop_shell/dashboard/dashboard_hit.cpp',
+  'src/desktop_shell/dashboard/dashboard_dispatch.cpp',
+  'src/desktop_shell/dashboard/dashboard_surface.cpp',
+
   'src/desktop_shell/dock/paint/dock_paint_widget_bar.cpp',
   'src/desktop_shell/dock/input/dock_pick.cpp',
   'src/desktop_shell/dock/launch/dock_launch_feedback.cpp',
@@ -648,9 +653,6 @@ shell_cpp_sources = [
 
   'src/desktop_shell/lockscreen/session_lock.cpp',
 
-  'src/desktop_shell/launchpad/layer/launchpad_layer.cpp',
-  'src/desktop_shell/launchpad/host/launchpad_host.cpp',
-  'src/desktop_shell/launchpad/search/launchpad_search.cpp',
   'src/desktop_shell/Overview/overview_host.cpp',
   'src/desktop_shell/Overview/overview_painter.cpp',
   'src/desktop_shell/Overview/overview_input.cpp',
@@ -1081,12 +1083,6 @@ summary(
 
 # Runtime-loaded asset images (trash, launchpad, etc.) — always installed.
 install_data(
-  'src/assets/Dark_Launchpad.png',
-  'src/assets/Dark_Launchpad.svg',
-  'src/assets/Dark_Launchpad.webp',
-  'src/assets/Light_Launchpad.png',
-  'src/assets/Light_Launchpad.svg',
-  'src/assets/Light_Launchpad.webp',
   'src/assets/MacOS-Trash-Empty.png',
   'src/assets/MacOS-Trash-Empty.webp',
   'src/assets/MacOS-Trash-Full.png',
@@ -1245,6 +1241,16 @@ test_damage_region = executable('test_damage_region',
   install: false,
 )
 test('damage_region', test_damage_region)
+
+# ── Hit registry test (paint/input shared geometry; see Docs/hit-testing.md)
+test_hit_registry = executable('test_hit_registry',
+  ['test/test_hit_registry.cpp'],
+  include_directories: test_inc,
+  dependencies: [],
+  cpp_args: test_cpp_args,
+  install: false,
+)
+test('hit_registry', test_hit_registry)
 
 # ── Test & Benchmark Targets ─────────────────────────────────────────────────
 subdir('tests')

@@ -232,9 +232,9 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
     int tcx = 0;
     int tcw = 0;
     settings_content_column_geom(app, &tcx, &tcw);
-    const int colH = app.height - kContentTop - kSpacingL;
-    if (app.pointerX < tcx || app.pointerY < kContentTop || app.pointerX >= tcx + tcw ||
-        app.pointerY >= kContentTop + colH)
+    const int colH = app.height - kSoundChildContentTop - kSpacingL;
+    if (app.pointerX < tcx || app.pointerY < kSoundChildContentTop || app.pointerX >= tcx + tcw ||
+        app.pointerY >= kSoundChildContentTop + colH)
       return;
     const int step = static_cast<int>(std::lround(delta_px));
     if (step == 0) return;
@@ -242,7 +242,7 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
     const eh::audio::Snapshot ss = eh::audio::PipeWireService::instance().snapshot();
     app.settingsSoundScrollPx -= step;
     settings_clamp_sound_scroll_px(app, static_cast<int>(ss.output_streams.size()),
-                                   static_cast<int>(ss.input_streams.size()), sound_tab_bt_count_clamped(app));
+                                   static_cast<int>(ss.input_streams.size()), sound_tab_card_count_clamped(app));
     settings_scroll_sync_after_clamp(app);
     scroll_draw(app);
     return;

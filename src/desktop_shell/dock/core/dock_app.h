@@ -23,6 +23,7 @@
 #include "wl/surface/surface_extensions.hpp"
 
 #include "desktop_shell/controlcenter/state/control_center_state.hpp"
+#include "desktop_shell/dashboard/dashboard_types.hpp"
 #include "desktop_shell/common/fs/file_util.hpp"
 #include "desktop_shell/common/asset/asset_loader.hpp"
 #include "desktop_shell/shared/layout/strip_geometry.hpp"
@@ -279,6 +280,10 @@ struct DockApp : WaylandState {
 
   eh::shell::dock::control_center::ControlCenterState ccState{};
 
+  // Top-edge dashboard (fully modular widget panel). Own layer surface and
+  // retained layout; see desktop_shell/dashboard/.
+  eh::shell::dashboard::DashboardState dash{};
+
   double dockRectX = 0.0;
   double dockRectY = 0.0;
   double dockRectW = 0.0;
@@ -286,6 +291,18 @@ struct DockApp : WaylandState {
 
   std::string lastLayoutSnapshot{};
   std::string lastWidgetLayoutSnapshot{};
+
+  // Retained paint hit rects (surface coords), refreshed by every dock
+  // strip paint. dock_pick_at resolves pointer events through these first,
+  // so paint and input share one geometry (see Docs/hit-testing.md).
+  // Empty = nothing painted yet; pick falls back to computed layout.
+  struct DockRetainedHit {
+    std::string key;
+    double x = 0.0, y = 0.0, w = 0.0, h = 0.0;
+    std::uint64_t chosenSerial = 0;
+    bool isPinned = false;
+  };
+  std::vector<DockRetainedHit> dockRetainedHits;
 
   double pointerX = 0.0;
   double pointerY = 0.0;
@@ -328,6 +345,22 @@ struct DockApp : WaylandState {
   std::string pinDragKeyRaw{};
 
   int pinDragInsertIdx = -1;
+
+  // Glide for the slot shuffle: per-key fractional offsets (slot units) baked
+  // from the in-flight animation every time the insert index re-flips, animated
+  // back to 0 so neighbouring pins slide instead of teleporting.
+  std::unordered_map<std::string, double> pinDragShiftFrom{};
+  double pinDragShiftT = 1.0;
+  uint32_t pinDragShiftAnimId = 0;
+
+  // Paint-geometry snapshot of the pinned run captured at press (surface
+  // coordinates, from the retained hit rects). Primary drag geometry; the
+  // computed dock_pinned_drag_geometry() is only the fallback.
+  bool pinDragGeometryValid = false;
+  double pinDragFirstLeftSurf = 0.0;
+  double pinDragSlotStrideSurf = 0.0;
+  double pinDragIconSurf = 0.0;
+  int pinDragPinnedCount = 0;
 
   std::vector<std::string> pinDragPinsSnapshot{};
 
@@ -381,6 +414,7 @@ void dock_schedule_frame(DockApp& app);
 int dock_compute_widget_strip_width(DockApp& app, const std::vector<std::string>& l,
                                     const std::vector<std::string>& c, const std::vector<std::string>& r);
 [[nodiscard]] DockPinnedDragGeometry dock_pinned_drag_geometry(DockApp& app);
+void dock_pin_drag_capture_geometry(DockApp& app);
 bool dock_save_dock_settings(const DockSettings& s);
 
 bool dock_settings_equal(const DockSettings& a, const DockSettings& b);

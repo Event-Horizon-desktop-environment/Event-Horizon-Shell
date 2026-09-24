@@ -135,6 +135,18 @@ struct Settings {
   std::string taskbarOutputName{};
   std::string plasmaTheme{};
 
+  // `[dashboard]` — top-edge dashboard panel. Round-tripped through
+  // load_settings()/settings_to_shell_config() so saves never clobber it.
+  bool dashboardEnabled = true;
+  int dashboardTriggerHeight = 8;
+  int dashboardColumns = 4;
+  int dashboardGap = 12;
+  int dashboardMarginX = 14;
+  int dashboardMarginTop = 12;
+  int dashboardMarginBottom = 14;
+  int dashboardMaxWidth = 1800;
+  std::vector<std::string> dashboardWidgets{};
+
   bool wallpaperEnabled = false;
   int wallpaperMode = 0;
   std::string wallpaperImage{};
@@ -231,6 +243,8 @@ struct Settings {
   int launchpadViewMode = 1;
   int launchpadFolderSizePct = 100;
   int launchpadFolderGapPx = 16;
+  int launchpadFolderColumns = 3;
+  int launchpadFolderRows = 3;
   int launchpadDpiScalePct = 100;
 
   int overviewAxis = 0;             // 0=Vertical, 1=Horizontal
@@ -283,6 +297,9 @@ struct Settings {
 
   std::string avatarPath{};
 
+  // Bluetooth settings
+  bool btAutoReconnect = true;   // reconnect paired devices seen/used before when they return
+
   // Audio settings
   std::string audioDefaultSinkName;
   std::string audioDefaultSourceName;
@@ -293,6 +310,8 @@ struct Settings {
   int audioEngineClockRateHz = 48000;
   int audioEngineForceRateHz = 0;
   std::vector<int> audioEngineAllowedRatesHz;
+  int audioEngineQuantum = 0;        // 0 = Auto/unset
+  int audioEngineForceQuantum = 0;   // 0 = Auto/unset
   int audioCompatPcmFormat = 0;
 };
 
@@ -375,6 +394,7 @@ struct App {
   bool widgetPickerForPanel = false;
   bool widgetPickerForTaskbar = false;
   bool widgetPickerForDesktop = false;
+  bool widgetPickerForDashboard = false;
   std::string widgetPickerFilter{};
   int widgetPickerHoverSlot = -1;
   int widgetPickerScrollPx = 0;
@@ -453,8 +473,6 @@ struct App {
   bool taskbarWidthModeDropdownOpen = false;
   int taskbarWidthModeDropdownHoverRow = -1;
   bool wallpaperModeDropdownOpen = false;
-  bool launcherViewModeDropdownOpen = false;
-  int launcherViewModeDropdownHoverRow = -1;
   int panelLayoutDropdownHoverRow = -1;
   int wallpaperModeDropdownHoverRow = -1;
 
@@ -467,6 +485,7 @@ struct App {
   eh::settings::SettingsDropdown rendererDd{};
 
   int settingsDockScrollPx = 0;
+  int settingsDashboardScrollPx = 0;
   int settingsPanelScrollPx = 0;
   int settingsTaskbarScrollPx = 0;
 
@@ -522,10 +541,18 @@ struct App {
   int soundActiveDd = -1;
   int soundDdHoverRow = -1;
 
+  // Sound "Audio Center" child tab (SettingsSoundTab::SoundChildTab).
+  int soundChildTab = 0;
+
   int soundVolDragCode = -1;
 
   std::uint32_t soundVolDragPwNodeId = 0;
   std::uint64_t soundVolPwLastApplyMonoMs = 0;
+
+  // Restart-audio action state: armed (first click) and confirmation (after a
+  // successful restart), both -1 when idle.
+  std::int64_t soundRestartArmMonoMs = -1;
+  std::int64_t soundRestartDoneMonoMs = -1;
 
   std::optional<eh::audio::Snapshot> soundPaintSnapPending{};
 
@@ -581,6 +608,7 @@ struct App {
   bool notifPosDropdownOpen = false;
   int notifPosDropdownHoverRow = -1;
   int timeSliderDrag = -1;
+  int dashboardSliderDrag = -1;
   bool timeFormatDropdownOpen = false;
   int timeFormatDropdownHoverRow = -1;
   bool powerBtnDropdownOpen = false;
@@ -598,6 +626,7 @@ struct App {
   int appearanceColorSliderDrag = -1;
 
   int wallpaperUiSubTab = 0;
+  bool wallpaperViewOptionsOpen = false;
   int themesSubTab = 0;
   int colorThemesSliderDrag = -1;
   int colorThemeEditorPaletteSliderDrag = -1;

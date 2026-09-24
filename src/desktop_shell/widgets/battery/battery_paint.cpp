@@ -720,9 +720,11 @@ void dock_battery_popup_handle_click(::DockApp& app, double x, double y, uint32_
     return;
   }
 
-  constexpr double kPad = 16.0;
-  const double cbX = W - kPad - 24.0, cbY = kPad;
-  if (x >= cbX && x < cbX + 24.0 && y >= cbY && y < cbY + 24.0) {
+  // Same scaled metrics as paint (see Docs/hit-testing.md).
+  const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
+  const double kPad = 16.0 * us;
+  const double cbX = W - kPad - 24.0 * us, cbY = kPad;
+  if (x >= cbX && x < cbX + 24.0 * us && y >= cbY && y < cbY + 24.0 * us) {
     popup_close(app);
   }
 }

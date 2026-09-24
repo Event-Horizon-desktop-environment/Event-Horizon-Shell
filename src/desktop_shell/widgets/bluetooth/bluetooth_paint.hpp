@@ -51,6 +51,9 @@ struct BluetoothSnapshot {
   bool connected = false;
   int paired_count = 0;
   int connected_count = 0;
+  // Lowest battery percentage across connected devices that report one
+  // (org.bluez.Battery1); -1 when none do.
+  int battery_pct = -1;
 };
 
 [[nodiscard]] bool widget_list_contains_bluetooth(const eh::config::ShellConfig& sc,
@@ -78,6 +81,8 @@ void bluetooth_stop_discovery();
 [[nodiscard]] std::vector<BluetoothDevice> bluetooth_devices();
 // Return a snapshot of the current Bluetooth state.
 [[nodiscard]] BluetoothSnapshot bluetooth_snapshot();
+// Power the adapter on/off.
+void bluetooth_set_powered(bool on);
 // Return a material glyph name for the device kind.
 [[nodiscard]] const char* bluetooth_device_kind_glyph(BluetoothDeviceKind kind);
 // Connect to a device by its object path.
@@ -90,7 +95,7 @@ void bluetooth_pair_device(const std::string& path);
 void bluetooth_forget_device(const std::string& path);
 
 // Popup API.
-constexpr int kBluetoothPopupW = 340;
+constexpr int kBluetoothPopupW = 360;
 
 int bluetooth_popup_height();
 

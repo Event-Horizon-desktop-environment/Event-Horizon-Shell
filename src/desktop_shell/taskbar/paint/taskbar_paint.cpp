@@ -9,8 +9,8 @@
 #include "desktop_shell/common/ns/namespaces.hpp"
 #include "desktop_shell/shared/pins/pin_identity.hpp"
 #include "desktop_shell/common/glyph/material_glyph.hpp"
+#include "desktop_shell/common/asset/asset_loader.hpp"
 #include "desktop_shell/common/os_logo/os_logo.hpp"
-#include "desktop_shell/launchpad/host/launchpad_host.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
 #include "desktop_shell/widgets/shared/slot_pill_style.hpp"
 #include "desktop_shell/widgets/shared/slot_pill_style.hpp"
@@ -108,10 +108,10 @@ const eh::icons::IconEntry* paint_tray_icon(eh::icons::IconCache& icons, const s
 
 namespace eh::shell::taskbar {
 
-double taskbar_measure_content_width(TaskbarApp& app,
-                                      const std::vector<std::string>& leftW,
-                                      const std::vector<std::string>& centerW,
-                                      const std::vector<std::string>& rightW) {
+TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
+                                              const std::vector<std::string>& leftW,
+                                              const std::vector<std::string>& centerW,
+                                              const std::vector<std::string>& rightW) {
    
   const eh::config::ShellConfig& sc = eh::config::shell_config_snapshot();
   const double globalScale = std::clamp(sc.dock.shellUiScale, 0.5, 2.0);
@@ -121,9 +121,15 @@ double taskbar_measure_content_width(TaskbarApp& app,
   const double icon = std::clamp(iconRaw, 8.0, std::max(8.0, barH - 8.0));
   const double gap = static_cast<double>(app.settings.iconSpacing) * taskbarUIScale;
 
-  struct Slot { using Kind = eh::widgets::shared_slot_paint::SlotKind; Kind kind = Kind::App; };
+  struct Slot {
+    using Kind = eh::widgets::shared_slot_paint::SlotKind;
+    Kind kind = Kind::App;
+    bool isPinned = false;
+    std::string key;
+  };
   std::vector<Slot> pinnedSlots, runningSlots, traySlots;
   pinnedSlots.resize(app.settings.pinnedApps.size());
+  for (auto& s : pinnedSlots) s.isPinned = true;
   {
     size_t runningCount = 0;
     if (app.toplevels && app.toplevels->size() > 0) {
@@ -148,7 +154,7 @@ double taskbar_measure_content_width(TaskbarApp& app,
     if (w == "pinned_apps" || w == "running_apps") return false;
     if (eh::config::widget_token_is_system_tray(w)) return false;
     if (w == "settings_button" || w == "distro_spotlight" || w == "app_menu" ||
-        w == "launchpad" || w == "trash") return false;
+        w == "trash") return false;
     const std::string impl = eh::config::widget_implementation_type(w);
     return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" ||
            impl == "control_center" || impl == "notifications" || impl == "volume_mixer" ||
@@ -157,21 +163,26 @@ double taskbar_measure_content_width(TaskbarApp& app,
 
   auto slot_width = [&](const Slot& s) -> double {
     if (s.kind == Slot::Kind::Clock)
-      return eh::shell::dock_slot_hooks::dock_clock_slot_width(nullptr, sc, "", icon, barH);
+      return eh::shell::dock_slot_hooks::dock_clock_slot_width(nullptr, sc, s.key, icon, barH);
     if (s.kind == Slot::Kind::Weather)
-      return eh::shell::dock_slot_hooks::dock_weather_slot_width(nullptr, sc, "", icon, barH);
+      return eh::shell::dock_slot_hooks::dock_weather_slot_width(nullptr, sc, s.key, icon, barH);
     if (s.kind == Slot::Kind::Separator)
       return std::max(4.0, 6.0 * taskbarUIScale);
-    if (s.kind == Slot::Kind::Media)
-      return eh::shell::dock_slot_hooks::dock_media_slot_width(nullptr, sc, "", icon, barH, {});
+    if (s.kind == Slot::Kind::Media) {
+      const eh::mpris::PlayerSnapshot snap =
+          app.mpris ? app.mpris->snapshot() : eh::mpris::PlayerSnapshot{};
+      return eh::shell::dock_slot_hooks::dock_media_slot_width(nullptr, sc, s.key, icon, barH, snap);
+    }
     if (s.kind == Slot::Kind::Workspaces)
-      return eh::shell::dock_slot_hooks::dock_workspaces_slot_width(nullptr, sc, "", icon, barH, app.workspaceStrip);
+      return eh::shell::dock_slot_hooks::dock_workspaces_slot_width(nullptr, sc, s.key, icon, barH, app.workspaceStrip);
     if (s.kind == Slot::Kind::ControlCenter)
-      return eh::shell::dock_slot_hooks::dock_control_center_slot_width(sc, "", icon, barH);
+      return eh::shell::dock_slot_hooks::dock_control_center_slot_width(sc, s.key, icon, barH);
     if (s.kind == Slot::Kind::Battery)
-      return eh::shell::dock_slot_hooks::dock_battery_slot_width(nullptr, sc, "", icon, barH);
+      return eh::shell::dock_slot_hooks::dock_battery_slot_width(nullptr, sc, s.key, icon, barH);
     if (s.kind == Slot::Kind::Bluetooth)
-      return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, sc, "", icon, barH);
+      return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, sc, s.key, icon, barH);
+    if (s.kind == Slot::Kind::WorldClock)
+      return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, sc, s.key, icon, barH);
     return icon;
   };
 
@@ -185,18 +196,18 @@ double taskbar_measure_content_width(TaskbarApp& app,
     else if (wid == "distro_spotlight") out.push_back(spotlightSlot);
     else if (wid == "app_menu") out.push_back(appMenuSlot);
     else if (eh::config::widget_implementation_type(wid) == "app_drawer") out.push_back(appDrawerSlot);
-    else if (eh::config::widget_implementation_type(wid) == "smenu") { Slot sm; sm.kind = Slot::Kind::Smenu; out.push_back(std::move(sm)); }
-    else if (wid == "launchpad" || eh::config::widget_implementation_type(wid) == "launchpad") { Slot lp; lp.kind = Slot::Kind::Launchpad; out.push_back(std::move(lp)); }
-    else if (eh::config::widget_implementation_type(wid) == "clock") { Slot cs; cs.kind = Slot::Kind::Clock; out.push_back(std::move(cs)); }
-    else if (eh::config::widget_implementation_type(wid) == "weather") { Slot ws; ws.kind = Slot::Kind::Weather; out.push_back(std::move(ws)); }
-    else if (eh::config::widget_implementation_type(wid) == "media") { Slot ms; ms.kind = Slot::Kind::Media; out.push_back(std::move(ms)); }
-    else if (eh::config::widget_implementation_type(wid) == "workspaces") { Slot ws; ws.kind = Slot::Kind::Workspaces; out.push_back(std::move(ws)); }
-    else if (eh::config::widget_implementation_type(wid) == "control_center") { Slot cc; cc.kind = Slot::Kind::ControlCenter; out.push_back(std::move(cc)); }
-    else if (wid == "trash" || eh::config::widget_implementation_type(wid) == "trash") { Slot ts; ts.kind = Slot::Kind::Trash; out.push_back(std::move(ts)); }
-    else if (eh::config::widget_implementation_type(wid) == "volume_mixer") { Slot vm; vm.kind = Slot::Kind::VolumeMixer; out.push_back(std::move(vm)); }
-    else if (eh::config::widget_implementation_type(wid) == "battery") { Slot bs; bs.kind = Slot::Kind::Battery; out.push_back(std::move(bs)); }
-    else if (eh::config::widget_implementation_type(wid) == "bluetooth") { Slot bts; bts.kind = Slot::Kind::Bluetooth; out.push_back(std::move(bts)); }
-    else if (eh::config::widget_implementation_type(wid) == "vpn") { Slot vs; vs.kind = Slot::Kind::Vpn; out.push_back(std::move(vs)); }
+    else if (eh::config::widget_implementation_type(wid) == "smenu") { Slot sm; sm.kind = Slot::Kind::Smenu; sm.key = wid; out.push_back(std::move(sm)); }
+    else if (eh::config::widget_implementation_type(wid) == "clock") { Slot cs; cs.kind = Slot::Kind::Clock; cs.key = wid; out.push_back(std::move(cs)); }
+    else if (eh::config::widget_implementation_type(wid) == "weather") { Slot ws; ws.kind = Slot::Kind::Weather; ws.key = wid; out.push_back(std::move(ws)); }
+    else if (eh::config::widget_implementation_type(wid) == "media") { Slot ms; ms.kind = Slot::Kind::Media; ms.key = wid; out.push_back(std::move(ms)); }
+    else if (eh::config::widget_implementation_type(wid) == "workspaces") { Slot ws; ws.kind = Slot::Kind::Workspaces; ws.key = wid; out.push_back(std::move(ws)); }
+    else if (eh::config::widget_implementation_type(wid) == "control_center") { Slot cc; cc.kind = Slot::Kind::ControlCenter; cc.key = wid; out.push_back(std::move(cc)); }
+    else if (wid == "trash" || eh::config::widget_implementation_type(wid) == "trash") { Slot ts; ts.kind = Slot::Kind::Trash; ts.key = wid; out.push_back(std::move(ts)); }
+    else if (eh::config::widget_implementation_type(wid) == "volume_mixer") { Slot vm; vm.kind = Slot::Kind::VolumeMixer; vm.key = wid; out.push_back(std::move(vm)); }
+    else if (eh::config::widget_implementation_type(wid) == "battery") { Slot bs; bs.kind = Slot::Kind::Battery; bs.key = wid; out.push_back(std::move(bs)); }
+    else if (eh::config::widget_implementation_type(wid) == "bluetooth") { Slot bts; bts.kind = Slot::Kind::Bluetooth; bts.key = wid; out.push_back(std::move(bts)); }
+    else if (eh::config::widget_implementation_type(wid) == "vpn") { Slot vs; vs.kind = Slot::Kind::Vpn; vs.key = wid; out.push_back(std::move(vs)); }
+    else if (eh::config::widget_implementation_type(wid) == "world_clock") { Slot wcs; wcs.kind = Slot::Kind::WorldClock; wcs.key = wid; out.push_back(std::move(wcs)); }
   };
 
   auto build_section = [&](const std::vector<std::string>& widgets) {
@@ -215,16 +226,37 @@ double taskbar_measure_content_width(TaskbarApp& app,
   all.insert(all.end(), center.begin(), center.end());
   all.insert(all.end(), right.begin(), right.end());
 
+  // Gap rules shared with the paint pass (taskbar_paint_widget_bar): tray
+  // items pack together, and app groups pack only when their tray pill is on.
+  auto gap_between = [&](const Slot& a, const Slot& b) -> double {
+    if (a.kind == Slot::Kind::Tray && b.kind == Slot::Kind::Tray) return 0.0;
+    if (a.kind == Slot::Kind::App && a.isPinned && b.kind == Slot::Kind::App && b.isPinned)
+      return app.settings.pinnedAppsTrayPill ? 0.0 : gap;
+    if (a.kind == Slot::Kind::App && !a.isPinned && b.kind == Slot::Kind::App && !b.isPinned)
+      return app.settings.runningAppsTrayPill ? 0.0 : gap;
+    return gap;
+  };
+
+  auto section_w = [&](const std::vector<Slot>& slots) -> double {
+    double tw = 0.0;
+    for (size_t i = 0; i < slots.size(); i++) {
+      tw += slot_width(slots[i]);
+      if (i + 1 < slots.size()) tw += gap_between(slots[i], slots[i + 1]);
+    }
+    return tw;
+  };
+
+  TaskbarSectionWidths out;
+  out.left = section_w(left);
+  out.center = section_w(center);
+  out.right = section_w(right);
   double totalW = 0.0;
   for (size_t i = 0; i < all.size(); i++) {
     totalW += slot_width(all[i]);
-    if (i + 1 < all.size()) {
-      if (all[i].kind == Slot::Kind::Tray && all[i+1].kind == Slot::Kind::Tray) {}
-      else if (all[i].kind == Slot::Kind::App && all[i+1].kind == Slot::Kind::App) {}
-      else totalW += gap;
-    }
+    if (i + 1 < all.size()) totalW += gap_between(all[i], all[i + 1]);
   }
-  return totalW;
+  out.total = totalW;
+  return out;
 }
 
 void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
@@ -437,9 +469,9 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     if (w == "pinned_apps" || w == "running_apps") return false;
     if (eh::config::widget_token_is_system_tray(w)) return false;
     if (w == "settings_button" || w == "distro_spotlight" || w == "app_menu" ||
-        w == "launchpad" || w == "trash") return false;
+        w == "trash") return false;
     const std::string impl = eh::config::widget_implementation_type(w);
-    return impl == "clock" || impl == "weather" || impl == "media" || impl == "workspaces" ||
+    return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" ||
            impl == "control_center" || impl == "notifications" || impl == "volume_mixer" ||
            impl == "app_drawer";
   };
@@ -463,8 +495,6 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       out.push_back(appDrawerSlot);
     } else if (eh::config::widget_implementation_type(wid) == "smenu") {
       Slot sm; sm.kind = Slot::Kind::Smenu; sm.key = wid; out.push_back(std::move(sm));
-    } else if (wid == "launchpad" || eh::config::widget_implementation_type(wid) == "launchpad") {
-      Slot lp; lp.kind = Slot::Kind::Launchpad; lp.key = wid; out.push_back(std::move(lp));
     } else if (eh::config::widget_implementation_type(wid) == "clock") {
       Slot cs; cs.kind = Slot::Kind::Clock; cs.key = wid; out.push_back(std::move(cs));
     } else if (eh::config::widget_implementation_type(wid) == "weather") {
@@ -547,24 +577,25 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     return icon;
   };
 
+  // Single source of truth for inter-slot gaps (also used by
+  // taskbar_measure_sections so fill-mode bar sizing matches what paints).
+  auto gap_between = [&](const Slot& a, const Slot& b) -> double {
+    if (a.kind == Slot::Kind::Tray && b.kind == Slot::Kind::Tray) return 0.0;
+    if (a.kind == Slot::Kind::App && a.isPinned && b.kind == Slot::Kind::App && b.isPinned)
+      return app.settings.pinnedAppsTrayPill ? 0.0 : gap;
+    if (a.kind == Slot::Kind::App && !a.isPinned && b.kind == Slot::Kind::App && !b.isPinned)
+      return app.settings.runningAppsTrayPill ? 0.0 : gap;
+    return gap;
+  };
+
   auto gap_after_local = [&](size_t idx) -> double {
     if (idx + 1 >= all.size()) return 0.0;
-    if (all[idx].kind == Slot::Kind::Tray && all[idx + 1].kind == Slot::Kind::Tray) return 0.0;
-    if (app.settings.pinnedAppsTrayPill && all[idx].kind == Slot::Kind::App && all[idx].isPinned &&
-        all[idx + 1].kind == Slot::Kind::App && all[idx + 1].isPinned) return 0.0;
-    if (app.settings.runningAppsTrayPill && all[idx].kind == Slot::Kind::App && !all[idx].isPinned &&
-        all[idx + 1].kind == Slot::Kind::App && !all[idx + 1].isPinned) return 0.0;
-    return gap;
+    return gap_between(all[idx], all[idx + 1]);
   };
 
   auto gap_after_slots = [&](const std::vector<Slot>& slots, size_t idx) -> double {
     if (idx + 1 >= slots.size()) return 0.0;
-    if (slots[idx].kind == Slot::Kind::Tray && slots[idx + 1].kind == Slot::Kind::Tray) return 0.0;
-    if (app.settings.pinnedAppsTrayPill && slots[idx].kind == Slot::Kind::App && slots[idx].isPinned &&
-        slots[idx + 1].kind == Slot::Kind::App && slots[idx + 1].isPinned) return 0.0;
-    if (app.settings.runningAppsTrayPill && slots[idx].kind == Slot::Kind::App && !slots[idx].isPinned &&
-        slots[idx + 1].kind == Slot::Kind::App && !slots[idx + 1].isPinned) return 0.0;
-    return gap;
+    return gap_between(slots[idx], slots[idx + 1]);
   };
 
   auto section_width = [&](const std::vector<Slot>& slots) -> double {
@@ -576,8 +607,12 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     return tw;
   };
 
-  const double stripInner = 12.0 * taskbarUIScale;
-  const double secGapPaint = 0.0;
+  // Inner padding against the bar's rounded ends plus a breathing gap between
+  // the left/center/right sections (shared with the fill-mode bar sizing in
+  // taskbar_draw so both agree on the geometry).
+  const double stripPad = eh::shell::taskbar::strip_pad_px(taskbarUIScale);
+  const double secGapPaint = eh::shell::taskbar::section_gap_px(taskbarUIScale);
+  const double stripInner = stripPad * 2.0;
   const double lw = section_width(left);
   const double cw = section_width(center);
   const double rw = section_width(right);
@@ -594,32 +629,36 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     }
   }
 
-  // Panel layout
-  double panelLeftX = x;
+  // Panel layout: sections anchored with inner padding — left at the padded
+  // start, right at the padded end, center truly centered on the bar (and
+  // therefore on the screen). The checks below downgrade to the centered
+  // strip layout when the sections would collide.
+  double panelLeftX = x + stripPad;
   double panelCenterX = x + (boxW - cw) / 2.0;
-  double panelRightX = x + boxW - rw;
+  double panelRightX = x + boxW - stripPad - rw;
   {
     const double pad = secGapPaint;
+    const double innerL = x + stripPad;
+    const double innerR = x + boxW - stripPad;
     if (!left.empty() && !right.empty() && panelLeftX + lw + pad > panelRightX) use_panel = false;
     if (use_panel && !left.empty() && !center.empty() && panelLeftX + lw + pad > panelCenterX) use_panel = false;
     if (use_panel && !center.empty() && !right.empty() && panelCenterX + cw + pad > panelRightX) use_panel = false;
-    if (use_panel && left.empty() && center.empty() && !right.empty() && rw > boxW) use_panel = false;
-    if (use_panel && !left.empty() && center.empty() && right.empty() && lw > boxW) use_panel = false;
-    if (use_panel && left.empty() && !center.empty() && right.empty() && cw > boxW) use_panel = false;
+    // Every section must stay inside the padded content zone.
+    if (use_panel && !left.empty() && panelLeftX + lw > innerR + 1e-9) use_panel = false;
+    if (use_panel && !center.empty() &&
+        (panelCenterX < innerL - 1e-9 || panelCenterX + cw > innerR + 1e-9)) use_panel = false;
+    if (use_panel && !right.empty() &&
+        (panelRightX < innerL - 1e-9 || panelRightX + rw > innerR + 1e-9)) use_panel = false;
   }
 
   const double iconY = y + (boxH - icon) / 2.0;
-  const double startX = use_panel ? 0.0 : x + (boxW - totalW) / 2.0;
 
   bool mediaMarqueeAccum = false;
 
   auto render_section = [&](const std::vector<Slot>& slots, double x0, int slotIndexBase) {
     auto gap_local = [&](size_t idx) -> double {
       if (idx + 1 >= slots.size()) return 0.0;
-      if (slots[idx].kind == Slot::Kind::Tray && slots[idx + 1].kind == Slot::Kind::Tray) return 0.0;
-      if (slots[idx].kind == Slot::Kind::App && slots[idx].isPinned &&
-          slots[idx + 1].kind == Slot::Kind::App && slots[idx + 1].isPinned) return 0.0;
-      return gap;
+      return gap_between(slots[idx], slots[idx + 1]);
     };
 
     auto slot_lift = [&](size_t idx) -> double {
@@ -631,13 +670,15 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
           slots[idx].kind != Slot::Kind::ControlCenter && slots[idx].kind != Slot::Kind::Separator &&
           slots[idx].kind != Slot::Kind::Settings && slots[idx].kind != Slot::Kind::Spotlight &&
           slots[idx].kind != Slot::Kind::AppDrawer && slots[idx].kind != Slot::Kind::Smenu &&
-          slots[idx].kind != Slot::Kind::Launchpad &&
           slots[idx].kind != Slot::Kind::Trash && slots[idx].kind != Slot::Kind::AppMenu &&
           slots[idx].kind != Slot::Kind::Tray && slots[idx].kind != Slot::Kind::Workspaces &&
           slots[idx].kind != Slot::Kind::VolumeMixer && slots[idx].kind != Slot::Kind::Vpn &&
           slots[idx].kind != Slot::Kind::Battery &&
           slots[idx].kind != Slot::Kind::Bluetooth) ly -= taskbarHoverLiftPx;
-      if (gIdx == taskbarPressedSlot) ly -= kPressLiftPx;
+      if (gIdx == taskbarPressedSlot && slots[idx].kind == Slot::Kind::App) ly -= kPressLiftPx;
+      // Launch feedback: the launching/activating app slot hops (damped sine,
+      // dock parity). Widget slots never bounce — they don't launch apps.
+      if (slots[idx].kind == Slot::Kind::App) ly += taskbar_launch_bounce_lift_y(app, slots[idx].key);
       return ly;
     };
 
@@ -659,7 +700,13 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
 
       const int globalIdx = static_cast<int>(i) + slotIndexBase;
       const bool hovered = (taskbarHoverSlot >= 0 && globalIdx == taskbarHoverSlot);
+      // Raw press flag: the media / workspaces / control-center hooks take it
+      // as-is for their own internal feedback (transport buttons, cells, …).
       const bool pressed = (taskbarPressedSlot >= 0 && globalIdx == taskbarPressedSlot);
+      // Dock parity: the generic slot press overlay (outline + press scale +
+      // press lift) only lights up app slots. Widget slots are wide and paint
+      // their own feedback, so an icon-sized box over them reads wrong.
+      const bool slotPressed = pressed && s.kind == Slot::Kind::App;
       const double liftY = slot_lift(i);
       auto hover_overlay = [&] {
         const double r = eh::shell::dock_slot_hooks::slot_pill::corner_radius(icon, slotW);
@@ -670,7 +717,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
         cairo_set_line_width(cr, 1.0);
         cairo_stroke(cr);
       };
-      const double pressS = pressed ? kPressIconScale : 1.0;
+      const double pressS = slotPressed ? kPressIconScale : 1.0;
       const bool usePress = (pressS < 0.999);
 
       if (s.kind == Slot::Kind::Separator) {
@@ -685,8 +732,11 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
         continue;
       }
 
-      if (pressed) {
-        rounded_rect(ix - 2.0, iconY + liftY - 2.0, icon + 4.0, icon + 4.0, 14.0);
+      if (slotPressed) {
+        // Cover the whole slot: pinned/running app slots can be wider than
+        // their icon when a label is shown, and an icon-sized rect only lit
+        // up half the item.
+        rounded_rect(ix - 2.0, iconY + liftY - 2.0, slotW + 4.0, icon + 4.0, 14.0);
         cairo_set_source_rgba(cr, 1.00, 1.00, 1.00, 0.12);
         cairo_fill_preserve(cr);
         cairo_set_source_rgba(cr, 0.55, 0.80, 1.00, 0.58);
@@ -695,7 +745,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       }
 
       if (usePress) {
-        const double pcx = ix + icon * 0.5;
+        const double pcx = ix + slotW * 0.5;
         const double pcy = iconY + liftY + icon * 0.5;
         cairo_save(cr);
         cairo_translate(cr, pcx, pcy);
@@ -742,13 +792,6 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
                                                 mc.accentR, mc.accentG, mc.accentB);
           drew = true;
         }
-      } else if (s.kind == Slot::Kind::Launchpad) {
-        if (hovered) hover_overlay();
-        // The launchpad Host lives in the split-out horizon-dock child; the
-        // taskbar paints the identical dock button via the shared paint-only
-        // helper (clicks are forwarded as `launchpad.toggle` on the IPC bus).
-        eh::shell::launchpad::paint_launchpad_dock_button(cr, ix, iconY + liftY, icon, hovered);
-        drew = true;
       } else if (s.kind == Slot::Kind::Trash) {
         if (hovered) hover_overlay();
         if (app.trashFull == 0) {
@@ -946,9 +989,8 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       } else if (s.kind == Slot::Kind::App) {
         // Pill outline behind consecutive pinned apps
         if (s.isPinned && app.settings.pinnedAppsTrayPill) {
-          const bool prevIsLaunchpad = i > 0 && slots[i - 1].kind == Slot::Kind::Launchpad;
           const bool firstPinnedInRun = (i == 0 || slots[i - 1].kind != Slot::Kind::App || !slots[i - 1].isPinned);
-          if (firstPinnedInRun && !prevIsLaunchpad) {
+          if (firstPinnedInRun) {
             size_t runEnd = i;
             while (runEnd + 1 < slots.size() && slots[runEnd + 1].kind == Slot::Kind::App && slots[runEnd + 1].isPinned)
               runEnd++;
@@ -1041,6 +1083,12 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
   } else {
     const double midX = x + boxW * 0.5;
     const double hScale = tb_strip_h_scale(boxW, totalW, stripInner);
+    // Keep the strip at least stripPad from both ends: anchor it there when
+    // compression is active, otherwise keep it centered (tb_strip_h_scale only
+    // allows widths that fit the padded zone, so the clamp never truncates).
+    const double startX = hScale < 1.0 - 1e-9
+        ? midX + ((x + stripPad) - midX) / hScale
+        : x + std::max(stripPad, (boxW - totalW) * 0.5);
     if (hScale < 1.0 - 1e-9) {
       cairo_save(cr);
       cairo_translate(cr, midX, 0.0);
@@ -1053,11 +1101,11 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
         render_section(all, startX, 0);
       }
       cairo_restore(cr);
+      // The compression transform only touches x: map hit x/w the same way.
       if (out_hits) {
         for (auto& hh : *out_hits) {
           hh.x = midX + (hh.x - midX) * hScale;
           hh.w = hh.w * hScale;
-          hh.h = hh.h * hScale;
         }
       }
     } else {

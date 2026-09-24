@@ -287,6 +287,8 @@ if (zone == NightlightButton) {
 
 **Functions:**
 - `dock_pick(app, sx, sy)` - main hit test. Returns `DockPickResult` with `slot_index`, `slot_kind` (App, Tray, Settings, etc.), and hit position
+- `dock_compute_strip_geom(app, pr, pill_x, box_w)` / `DockStripGeom` - shared computed strip geometry (slot widths, section gaps, lr layout, hScale compression, paint's `dock_strip_inner_margin`) used by both hit-testing and the pinned-drag fallback
+- `dock_slot_layout_x(app, pr, g, idx)` - layout x of a slot within the shared geometry
 - `dock_pick_workspace_index(app, result, idx, px)` - hit test within workspace strip
 - `dock_strip_slot_xw(app, result, idx)` - returns slot X position and width
 
@@ -305,13 +307,17 @@ if (zone == NightlightButton) {
 **Purpose:** Pinned app management for both dock bar and start menu.
 
 **Functions:**
-- `dock_pinned_apps_source_for_layout(app)` - returns the list of app IDs to show in the bar (pinned + running windows)
+- `dock_pinned_apps_source_for_layout(app)` - returns the list of app IDs to show in the bar (pinned + running windows); while dragging, returns the in-flight paint order (or the press snapshot before the first reorder)
 - `dock_pin_drag_rebuild_paint_order(app)` - rebuilds paint order after user drags to reorder
+- `dock_pinned_pointer_motion(app)` - pin-drag motion: threshold cross, insert index + hysteresis against the press-time paint-geometry snapshot (`pinDragGeometryValid` fields; computed `dock_pinned_drag_geometry()` is the fallback), and the glide re-flip (bakes `pinDragShiftFrom`, restarts the ~160 ms `shellAnim` shift)
+- `dock_pinned_filtered_keys(src)` - normalized pinned-key list the layout paints (drops `unknown`/settings pseudo-apps); shared by motion and the press handler
 - `dock_pinned_serialize(app)` - writes pinned apps to config
 - `dock_pinned_add(app, desktop_path)` - pins an app
 - `dock_pinned_remove(app, idx)` - un-pins an app
 - `dock_pinned_move(app, from, to)` - reorder pinned app
 - `dock_pinned_is_pinned(app, app_id)` - checks if app is pinned
+
+**Pin press init** (`dock/input/dock_slot_dispatch.cpp`): snapshots the painted pinned-run geometry (`dock_pin_drag_capture_geometry`, retained hit rects → `pinDragFirstLeftSurf`/`Stride`/`IconSurf`/`PinnedCount`), resets the glide state, and seeds `pinDragInsertIdx` with the pin's real filtered index so the first commit has hysteresis.
 
 **Pin sources:**
 - Dock bar pinned apps: from `settings.pinnedAppIds`

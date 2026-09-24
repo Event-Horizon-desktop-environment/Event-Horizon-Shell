@@ -1,6 +1,7 @@
 #include "desktop_shell/dock/tooltip/dock_tooltip.hpp"
 
 #include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/dock/core/dock_boot_log.hpp"
 #include "desktop_shell/dock/output/dock_layer_outputs.hpp"
 #include "desktop_shell/dock/input/dock_pick.hpp"
 #include "desktop_shell/dock/input/dock_position.hpp"
@@ -62,7 +63,6 @@ std::string resolve_text_for_slot(const PickSlot& slot, const DockPickResult& pr
     case PickSlot::Kind::Spotlight:       return "Search";
     case PickSlot::Kind::AppMenu:         return "Applications";
     case PickSlot::Kind::Smenu:           return "Start Menu";
-    case PickSlot::Kind::Launchpad:       return "Launchpad";
     case PickSlot::Kind::AppDrawer:       return "All Apps";
     case PickSlot::Kind::Trash:           return "Trash";
     case PickSlot::Kind::Media:           return {};
@@ -219,6 +219,9 @@ static void create(DockApp& app, const std::string& text, double centerX, int sl
   app.tooltipConfigured = false;
   app.tooltipText = text;
   app.tooltipShownSlot = slotIdx;
+  eh::shell::dock::dock_boot_surface("tooltip", cfg.nameSpace, cfg.anchor, cfg.width, cfg.height,
+                                     cfg.exclusiveZone, cfg.marginTop, cfg.marginRight, cfg.marginBottom,
+                                     cfg.marginLeft, "<tooltip>");
 
   wl_surface_commit(surf);
   if (app.display) wl_display_roundtrip(app.display);
@@ -255,6 +258,9 @@ void dock_tooltip_cancel(DockApp& app) {
 }
 
 void dock_tooltip_tick(DockApp& app) {
+  // Never open a tooltip mid pin-drag: create() commits a layer surface and
+  // does a blocking wl_display_roundtrip, which stalls the drag.
+  if (app.pinDragging || app.pinDragCandidate) return;
   if (app.tooltipHoverSlot < 0) return;
   if (!app.settings.dockTooltipsEnabled) return;
   if (app.tooltipShownSlot == app.tooltipHoverSlot) return;

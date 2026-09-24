@@ -4,6 +4,7 @@
 #include "desktop_shell/common/ns/namespaces.hpp"
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/dock/pinned/dock_pin_identity.hpp"
+#include "desktop_shell/dock/tooltip/dock_tooltip.hpp"
 #include "desktop_shell/shared/pins/pin_identity.hpp"
 #include "desktop_shell/common/fs/shell_paths.hpp"
 #include "desktop_shell/desktop/entries/desktop_entries.hpp"
@@ -229,6 +230,15 @@ void dock_pinned_pointer_motion(DockApp& app) {
     if (dist2 < (6.0 * 6.0)) return;
     app.pinDragging = true;
     app.pinDragLayerOnlyNextDraw = false;
+    // The drag owns hover from here: drop the hover-lift and any tooltip —
+    // tooltip create() does a blocking wl_display_roundtrip, which would
+    // stutter the drag, and the lift would track a slot that is shuffling.
+    app.dockHoverSlot = -1;
+    app.dockHoverLiftTarget = 0.0;
+    app.dockHoverLiftPx = 0.0;
+    app.shellAnim.cancel(app.dockHoverLiftAnimId);
+    app.dockHoverLiftAnimId = 0;
+    dock_tooltip_cancel(app);
     if (eh_dock_pin_drag_perf_enabled()) {
       std::cerr << "[dock-pin-perf] threshold_cross key=" << app.pinDragKey << " ptr=(" << app.pointerX << ","
                 << app.pointerY << ") dist2=" << dist2 << "\n";
@@ -242,17 +252,22 @@ void dock_pinned_pointer_motion(DockApp& app) {
   const bool perf = eh_dock_pin_drag_perf_enabled();
   const auto perf_t0 = perf ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
-  const DockPinnedDragGeometry geo = dock_pinned_drag_geometry(app);
+  // Paint's snapshot of the pinned run (captured at press) is the primary
+  // geometry; the computed layout is only the fallback when it is stale.
+  DockPinnedDragGeometry geo;
+  if (app.pinDragGeometryValid) {
+    geo.valid = true;
+    geo.firstPinnedLeftSurf = app.pinDragFirstLeftSurf;
+    geo.slotStrideSurf = app.pinDragSlotStrideSurf;
+    geo.iconSurf = app.pinDragIconSurf;
+    geo.pinnedCount = app.pinDragPinnedCount;
+  } else {
+    geo = dock_pinned_drag_geometry(app);
+  }
   if (!geo.valid || geo.pinnedCount < 2) return;
 
-  const std::vector<std::string>& pinSrc = dock_pinned_apps_source_for_layout(app);
-  std::vector<std::string> pinnedKeys;
-  pinnedKeys.reserve(pinSrc.size());
-  for (const auto& pRaw : pinSrc) {
-    const std::string p = eh::shell::paths::normalize_desktop_app_id(pRaw);
-    if (p == "unknown" || p == eh::shell::kSettingsAppId) continue;
-    pinnedKeys.push_back(p);
-  }
+  const std::vector<std::string> pinnedKeys =
+      dock_pinned_filtered_keys(dock_pinned_apps_source_for_layout(app));
   if (pinnedKeys.empty()) return;
 
   const int pinsCount = static_cast<int>(pinnedKeys.size());
@@ -273,15 +288,6 @@ void dock_pinned_pointer_motion(DockApp& app) {
   if (pinsCount <= 1) return;
 
   const int reducedCount = pinsCount - 1;
-  int reducedSlot = 0;
-  std::vector<double> centers;
-  centers.reserve(static_cast<size_t>(reducedCount));
-  for (int i = 0; i < pinsCount; i++) {
-    if (i == curIdx) continue;
-    const double cx = geo.firstPinnedLeftSurf + static_cast<double>(reducedSlot) * geo.slotStrideSurf + geo.iconSurf * 0.5;
-    centers.push_back(cx);
-    ++reducedSlot;
-  }
 
   int rawInsert = reducedCount;
   for (int i = 0; i < reducedCount; i++) {
@@ -317,17 +323,57 @@ void dock_pinned_pointer_motion(DockApp& app) {
 
   if (insertInReduced == app.pinDragInsertIdx) {
     ++app.pinDragPerfGhostCoalesce;
-    app.pinDragLayerOnlyNextDraw = true;
+    // Layer-only fast path is fine while nothing moves, but not while a glide
+    // from the previous flip is still animating (other layers would lag).
+    app.pinDragLayerOnlyNextDraw = app.pinDragShiftAnimId == 0;
     if (!app.frameCallback) dock_schedule_frame(app);
     else if (perf) ++app.pinDragPerfScheduleNoop;
     return;
   }
+  // pinnedKeys still holds the pre-flip order: bake the in-flight glide
+  // against it before the rebuild changes the target layout.
+  const std::vector<std::string> oldOrder = pinnedKeys;
   app.pinDragInsertIdx = insertInReduced;
   app.pinDragLayerOnlyNextDraw = false;
   ++app.pinDragPerfInsertChanges;
 
   dock_pin_drag_rebuild_paint_order(app);
   app.pinDragDirty = (app.pinDragPaintOrder != app.pinDragPinsSnapshot);
+
+  // Glide: rebased per-key offsets — where each pin visually is right now
+  // (old target + in-flight remainder) relative to its new target slot —
+  // animated back to 0 so neighbours slide instead of teleporting.
+  {
+    const std::vector<std::string> newOrder =
+        dock_pinned_filtered_keys(dock_pinned_apps_source_for_layout(app));
+    const double leftover = 1.0 - app.pinDragShiftT;
+    std::unordered_map<std::string, double> nextFrom;
+    nextFrom.reserve(newOrder.size());
+    for (size_t ni = 0; ni < newOrder.size(); ++ni) {
+      int oi = -1;
+      for (size_t k = 0; k < oldOrder.size(); ++k) {
+        if (oldOrder[k] == newOrder[ni]) {
+          oi = static_cast<int>(k);
+          break;
+        }
+      }
+      if (oi < 0) continue;
+      double v = static_cast<double>(oi) - static_cast<double>(ni);
+      if (const auto it = app.pinDragShiftFrom.find(newOrder[ni]); it != app.pinDragShiftFrom.end())
+        v += it->second * leftover;
+      if (v != 0.0) nextFrom.emplace(newOrder[ni], v);
+    }
+    app.pinDragShiftFrom = std::move(nextFrom);
+    app.pinDragShiftT = 0.0;
+    app.shellAnim.cancel(app.pinDragShiftAnimId);
+    app.pinDragShiftAnimId = app.shellAnim.animate(
+        0.f, 1.f, 160.f, eh::shell::Easing::EaseOutCubic,
+        [&app](float v) { app.pinDragShiftT = static_cast<double>(v); },
+        [&app] {
+          app.pinDragShiftAnimId = 0;
+          app.pinDragShiftT = 1.0;
+        });
+  }
 
   const bool had_frame_before = app.frameCallback != nullptr;
   if (!app.frameCallback) dock_schedule_frame(app);
@@ -353,6 +399,17 @@ const std::vector<std::string>& dock_pinned_apps_source_for_layout(const DockApp
     return app.pinDragPinsSnapshot;
   }
   return app.settings.pinnedApps;
+}
+
+std::vector<std::string> dock_pinned_filtered_keys(const std::vector<std::string>& src) {
+  std::vector<std::string> out;
+  out.reserve(src.size());
+  for (const auto& raw : src) {
+    const std::string p = eh::shell::paths::normalize_desktop_app_id(raw);
+    if (p == "unknown" || p == eh::shell::kSettingsAppId) continue;
+    out.push_back(p);
+  }
+  return out;
 }
 
 void dock_pin_drag_rebuild_paint_order(DockApp& app) {

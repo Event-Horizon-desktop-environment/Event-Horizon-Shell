@@ -19,67 +19,110 @@ using eh::shell::str::utf8_pop_back;
 #include <algorithm>
 #include <cmath>
 
+#include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
+#include "desktop_shell/controlcenter/debug/control_center_log.hpp"
+
 using eh::shell::dock::control_center::ControlCenterActiveModal;
+using eh::shell::dock::control_center::CcHoverTarget;
 
 namespace eh::shell::control_center {
 
+// Re-create the popup at the expansion-aware height. Creation placement is
+// always correct (bottom pinned above the dock), and popup_close preserves
+// expansion flags, so this both resizes and keeps position. Live set_size is
+// deliberately not used: on this compositor a resized surface keeps its top
+// edge, which pushes growth down under the dock.
+static void cc_resize_popup(DockApp& app, uint32_t serial, const char* reason) {
+  namespace ccl = eh::shell::dock::control_center;
+  const int wantH = static_cast<int>(std::ceil(control_center_popup_height(app)));
+  ccl::cc_log(std::string("resize reason=") + reason + " open w=" + std::to_string(app.popupW) +
+              " h=" + std::to_string(app.popupH) + " want=" + std::to_string(wantH) +
+              " anchorX=" + std::to_string(app.popupAnchorX));
+  if (wantH < app.popupH) {
+    // Shrinking: leave the surface in place so the collapse animation plays
+    // unclipped; the settle check downsizes once it finishes.
+    popup_draw_surface(app);
+    wl_display_flush(app.display);
+    return;
+  }
+  popup_open_control_center(app, app.popupAnchorX, serial, false);
+  ccl::cc_log(std::string("resize created w=") + std::to_string(app.popupW) +
+              " h=" + std::to_string(app.popupH));
+  popup_draw_surface(app);
+  wl_display_flush(app.display);
+}
+
+static void cc_toggle_expand(bool& flag, uint64_t& animStart, bool& animFrom, bool& animTo) {
+  animFrom = flag;
+  flag = !flag;
+  animTo = flag;
+  animStart = now_mono_ms();
+}
+
+static void cc_update_hover(DockApp& app) {
+  auto& s = app.ccState;
+  const double px = app.pointerX, py = app.pointerY;
+  CcHoverTarget t = CcHoverTarget::None;
+  int row = -1, sid = -1;
+
+  // Buttons first (small targets), then rows, then cards.
+  const int mz = control_center_media_button_hit(app, px, py);
+  if (mz == 0) t = CcHoverTarget::MediaPrev;
+  else if (mz == 1) t = CcHoverTarget::MediaPlayPause;
+  else if (mz == 2) t = CcHoverTarget::MediaNext;
+  if (t == CcHoverTarget::None && control_center_audio_mute_icon_hit(app, CcAudioSliderKind::Output, px, py))
+    t = CcHoverTarget::OutputAudioMute;
+  if (t == CcHoverTarget::None && control_center_audio_mute_icon_hit(app, CcAudioSliderKind::Input, px, py))
+    t = CcHoverTarget::InputAudioMute;
+  double dummy = 0.0;
+  if (t == CcHoverTarget::None && control_center_audio_slider_hit(app, CcAudioSliderKind::Output, px, py, &dummy))
+    t = CcHoverTarget::OutputAudioSlider;
+  if (t == CcHoverTarget::None && control_center_audio_slider_hit(app, CcAudioSliderKind::Input, px, py, &dummy))
+    t = CcHoverTarget::InputAudioSlider;
+  if (t == CcHoverTarget::None && control_center_network_card_hit(app, px, py)) t = CcHoverTarget::NetworkCard;
+  if (t == CcHoverTarget::None && control_center_bluetooth_card_hit(app, px, py)) t = CcHoverTarget::BluetoothCard;
+  if (t == CcHoverTarget::None && control_center_audio_card_hit(app, CcAudioSliderKind::Output, px, py))
+    t = CcHoverTarget::OutputAudioSlider;
+  if (t == CcHoverTarget::None && control_center_audio_card_hit(app, CcAudioSliderKind::Input, px, py))
+    t = CcHoverTarget::InputAudioSlider;
+  if (t == CcHoverTarget::None && control_center_network_row_hit(app, px, py, &row)) t = CcHoverTarget::NetworkRow;
+  if (t == CcHoverTarget::None && control_center_bluetooth_row_hit(app, px, py, &row))
+    t = CcHoverTarget::BluetoothRow;
+  if (t == CcHoverTarget::None && control_center_output_devices_row_hit(app, px, py, &row))
+    t = CcHoverTarget::OutputDeviceRow;
+  if (t == CcHoverTarget::None && control_center_input_devices_row_hit(app, px, py, &row))
+    t = CcHoverTarget::InputDeviceRow;
+  if (t == CcHoverTarget::None && control_center_mixer_settings_hit(app, px, py)) t = CcHoverTarget::MixerCard;
+  if (t == CcHoverTarget::None && control_center_weather_card_hit(app, px, py)) t = CcHoverTarget::WeatherCard;
+  if (t == CcHoverTarget::None) {
+    int esid = -1;
+    bool isIn = false;
+    if (control_center_mixer_expanded_slider_hit(app, px, py, &esid, &isIn, nullptr, nullptr, nullptr)) {
+      t = CcHoverTarget::MixerSlider;
+      sid = esid;
+      row = -1;
+    }
+  }
+  if (t != s.hoverTarget || row != s.hoverRowIdx || sid != s.hoverStreamId) {
+    s.hoverTarget = t;
+    s.hoverRowIdx = row;
+    s.hoverStreamId = sid;
+    popup_draw_surface(app);
+    wl_display_flush(app.display);
+  }
+}
+
 bool handle_button_press(DockApp& app, uint32_t serial) {
+  eh::shell::dock::control_center::CcTimer tPress("press", 4000);
   if (app.popupKind != DockApp::PopupKind::ControlCenter) return false;
   auto& s = app.ccState;
+  s.activeModal = ControlCenterActiveModal::None; // modals retired; panels expand inline
+  eh::shell::dock::control_center::cc_log(
+      "press x=" + std::to_string(static_cast<int>(app.pointerX)) +
+      " y=" + std::to_string(static_cast<int>(app.pointerY)));
 
-  // Grid card clicks (open modals).
-  if (s.activeModal == ControlCenterActiveModal::None) {
-    if (control_center_network_card_hit(app, app.pointerX, app.pointerY)) {
-      s.activeModal = ControlCenterActiveModal::Network;
-      (void)eh::shell::dock_slot_hooks::control_center_wifi_scan(true);
-      popup_open_control_center(app, app.popupAnchorX, serial);
-      popup_draw_surface(app);
-      wl_display_flush(app.display);
-      return true;
-    }
-    if (control_center_bluetooth_card_hit(app, app.pointerX, app.pointerY)) {
-      s.activeModal = ControlCenterActiveModal::Bluetooth;
-      eh::shell::dock_slot_hooks::bluetooth_ensure_service();
-      eh::shell::dock_slot_hooks::bluetooth_start_discovery();
-      popup_open_control_center(app, app.popupAnchorX, serial);
-      popup_draw_surface(app);
-      wl_display_flush(app.display);
-      return true;
-    }
-    if (control_center_audio_card_hit(app, CcAudioSliderKind::Output, app.pointerX, app.pointerY) &&
-        !control_center_audio_slider_hit(app, CcAudioSliderKind::Output, app.pointerX, app.pointerY, nullptr) &&
-        !control_center_audio_mute_icon_hit(app, CcAudioSliderKind::Output, app.pointerX, app.pointerY)) {
-      s.activeModal = ControlCenterActiveModal::AudioOutput;
-      popup_open_control_center(app, app.popupAnchorX, serial);
-      popup_draw_surface(app);
-      wl_display_flush(app.display);
-      return true;
-    }
-    if (control_center_audio_card_hit(app, CcAudioSliderKind::Input, app.pointerX, app.pointerY) &&
-        !control_center_audio_slider_hit(app, CcAudioSliderKind::Input, app.pointerX, app.pointerY, nullptr) &&
-        !control_center_audio_mute_icon_hit(app, CcAudioSliderKind::Input, app.pointerX, app.pointerY)) {
-      s.activeModal = ControlCenterActiveModal::AudioInput;
-      popup_open_control_center(app, app.popupAnchorX, serial);
-      popup_draw_surface(app);
-      wl_display_flush(app.display);
-      return true;
-    }
-  }
-
-  // Modal backdrop / close dismiss.
-  if (s.activeModal != ControlCenterActiveModal::None) {
-    if (control_center_modal_backdrop_hit(app, app.pointerX, app.pointerY) ||
-        control_center_modal_close_hit(app, app.pointerX, app.pointerY)) {
-      s.activeModal = ControlCenterActiveModal::None;
-      popup_open_control_center(app, app.popupAnchorX, serial);
-      popup_draw_surface(app);
-      wl_display_flush(app.display);
-      return true;
-    }
-  }
-
-  // Modal row selections.
-  if (s.activeModal == ControlCenterActiveModal::Network) {
+  // Wi-Fi rows.
+  {
     int idx = -1;
     if (control_center_network_row_hit(app, app.pointerX, app.pointerY, &idx)) {
       const auto aps = eh::shell::dock_slot_hooks::control_center_wifi_scan(true);
@@ -93,23 +136,21 @@ bool handle_button_press(DockApp& app, uint32_t serial) {
           if (!err.empty()) s.wifiLastError = err;
           s.wifiPasswordPrompt = true;
           s.wifiPassword.clear();
-          popup_open_control_center(app, app.popupAnchorX, serial);
         } else {
           std::string err;
           const bool ok = eh::shell::dock_slot_hooks::control_center_wifi_connect(ap.ssid, {}, &err);
           if (!ok) s.wifiLastError = err;
           s.wifiPasswordPrompt = false;
           s.wifiPassword.clear();
-          popup_open_control_center(app, app.popupAnchorX, serial);
         }
-        popup_draw_surface(app);
-        wl_display_flush(app.display);
+        cc_resize_popup(app, serial, "wifi-select");
         return true;
       }
     }
   }
 
-  if (s.activeModal == ControlCenterActiveModal::Bluetooth) {
+  // Bluetooth rows.
+  {
     int idx = -1;
     if (control_center_bluetooth_row_forget_hit(app, app.pointerX, app.pointerY, &idx)) {
       const auto devs = eh::shell::dock_slot_hooks::bluetooth_devices();
@@ -137,7 +178,8 @@ bool handle_button_press(DockApp& app, uint32_t serial) {
     }
   }
 
-  if (s.activeModal == ControlCenterActiveModal::AudioOutput) {
+  // Audio device rows.
+  {
     int idx = -1;
     if (control_center_output_devices_row_hit(app, app.pointerX, app.pointerY, &idx)) {
       const auto devs = eh::shell::dock_slot_hooks::control_center_output_devices();
@@ -153,10 +195,6 @@ bool handle_button_press(DockApp& app, uint32_t serial) {
         return true;
       }
     }
-  }
-
-  if (s.activeModal == ControlCenterActiveModal::AudioInput) {
-    int idx = -1;
     if (control_center_input_devices_row_hit(app, app.pointerX, app.pointerY, &idx)) {
       const auto devs = eh::shell::dock_slot_hooks::control_center_input_devices();
       if (idx >= 0 && idx < static_cast<int>(devs.size())) {
@@ -171,6 +209,42 @@ bool handle_button_press(DockApp& app, uint32_t serial) {
         return true;
       }
     }
+  }
+
+  // Card toggles (expand/collapse inline panels, popup resizes to fit).
+  if (control_center_network_card_hit(app, app.pointerX, app.pointerY)) {
+    if (!s.networkExpanded) (void)eh::shell::dock_slot_hooks::control_center_wifi_scan(true);
+    cc_toggle_expand(s.networkExpanded, s.netAnimStartMs, s.netAnimFromExpanded, s.netAnimToExpanded);
+    cc_resize_popup(app, serial, "net-toggle");
+    return true;
+  }
+  if (control_center_bluetooth_card_hit(app, app.pointerX, app.pointerY)) {
+    if (!s.bluetoothExpanded) {
+      eh::shell::dock_slot_hooks::bluetooth_ensure_service();
+      eh::shell::dock_slot_hooks::bluetooth_start_discovery();
+    }
+    cc_toggle_expand(s.bluetoothExpanded, s.btAnimStartMs, s.btAnimFromExpanded, s.btAnimToExpanded);
+    cc_resize_popup(app, serial, "bt-toggle");
+    return true;
+  }
+  if (control_center_audio_card_hit(app, CcAudioSliderKind::Output, app.pointerX, app.pointerY) &&
+      !control_center_audio_slider_hit(app, CcAudioSliderKind::Output, app.pointerX, app.pointerY, nullptr) &&
+      !control_center_audio_mute_icon_hit(app, CcAudioSliderKind::Output, app.pointerX, app.pointerY)) {
+    s.outputDevicesExpanded = !s.outputDevicesExpanded;
+    cc_resize_popup(app, serial, "outdev-toggle");
+    return true;
+  }
+  if (control_center_audio_card_hit(app, CcAudioSliderKind::Input, app.pointerX, app.pointerY) &&
+      !control_center_audio_slider_hit(app, CcAudioSliderKind::Input, app.pointerX, app.pointerY, nullptr) &&
+      !control_center_audio_mute_icon_hit(app, CcAudioSliderKind::Input, app.pointerX, app.pointerY)) {
+    s.inputDevicesExpanded = !s.inputDevicesExpanded;
+    cc_resize_popup(app, serial, "indev-toggle");
+    return true;
+  }
+  if (control_center_mixer_settings_hit(app, app.pointerX, app.pointerY)) {
+    s.mixerExpanded = !s.mixerExpanded;
+    cc_resize_popup(app, serial, "mixer-toggle");
+    return true;
   }
 
   // Audio controls (always available).
@@ -305,8 +379,10 @@ bool handle_motion(DockApp& app) {
   if (!app.popupOpen || app.popupKind != DockApp::PopupKind::ControlCenter ||
       app.pointerSurface != app.popupSurface)
     return false;
-  if (!app.ccState.audioDragActive && !app.ccState.inputDragActive && !app.ccState.mixerDragActive)
+  if (!app.ccState.audioDragActive && !app.ccState.inputDragActive && !app.ccState.mixerDragActive) {
+    cc_update_hover(app);
     return false;
+  }
 
   auto& s = app.ccState;
 
@@ -519,7 +595,6 @@ bool handle_axis(DockApp& app, double deltaPx) {
 
 bool handle_keyboard(DockApp& app, xkb_keysym_t sym, uint32_t keycode) {
   if (app.popupKind != DockApp::PopupKind::ControlCenter) return false;
-  if (app.ccState.activeModal != ControlCenterActiveModal::Network) return false;
   if (!app.ccState.wifiPasswordPrompt) return false;
 
   auto& s = app.ccState;
@@ -528,10 +603,7 @@ bool handle_keyboard(DockApp& app, xkb_keysym_t sym, uint32_t keycode) {
     s.wifiPasswordPrompt = false;
     s.wifiPassword.clear();
     s.wifiPendingSsid.clear();
-    s.activeModal = ControlCenterActiveModal::None;
-    popup_open_control_center(app, app.popupAnchorX, 0);
-    popup_draw_surface(app);
-    wl_display_flush(app.display);
+    cc_resize_popup(app, 0, "wifi-key");
     return true;
   }
   if (sym == XKB_KEY_BackSpace) {
@@ -547,10 +619,7 @@ bool handle_keyboard(DockApp& app, xkb_keysym_t sym, uint32_t keycode) {
     else s.wifiLastError.clear();
     s.wifiPasswordPrompt = false;
     s.wifiPassword.clear();
-    s.activeModal = ControlCenterActiveModal::None;
-    popup_open_control_center(app, app.popupAnchorX, 0);
-    popup_draw_surface(app);
-    wl_display_flush(app.display);
+    cc_resize_popup(app, 0, "wifi-key");
     return true;
   }
 

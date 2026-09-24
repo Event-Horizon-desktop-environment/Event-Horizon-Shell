@@ -2,6 +2,9 @@
 
 #include "desktop_shell/dock/core/dock_app.h"
 #include "desktop_shell/dock/input/dock_position.hpp"
+#include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
+#include "desktop_shell/controlcenter/debug/control_center_log.hpp"
+#include "desktop_shell/shared/popup/session/session.hpp"
 #include "desktop_shell/common/bench/shell_bench.hpp"
 #include "desktop_shell/shared/popup/caret/caret.hpp"
 #include "desktop_shell/dock/paint/dock_raster_backend.hpp"
@@ -12,6 +15,12 @@
 
 using eh::shell::dock::dock_popup_destroy_caret_frame;
 using eh::shell::dock::dock_popup_queue_followup_frame;
+
+namespace {
+// Reentrancy guard: the settle check below reopens + redraws, which nests
+// back through here. Sizes match after reopen so one level is enough.
+bool g_ccSettleResize = false;
+} // namespace
 
 void popup_finish_draw(DockApp& app, bool vk_path, bool queue_caret_followup, bool log_cc_first_paint) {
 
@@ -32,6 +41,31 @@ void popup_finish_draw(DockApp& app, bool vk_path, bool queue_caret_followup, bo
   }
   if (!presented) return;
   if (queue_caret_followup) dock_popup_queue_followup_frame(app);
+  // Control center: if content outgrew the surface after it settled (expand
+  // animations finished, late Wi-Fi/BT scan rows, error/prompt changes),
+  // re-create at the new resting height. Debounced; animations in flight are
+  // left alone. Reentrancy-safe: after reopen sizes match so this fires once.
+  if (app.popupKind == DockApp::PopupKind::ControlCenter && !g_ccSettleResize) {
+    namespace ccl = eh::shell::dock::control_center;
+    auto& cs = app.ccState;
+    const uint64_t nowMs = eh::shell::monotonic_ms();
+    const bool settled =
+        cs.netAnimStartMs == 0 && cs.btAnimStartMs == 0 && cs.weatherAnimStartMs == 0;
+    if (settled) {
+      const int wantH = static_cast<int>(std::ceil(
+          ccl::cc_compute_layout(static_cast<double>(app.popupW), cs, nowMs, true).totalH));
+      if (wantH != app.popupH && nowMs - cs.ccLastSettleResizeMs > 800) {
+        cs.ccLastSettleResizeMs = nowMs;
+        ccl::cc_log("settle-resize surface=" + std::to_string(app.popupH) +
+                    " want=" + std::to_string(wantH));
+        g_ccSettleResize = true;
+        popup_open_control_center(app, app.popupAnchorX, 0, false);
+        popup_draw_surface(app);
+        wl_display_flush(app.display);
+        g_ccSettleResize = false;
+      }
+    }
+  }
   if (log_cc_first_paint && app.ccState.openBenchStartMs != 0 && !app.ccState.openBenchLoggedFirstPaint &&
       eh_cc_open_bench()) {
     app.ccState.openBenchLoggedFirstPaint = true;

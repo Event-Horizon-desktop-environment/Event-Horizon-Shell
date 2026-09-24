@@ -15,7 +15,6 @@ struct PickSlot {
     Settings,
     Spotlight,
     AppMenu,
-    Launchpad,
     AppDrawer,
     Clock,
     Weather,
@@ -55,6 +54,33 @@ double dock_pick_layout_total_width(const DockApp& app, const std::vector<PickSl
 double dock_gap_after_pick(const DockSettings& st, const std::vector<PickSlot>& v, size_t idx, double defGap);
 
 DockPickResult dock_pick_at(DockApp& app, double px, double py);
+
+// Computed strip geometry shared by hit-testing and the pinned-drag fallback:
+// one implementation of slot widths, section gaps, the side-by-side (lr)
+// layout and the horizontal compression scale, so every consumer agrees with
+// what paint draws (see Docs/hit-testing.md).
+struct DockStripGeom {
+  double icon = 0;
+  double gap = 0;
+  double stripInner = 0;
+  double midX = 0;
+  std::vector<double> w;
+  double concatTotal = 0;
+  double startX = 0;
+  double lw = 0;
+  double rw = 0;
+  double centerSectionW = 0;
+  double secGap = 0;
+  bool use_lr = false;
+  double xl = 0;
+  double xr = 0;
+  double total_for_scale = 0;
+  double hScale = 1;
+};
+
+[[nodiscard]] DockStripGeom dock_compute_strip_geom(const DockApp& app, const DockPickResult& pr, double pill_x,
+                                                    double box_w);
+[[nodiscard]] double dock_slot_layout_x(const DockApp& app, const DockPickResult& pr, const DockStripGeom& g, int idx);
 double dock_strip_slot_center_x(const DockApp& app, const DockPickResult& pr, int idx);
 std::pair<double, double> dock_strip_slot_xw(const DockApp& app, const DockPickResult& pr, int idx);
 int dock_pick_workspace_index(const DockApp& app, const DockPickResult& pr, int idx, double pointer_x);

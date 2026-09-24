@@ -26,3 +26,7 @@ void dock_pinned_pointer_motion(DockApp& app);
 
 const std::vector<std::string>& dock_pinned_apps_source_for_layout(const DockApp& app);
 void dock_pin_drag_rebuild_paint_order(DockApp& app);
+
+// Filtered pinned-key list the bar layout paints: normalized ids with the
+// "unknown" / settings pseudo-apps dropped — same rule paint and pick apply.
+[[nodiscard]] std::vector<std::string> dock_pinned_filtered_keys(const std::vector<std::string>& src);

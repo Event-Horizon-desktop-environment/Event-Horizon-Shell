@@ -2,10 +2,13 @@
 #pragma GCC diagnostic ignored "-Wunused-function"
 #include "desktop_shell/shared/popup/session/session.hpp"
 
+#include "desktop_shell/controlcenter/debug/control_center_log.hpp"
+
 #include "desktop_shell/shared/popup/chrome/chrome.hpp"
 #include "desktop_shell/controlcenter/persist/control_center_persist.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_panel_geometry.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
+#include "desktop_shell/dock/core/dock_boot_log.hpp"
 #include "desktop_shell/shared/popup/geometry/layout.hpp"
 #include "desktop_shell/shared/popup/geometry/margins.hpp"
 #include "desktop_shell/dock/input/dock_position.hpp"
@@ -24,7 +27,6 @@
 #include "desktop_shell/widgets/start_menu/start_menu.hpp"
 #include "desktop_shell/widgets/app_drawer/list/desktop_list.hpp"
 #include "desktop_shell/widgets/app_drawer/trace/app_drawer_trace.hpp"
-#include "desktop_shell/launchpad/host/launchpad_host.hpp"
 
 #include "desktop_shell/common/ns/namespaces.hpp"
 #include "desktop_shell/common/time/text_caret.hpp"
@@ -47,6 +49,7 @@
 #include <cerrno>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <fcntl.h>
 #include <iostream>
 #include <map>
@@ -67,7 +70,6 @@ using eh::shell::str::trim;
 bool dock_popup_pointer_on_any_popup_surface(const DockApp& app) {
   if (!app.pointerSurface) return false;
   if (app.popupOpen && app.pointerSurface == app.popupSurface) return true;
-  if (app.launchpad && app.launchpad->is_open() && app.launchpad->owns_surface(app.pointerSurface)) return true;
   return false;
 }
 
@@ -129,6 +131,14 @@ static void dock_popup_layer_surface_configure(void* data, zwlr_layer_surface_v1
   }
   if (w > 0 && static_cast<int>(w) != app.popupW) app.popupW = static_cast<int>(w);
   if (h > 0 && static_cast<int>(h) != app.popupH) app.popupH = static_cast<int>(h);
+  if (app.popupKind == DockApp::PopupKind::ControlCenter) {
+    std::string msg = std::string("configure granted=") + std::to_string(w) + "x" +
+                      std::to_string(h) + " adopted=" + std::to_string(app.popupW) + "x" +
+                      std::to_string(app.popupH) + " marginB=" +
+                      std::to_string(app.popupLastMarginBottom) + " marginL=" +
+                      std::to_string(app.popupLastMarginLeft);
+    eh::shell::dock::control_center::cc_log(msg);
+  }
   app.popupConfiguredX = 0;
   app.popupConfiguredY = 0;
   app.popupConfiguredW = app.popupW;
@@ -219,6 +229,16 @@ bool dock_popup_create_layer_surface_ex(DockApp& app, int anchorLocalX, wl_outpu
   app.popupLayerSurface = layer;
   app.popupConfiguredW = 0;
   app.popupConfiguredH = 0;
+  eh::shell::dock::dock_boot_surface("popup", cfg.nameSpace, cfg.anchor, cfg.width, cfg.height,
+                                     cfg.exclusiveZone, cfg.marginTop, cfg.marginRight, cfg.marginBottom,
+                                     cfg.marginLeft, "<popup>");
+  if (cfg.nameSpace && std::strcmp(cfg.nameSpace, eh::shell::kControlCenterNamespace) == 0) {
+    std::string msg = std::string("create w=") + std::to_string(cfg.width) +
+                      " h=" + std::to_string(cfg.height) + " anchor=" + std::to_string(cfg.anchor) +
+                      " marginB=" + std::to_string(marginBottom) + " marginL=" +
+                      std::to_string(marginLeft);
+    eh::shell::dock::control_center::cc_log(msg);
+  }
   log_dbg("[dock-popup] create_layer_surface_ex OK: surf=%p layer=%p w=%u h=%u marginL=%d marginB=%d ns=%s\n",
           (void*)surf, (void*)layer, cfg.width, cfg.height, marginLeft, marginBottom, cfg.nameSpace);
   wl_surface_commit(app.popupSurface);
@@ -270,7 +290,6 @@ static bool dock_popup_create_layer_surface(DockApp& app, int anchorLocalX) {
 
 void popup_close(DockApp& app) {
    
-  eh::shell::launchpad::Host::close_before_dock_popup(app);
   if (!app.popupOpen) return;
   const DockApp::PopupKind closingKind = app.popupKind;
   dock_popup_destroy_caret_frame(app);
@@ -360,14 +379,13 @@ void popup_close(DockApp& app) {
   app.popupAppWindows.clear();
   app.popupAppDesktopActions.clear();
   app.popupAppDesktopExec.clear();
-  app.ccState.mixerExpanded = false;
-  app.ccState.outputDevicesExpanded = false;
+  // NOTE: control-center expansion flags are intentionally preserved across
+  // close/reopen so a resize re-creates the surface at the expanded height.
+  // Only transient interaction state is cleared below.
   app.ccState.outputDevicesPendingSink.clear();
   app.ccState.outputDevicesIgnoreUntilMs = 0;
-  app.ccState.inputDevicesExpanded = false;
   app.ccState.inputDevicesPendingSource.clear();
   app.ccState.inputDevicesIgnoreUntilMs = 0;
-  app.ccState.networkExpanded = false;
   app.ccState.wifiPasswordPrompt = false;
   app.ccState.wifiPendingSsid.clear();
   app.ccState.wifiPassword.clear();
@@ -564,14 +582,16 @@ void popup_open_spotlight(DockApp& app, int anchorX, uint32_t serial) {
   wl_display_flush(app.display);
 }
 
-void popup_open_control_center(DockApp& app, int anchorX, uint32_t serial) {
-  
+void popup_open_control_center(DockApp& app, int anchorX, uint32_t serial, bool applyAudioPrefs) {
+
   popup_close(app);
   if (app.display) (void)wl_display_roundtrip(app.display);
   app.ccState.openBenchStartMs = eh::shell::monotonic_ms();
   app.ccState.openBenchLoggedFirstConfigure = false;
   app.ccState.openBenchLoggedFirstPaint = false;
-  {
+  // Toggle-driven reopens skip this: prefs didn't change and the PipeWire
+  // round-trips show up directly in press latency.
+  if (applyAudioPrefs) {
     const auto [savedSink, savedSource] = eh::shell::control_center::cc_load_audio_prefs();
     if (!savedSink.empty()) {
       eh::shell::dock_slot_hooks::control_center_set_default_sink(savedSink);
@@ -586,7 +606,7 @@ void popup_open_control_center(DockApp& app, int anchorX, uint32_t serial) {
   }
   app.popupKind = DockApp::PopupKind::ControlCenter;
   app.popupW = kControlCenterPopupW();
-  app.popupH = static_cast<int>(std::ceil(control_center_popup_height()));
+  app.popupH = static_cast<int>(std::ceil(control_center_popup_height(app)));
   app.popupAnchorX = anchorX;
   app.popupAnchorY = 0;
   app.popupItems.clear();

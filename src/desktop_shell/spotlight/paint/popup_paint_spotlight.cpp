@@ -1,6 +1,8 @@
 #include "desktop_shell/shared/popup/paint/paint.hpp"
 
 #include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/spotlight/paint/popup_paint_spotlight.hpp"
+#include "desktop_shell/taskbar/core/taskbar.hpp"
 #include "desktop_shell/common/os_logo/os_logo.hpp"
 #include "desktop_shell/shared/popup/geometry/layout.hpp"
 #include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
@@ -16,12 +18,16 @@ using eh::shell::dock::kSpotlightRowPx;
 using eh::shell::dock::kSpotlightSearchOuterH;
 using eh::shell::dock::spotlight_truncate_to_width;
 
-void dock_popup_paint_spotlight(DockApp& app, cairo_t* cr, const eh::config::ShellConfig& scPopupOv) {
+// Shared by the dock and the taskbar spotlight palettes: both carry the same
+// query/hits/sel/logo/icons state, so the body is a template and each host
+// gets a thin entry point below.
+template <typename A>
+static void popup_paint_spotlight_impl(A& app, cairo_t* cr, const eh::config::ShellConfig& scPopupOv) {
    
 if (!app.distroSpotlightLogo) app.distroSpotlightLogo = eh_os_logo::load_distro_logo_cairo_surface();
 const double W = static_cast<double>(app.popupW);
 const double H = static_cast<double>(app.popupH);
-const double us = dock_ui_scale(app.settings);
+const double us = dock_ui_scale(scPopupOv.dock);
 const double kEdge = 12.0 * us;
 auto round_rect = [&](double rx, double ry, double rw, double rh, double rr) {
   const double rad = std::min({rr, rw * 0.5, rh * 0.5});
@@ -165,3 +171,15 @@ if (!app.spotlightHits.empty()) {
 }
 
 }
+
+void dock_popup_paint_spotlight(DockApp& app, cairo_t* cr, const eh::config::ShellConfig& scPopupOv) {
+  popup_paint_spotlight_impl(app, cr, scPopupOv);
+}
+
+namespace eh::shell::taskbar {
+
+void taskbar_popup_paint_spotlight(TaskbarApp& app, cairo_t* cr, const eh::config::ShellConfig& scPopupOv) {
+  ::popup_paint_spotlight_impl(app, cr, scPopupOv);
+}
+
+}  // namespace eh::shell::taskbar

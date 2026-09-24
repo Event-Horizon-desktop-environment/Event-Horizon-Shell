@@ -32,7 +32,8 @@ void dock_destroy_app_menu_host_surfaces(DockApp& app);
 
 void popup_open_for_tray(DockApp& app, const DockApp::TrayItem& ti, int anchorX, int anchorY, uint32_t serial);
 void popup_open_spotlight(DockApp& app, int anchorX, uint32_t serial);
-void popup_open_control_center(DockApp& app, int anchorX, uint32_t serial);
+void popup_open_control_center(DockApp& app, int anchorX, uint32_t serial,
+                               bool applyAudioPrefs = true);
 void popup_open_power_confirm(DockApp& app, int powerIdx);
 void popup_open_app_menu(DockApp& app, int anchorX, uint32_t serial);
 void popup_open_for_trash(DockApp& app, int anchorX, int anchorY, uint32_t serial);

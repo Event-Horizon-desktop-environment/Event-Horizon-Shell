@@ -24,6 +24,7 @@
 #include "desktop_shell/desktop/entries/desktop_entry_types.hpp"
 #include "desktop_shell/widgets/app_drawer/overlay/app_drawer_overlay.hpp"
 #include "desktop_shell/controlcenter/state/control_center_state.hpp"
+#include "desktop_shell/spotlight/search/spotlight_search.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -47,7 +48,6 @@ struct xkb_context;
 struct xkb_keymap;
 struct xkb_state;
 namespace sdbus { class IConnection; class IObject; }
-namespace eh::shell::launchpad { class Host; }
 namespace eh::config { struct ShellConfig; }
 
 namespace eh::shell::taskbar {
@@ -141,9 +141,6 @@ struct TaskbarApp {
 
   // Animation
   eh::shell::AnimationManager anim{};
-  std::uint32_t launchBounceAnimId = 0;
-  std::string launchBounceAnchorNorm{};
-  float launchBounceLiftPx = 0.f;
 
   // MPRIS
   std::unique_ptr<eh::mpris::DockMpris> mpris{};
@@ -205,6 +202,13 @@ struct TaskbarApp {
   double animTargetPx = 0.0;
   std::uint32_t slideAnimId = 0;
 
+  // Launch feedback — the same damped-sine icon bounce the dock plays when a
+  // slot is activated (cold_start=false: shorter/shallower) or launched from
+  // scratch (cold_start=true).
+  std::uint32_t launchBounceAnimId = 0;
+  float launchBounceLiftPx = 0.f;
+  std::string launchBounceAnchorNorm{};
+
   // Tooltips.
   int tooltipHoverSlot = -1;
   std::chrono::steady_clock::time_point tooltipHoverStart{};
@@ -256,6 +260,14 @@ struct TaskbarApp {
   // Popup dimensions (set by taskbar_popup_create, read by template paint)
   int popupW = 0;
   int popupH = 0;
+  // Slot center the current popup was anchored to; a content-driven resize
+  // (control-center settle) re-creates the surface at the same anchor.
+  int popupAnchorX = 0;
+
+  // Spotlight (distro_spotlight slot) search palette.
+  std::string spotlightQuery{};
+  std::vector<SpotlightHit> spotlightHits{};
+  int spotlightSel = -1;
 };
 
 bool taskbar_init_on_display(TaskbarApp& app);
@@ -271,6 +283,10 @@ void taskbar_anim_start_slide(TaskbarApp& app);
 void taskbar_tooltip_tick(TaskbarApp& app);
 void taskbar_tooltip_cancel(TaskbarApp& app);
 void taskbar_toggle_menu(TaskbarApp& app);
+
+// Launch feedback (dock parity): bounce the launching/activating app slot.
+void taskbar_start_launch_bounce(TaskbarApp& app, const std::string& app_key_raw, bool cold_start);
+[[nodiscard]] double taskbar_launch_bounce_lift_y(const TaskbarApp& app, const std::string& slot_key);
 
 // Nightlight toggle hook: the split-out `horizon-taskbar` child has no gamma
 // control — the supervisor owns the single gamma client.

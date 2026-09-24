@@ -39,8 +39,14 @@
 #include "desktop_shell/power_confirm/power_confirm.hpp"
 #include "desktop_shell/common/time/mono_time.hpp"
 #include "desktop_shell/common/time/text_caret.hpp"
+#include "desktop_shell/controlcenter/debug/control_center_log.hpp"
+#include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_panel_geometry.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_slider_metrics.hpp"
+#include "desktop_shell/shared/popup/geometry/layout.hpp"
+#include "desktop_shell/spotlight/paint/popup_paint_spotlight.hpp"
+#include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
+#include "desktop_shell/spotlight/search/spotlight_query.hpp"
 
 #include <cairo/cairo.h>
 
@@ -179,33 +185,6 @@ static void launch_exec_command(const std::string& execLine) {
   ::_exit(127);
 }
 
-static std::string ipc_socket_path() {
-  if (const char* p = std::getenv("EH_IPC_SOCKET"))
-    return std::string(p);
-  if (const char* dir = std::getenv("XDG_RUNTIME_DIR"))
-    return std::string(dir) + "/event-horizon-ipc.sock";
-  return "/tmp/event-horizon-ipc.sock";
-}
-
-static void ipc_send_command(const std::string& command) {
-  const std::string path = ipc_socket_path();
-  struct sockaddr_un addr{};
-  addr.sun_family = AF_UNIX;
-  const size_t pathLen = std::min(path.size(), sizeof(addr.sun_path) - 1);
-  std::memcpy(addr.sun_path, path.data(), pathLen);
-  addr.sun_path[pathLen] = '\0';
-
-  const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-  if (fd < 0) return;
-  if (::connect(fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-    ::close(fd);
-    return;
-  }
-  const std::string cmd = command + "\n";
-  ::write(fd, cmd.data(), cmd.size());
-  ::close(fd);
-}
-
 // Popup layer-surface listener.
 
 struct TaskbarPopupCtx {
@@ -224,6 +203,14 @@ static void taskbar_popup_configure(void* data, zwlr_layer_surface_v1* layer,
   if (width > 0) app.popupConfiguredW = static_cast<int>(width);
   if (height > 0) app.popupConfiguredH = static_cast<int>(height);
   app.popupConfigured = app.popupConfiguredW > 0 && app.popupConfiguredH > 0;
+
+  if (app.popupKind == TaskbarPopupKind::ControlCenter) {
+    namespace ccl = eh::shell::dock::control_center;
+    ccl::cc_log("configure granted=" + std::to_string(width) + "x" + std::to_string(height) +
+                " adopted=" + std::to_string(app.popupConfiguredW) + "x" +
+                std::to_string(app.popupConfiguredH) +
+                " want=" + std::to_string(app.popupW) + "x" + std::to_string(app.popupH));
+  }
 
   taskbar_popup_draw(app);
 }
@@ -312,6 +299,20 @@ static const zwlr_layer_surface_v1_listener g_taskbar_layer_listener = {
 
 // Popup open / close / draw.
 
+// Keyboard focus for the bar: wlroots grants focus to an on-demand layer
+// surface the pointer is over when it commits, so raising the bar to
+// ON_DEMAND while the spotlight palette opens (and dropping it back to NONE
+// on close) is what lets the palette take typing immediately — the same trick
+// the dock's popup_open_spotlight uses on its main layer.
+static void taskbar_set_keyboard_interactivity(TaskbarApp& app, uint32_t mode) {
+  for (auto& up : app.layers) {
+    if (!up || !up->layer) continue;
+    zwlr_layer_surface_v1_set_keyboard_interactivity(up->layer, mode);
+    if (up->surface) wl_surface_commit(up->surface);
+  }
+  if (app.display) wl_display_flush(app.display);
+}
+
 static void taskbar_popup_close(TaskbarApp& app) {
   if (app.popupSurface) {
     if (app.popupFrameCb) {
@@ -329,6 +330,7 @@ static void taskbar_popup_close(TaskbarApp& app) {
     app.popupPendingSerial = 0;
     if (app.display) (void)wl_display_roundtrip(app.display);
   }
+  taskbar_set_keyboard_interactivity(app, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
 }
 
 static bool taskbar_popup_create(TaskbarApp& app, int anchorX, int popupW, int popupH) {
@@ -372,7 +374,8 @@ static bool taskbar_popup_create(TaskbarApp& app, int anchorX, int popupW, int p
       cfg.anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT;
       cfg.marginBottom = pos.margin_bottom;
     }
-    cfg.keyboard = (app.popupKind == TaskbarPopupKind::AppDrawer)
+    cfg.keyboard = (app.popupKind == TaskbarPopupKind::AppDrawer ||
+                    app.popupKind == TaskbarPopupKind::Spotlight)
         ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND
         : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
   }
@@ -397,6 +400,17 @@ static bool taskbar_popup_create(TaskbarApp& app, int anchorX, int popupW, int p
   app.popupPendingSerial = 0;
   app.popupW = popupW;
   app.popupH = popupH;
+  app.popupAnchorX = anchorX;
+
+  if (app.popupKind == TaskbarPopupKind::ControlCenter) {
+    // Mirrors the dock's session.cpp create line so horizon-controlcenter.log
+    // tells the same story whichever shell opened the panel.
+    namespace ccl = eh::shell::dock::control_center;
+    ccl::cc_log("create w=" + std::to_string(popupW) + " h=" + std::to_string(popupH) +
+                " marginB=" + std::to_string(pos.margin_bottom) +
+                " marginL=" + std::to_string(pos.margin_left) +
+                " clearance=" + std::to_string(pos.clearance));
+  }
 
   wl_surface_commit(app.popupSurface);
   if (app.display) wl_display_roundtrip(app.display);
@@ -428,6 +442,73 @@ static void draw_context_menu(TaskbarApp& app, cairo_t* cr, int w, int h) {
 }
 
 }
+
+// ---------------------------------------------------------------------------
+// Control-center height.
+//
+// The panel's content height is not the fixed kControlCenterPopupH(): it moves
+// with the network/bluetooth/weather expand animations and with late-arriving
+// rows (wifi scan results, error lines, password prompt). Creating the taskbar
+// popup at the constant clipped that content -- SIZE-MISMATCH paint-total=680
+// surface=640 in horizon-controlcenter.log, with the 5-day forecast cut off at
+// the bottom. Measure the layout instead (what the dock does through
+// control_center_popup_height()) and re-measure after every draw.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Reentrancy guard: the settle below re-creates the surface, whose configure
+// roundtrip re-enters taskbar_popup_draw(). Sizes match after recreate, so one
+// level is enough (same guard as the dock's popup_finish_draw()).
+bool g_tbCcSettleResize = false;
+
+// Resting height of the control center, resolved to its animation targets and
+// clamped so a fully-expanded panel still fits between the bar and the top.
+// popupW is passed explicitly: at open time app.popupW still holds the
+// previous popup's width.
+int taskbar_cc_want_height(TaskbarApp& app, int popupW) {
+  namespace ccl = eh::shell::dock::control_center;
+  const double W = static_cast<double>(popupW > 0 ? popupW : eh::shell::dock::kControlCenterPopupW());
+  const uint64_t nowMs = eh::shell::monotonic_ms();
+  int wantH = static_cast<int>(std::ceil(ccl::cc_compute_layout(W, app.ccState, nowMs, true).totalH));
+  if (auto* ref = taskbar_ref_layer(app); ref && app.wl) {
+    for (const auto& b : app.wl->logical_output_bounds()) {
+      if (b.output != ref->wlOut) continue;
+      const int clearance = popup_bottom_clearance_px(app.settings);
+      if (b.height > 0) wantH = std::min(wantH, b.height - clearance - 12);
+      break;
+    }
+  }
+  return std::max(200, wantH);
+}
+
+// Recreate the popup at the resting height once content stopped moving.
+// Returns true when the surface was replaced (the nested draw already
+// attached + committed the new buffer, so the caller must not touch the old
+// one again).
+bool taskbar_cc_settle_resize(TaskbarApp& app) {
+  if (g_tbCcSettleResize) return false;
+  auto& cs = app.ccState;
+  const uint64_t nowMs = eh::shell::monotonic_ms();
+  const bool settled =
+      cs.netAnimStartMs == 0 && cs.btAnimStartMs == 0 && cs.weatherAnimStartMs == 0;
+  if (!settled) return false;
+  // Compositor granted something other than what we asked: its clamp wins,
+  // don't recreate on every debounce tick.
+  if (app.popupConfiguredH != app.popupH) return false;
+  const int wantH = taskbar_cc_want_height(app, app.popupW);
+  if (wantH == app.popupH) return false;
+  if (nowMs - cs.ccLastSettleResizeMs <= 800) return false;
+  cs.ccLastSettleResizeMs = nowMs;
+  namespace ccl = eh::shell::dock::control_center;
+  ccl::cc_log("settle-resize surface=" + std::to_string(app.popupH) +
+              " want=" + std::to_string(wantH));
+  g_tbCcSettleResize = true;
+  const bool ok = taskbar_popup_create(app, app.popupAnchorX, eh::shell::dock::kControlCenterPopupW(),
+                                       wantH);
+  g_tbCcSettleResize = false;
+  return ok && app.popupSurface != nullptr;
+}
+} // namespace
 
 void taskbar_popup_draw(TaskbarApp& app) {
   if (!app.popupSurface || !app.popupLayer) return;
@@ -474,6 +555,9 @@ void taskbar_popup_draw(TaskbarApp& app) {
       control_center_popup_paint(app.ccState, cr, w, h, sc, app.mpris.get(), wid, app.icons, app.settings.pinnedApps);
       break;
     }
+    case TaskbarPopupKind::Spotlight:
+      taskbar_popup_paint_spotlight(app, cr, sc);
+      break;
     case TaskbarPopupKind::AppDrawer: {
       const eh::config::ChromePaintColors mc2 = eh::config::derived_chrome_colors(sc.appearance);
       eh::appdrawer::AppDrawerChromeColors adc{};
@@ -533,6 +617,10 @@ void taskbar_popup_draw(TaskbarApp& app) {
   cairo_restore(cr);
   cairo_surface_flush(app.popupBuf.cairo_surface());
 
+  // Content-driven height change: the nested draw painted and committed the
+  // replacement surface, so the buffer we just filled is gone.
+  if (app.popupKind == TaskbarPopupKind::ControlCenter && taskbar_cc_settle_resize(app)) return;
+
   wl_surface_attach(app.popupSurface, app.popupBuf.wl(), 0, 0);
   wl_surface_damage_buffer(app.popupSurface, 0, 0, w, h);
   app.popupBuf.mark_busy();
@@ -579,6 +667,14 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
   const double px = app.pointerX;
   const double py = app.pointerY;
   auto& s = app.ccState;
+
+  {
+    // Same "press x= y=" line the dock logs, so a taskbar session is
+    // distinguishable in horizon-controlcenter.log.
+    namespace ccl = eh::shell::dock::control_center;
+    ccl::cc_log("press taskbar x=" + std::to_string(static_cast<int>(px)) +
+                " y=" + std::to_string(static_cast<int>(py)));
+  }
 
   auto in_rect = [&](double rx, double ry, double rw, double rh) -> bool {
     return (px >= rx && px <= rx + rw && py >= ry && py <= ry + rh);
@@ -1021,6 +1117,19 @@ static void taskbar_handle_popup_click(TaskbarApp& app, uint32_t serial) {
     case TaskbarPopupKind::ControlCenter:
       taskbar_cc_click_handler(app);
       return;
+    case TaskbarPopupKind::Spotlight: {
+      // Clicking a result launches it; clicking the search pill or empty
+      // space keeps the palette open (dock parity).
+      const int row = eh::shell::dock::spotlight_pick_row_index(app, app.pointerX, app.pointerY);
+      if (row >= 0 && row < static_cast<int>(app.spotlightHits.size())) {
+        const SpotlightHit& spotHit = app.spotlightHits[static_cast<size_t>(row)];
+        launch_exec_command(spotHit.exec);
+        taskbar_start_launch_bounce(app, spotHit.path, true);
+        taskbar_popup_close(app);
+        wl_display_flush(app.display);
+      }
+      return;
+    }
     case TaskbarPopupKind::Tray: {
       double y = 4.0;
       for (const auto& it : app.popupItems) {
@@ -1521,6 +1630,17 @@ static void taskbar_keyboard_keymap(void* data, wl_keyboard*, uint32_t format,
   app.xkbState = app.xkbKeymap ? xkb_state_new(app.xkbKeymap) : nullptr;
 }
 
+// Spotlight results — same query the dock's palette uses, just bound to this
+// app's state.
+static void taskbar_spotlight_refresh(TaskbarApp& app) {
+  eh_spotlight_apps_query(app.spotlightQuery, &app.spotlightHits, eh::shell::dock::kSpotlightMaxRows());
+  if (app.spotlightHits.empty()) {
+    app.spotlightSel = -1;
+  } else if (app.spotlightSel < 0 || app.spotlightSel >= static_cast<int>(app.spotlightHits.size())) {
+    app.spotlightSel = 0;
+  }
+}
+
 static void taskbar_keyboard_enter(void*, wl_keyboard*, uint32_t, wl_surface*, wl_array*) {}
 static void taskbar_keyboard_leave(void*, wl_keyboard*, uint32_t, wl_surface*) {}
 
@@ -1558,6 +1678,61 @@ static void taskbar_keyboard_key(void* data, wl_keyboard*, uint32_t, uint32_t,
   if (sym == XKB_KEY_Escape) {
     taskbar_popup_close(app);
     wl_display_flush(app.display);
+    return;
+  }
+
+  // Spotlight palette: type to filter, arrows to pick, Enter to launch —
+  // mirrors dock spotlight keyboard handling (dock's spotlight_keyboard.cpp).
+  if (app.popupKind == TaskbarPopupKind::Spotlight) {
+    if (sym == XKB_KEY_Up) {
+      if (!app.spotlightHits.empty()) {
+        app.spotlightSel = (app.spotlightSel <= 0)
+                               ? static_cast<int>(app.spotlightHits.size()) - 1
+                               : app.spotlightSel - 1;
+      }
+      taskbar_popup_draw(app);
+      wl_display_flush(app.display);
+      return;
+    }
+    if (sym == XKB_KEY_Down) {
+      if (!app.spotlightHits.empty()) {
+        if (app.spotlightSel < 0) {
+          app.spotlightSel = 0;
+        } else if (app.spotlightSel >= static_cast<int>(app.spotlightHits.size()) - 1) {
+          app.spotlightSel = 0;
+        } else {
+          app.spotlightSel++;
+        }
+      }
+      taskbar_popup_draw(app);
+      wl_display_flush(app.display);
+      return;
+    }
+    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+      if (app.spotlightSel >= 0 && app.spotlightSel < static_cast<int>(app.spotlightHits.size())) {
+        const SpotlightHit& hit = app.spotlightHits[static_cast<size_t>(app.spotlightSel)];
+        launch_exec_command(hit.exec);
+        taskbar_start_launch_bounce(app, hit.path, true);
+        taskbar_popup_close(app);
+        wl_display_flush(app.display);
+      }
+      return;
+    }
+    if (sym == XKB_KEY_BackSpace) {
+      eh::shell::str::utf8_pop_back(app.spotlightQuery);
+      taskbar_spotlight_refresh(app);
+      taskbar_popup_draw(app);
+      wl_display_flush(app.display);
+      return;
+    }
+    char utf8Spot[128]{};
+    const int nSpot = xkb_state_key_get_utf8(app.xkbState, keycode + 8, utf8Spot, sizeof(utf8Spot) - 1);
+    if (nSpot > 0) {
+      app.spotlightQuery.append(utf8Spot, static_cast<size_t>(nSpot));
+      taskbar_spotlight_refresh(app);
+      taskbar_popup_draw(app);
+      wl_display_flush(app.display);
+    }
     return;
   }
 
@@ -2168,6 +2343,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
                 eh::shell::paths::normalize_desktop_app_id(tl.appId) == result.key) {
               zwlr_foreign_toplevel_handle_v1_activate(tl.handle, app.seat);
               wl_display_flush(app.display);
+              taskbar_start_launch_bounce(app, result.key, false);
               found = true;
               break;
             }
@@ -2176,6 +2352,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
             if (auto desktop = find_desktop_file_for_appid(result.key)) {
               if (auto info = read_desktop_entry_info(*desktop)) {
                 launch_exec_command(info->exec);
+                taskbar_start_launch_bounce(app, result.key, true);
               }
             }
           }
@@ -2292,8 +2469,15 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     return;
   }
 
-  // Click outside popup → dismiss it
-  if (app.popupSurface) {
+  // Click outside popup → dismiss it. Only a LEFT press dismisses: the dock
+  // leaves an open popup alone for a right press so the context menu that
+  // press opens simply replaces it. dismissedPopKind is likewise only set
+  // when this press really closed something, which is what tells the widget
+  // branches below "this press closed my own popup → toggle-close" apart from
+  // "some other popup is open".
+  const TaskbarPopupKind dismissedPopKind =
+      (left && app.popupSurface) ? app.popupKind : TaskbarPopupKind::None;
+  if (left && app.popupSurface) {
     taskbar_popup_close(app);
     wl_display_flush(app.display);
   }
@@ -2315,6 +2499,12 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
 
   const auto& hit = g_widgetHits[static_cast<size_t>(hitIdx)];
   const std::string& wid = hit.widgetId;
+
+  // Dock parity: widget popups anchor on the slot's center, not on the raw
+  // cursor — clicking anywhere in a wide widget (clock, weather, app drawer)
+  // opens the popup over the widget instead of wherever the pointer happened
+  // to land. compute_popup_position still centers + clamps it to the layer.
+  const int slotCenterX = static_cast<int>(std::llround(hit.x + hit.w * 0.5));
 
   // ════ PIN DRAG CANDIDATE ════
   if (hit.isPinned && hit.slotKind == 0 && left) {
@@ -2413,11 +2603,37 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     return;
   }
 
-  if (wid == kSlotKeySpotlight)
+  if (wid == kSlotKeySpotlight) {
+    // Dock parity: a press that just dismissed this palette is a toggle-close,
+    // and an open palette of the same kind closes instead of reopening.
+    if (dismissedPopKind == TaskbarPopupKind::Spotlight) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Spotlight) {
+      taskbar_popup_close(app);
+      wl_display_flush(app.display);
+      return;
+    }
+    app.popupKind = TaskbarPopupKind::Spotlight;
+    app.spotlightQuery.clear();
+    app.spotlightSel = -1;
+    taskbar_spotlight_refresh(app);
+    const bool opened = taskbar_popup_create(app, slotCenterX, eh::shell::dock::kSpotlightPopupW(),
+                                             eh::shell::dock::spotlight_popup_total_height());
+    // Raise the bar to on-demand so it (and thus this palette's keystrokes)
+    // takes keyboard focus right away; popup_close drops it back to NONE.
+    if (opened) taskbar_set_keyboard_interactivity(app, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
+    wl_display_flush(app.display);
     return;
+  }
 
   if (wid == kSlotKeyAppMenu || wid == kSlotKeyAppDrawer || eh::config::widget_implementation_type(wid) == "smenu") {
-    if (app.popupSurface) {
+    if (dismissedPopKind == TaskbarPopupKind::AppDrawer) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::AppDrawer) {
       taskbar_popup_close(app);
     } else {
       const bool smenuMode = eh::config::widget_implementation_type(wid) == "smenu";
@@ -2436,7 +2652,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
       app.popupKind = TaskbarPopupKind::AppDrawer;
       app.appDrawerPowerConfirmOpen = false;
       app.appDrawerPowerConfirmIdx = -1;
-      taskbar_popup_create(app, static_cast<int>(app.pointerX),
+      taskbar_popup_create(app, slotCenterX,
                            app.appDrawerState.popupW, app.appDrawerState.popupH);
     }
     wl_display_flush(app.display);
@@ -2445,8 +2661,16 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
 
   const std::string type = eh::config::widget_implementation_type(wid);
 
+  // A click on the bar dismisses any open popup above (recorded in
+  // dismissedPopKind). If that click landed on the very widget owning the
+  // popup, treat it as toggle-close instead of immediately reopening —
+  // otherwise the popup appears impossible to close from its own button.
   if (type == "clock") {
-    if (app.popupSurface) { taskbar_popup_close(app); }
+    if (dismissedPopKind == TaskbarPopupKind::Calendar) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Calendar) { taskbar_popup_close(app); }
     else {
       app.popupKind = TaskbarPopupKind::Calendar;
       std::time_t t = std::time(nullptr);
@@ -2458,18 +2682,22 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
       app.calDisplayDate.tm_hour = 0; app.calDisplayDate.tm_min = 0; app.calDisplayDate.tm_sec = 0;
       app.calDisplayDate.tm_isdst = -1;
       std::mktime(&app.calDisplayDate);
-      taskbar_popup_create(app, static_cast<int>(app.pointerX), 320, 380);
+      taskbar_popup_create(app, slotCenterX, 320, 380);
     }
     wl_display_flush(app.display);
     return;
   }
 
   if (type == "weather") {
-    if (app.popupSurface) { taskbar_popup_close(app); }
+    if (dismissedPopKind == TaskbarPopupKind::Weather) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Weather) { taskbar_popup_close(app); }
     else {
       app.popupKind = TaskbarPopupKind::Weather;
       app.weatherInstanceId = wid;
-      taskbar_popup_create(app, static_cast<int>(app.pointerX), eh::widgets::popup::weather::kWeatherPopupW, eh::widgets::popup::weather::kWeatherPopupH);
+      taskbar_popup_create(app, slotCenterX, eh::widgets::popup::weather::kWeatherPopupW, eh::widgets::popup::weather::kWeatherPopupH);
     }
     wl_display_flush(app.display);
     return;
@@ -2483,10 +2711,14 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     else if (zone == 2) app.mpris->next();
     else if (zone == 1) app.mpris->play_pause();
     else {
-      if (app.popupSurface) { taskbar_popup_close(app); }
+      if (dismissedPopKind == TaskbarPopupKind::MediaPlayer) {
+        wl_display_flush(app.display);
+        return;
+      }
+      if (app.popupSurface && app.popupKind == TaskbarPopupKind::MediaPlayer) { taskbar_popup_close(app); }
       else {
         app.popupKind = TaskbarPopupKind::MediaPlayer;
-        taskbar_popup_create(app, static_cast<int>(app.pointerX),
+        taskbar_popup_create(app, slotCenterX,
                              eh::widgets::popup::media_player::kMediaPlayerPopupW,
                              eh::widgets::popup::media_player::kMediaPlayerPopupH);
       }
@@ -2499,7 +2731,9 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     const double globalScale = std::clamp(scAct.dock.shellUiScale, 0.5, 2.0);
     const double taskbarUIScale = std::clamp(app.settings.scale, 0.5, 2.0) * globalScale;
     const double iconRaw = static_cast<double>(app.settings.iconSize) * taskbarUIScale;
-    const double boxH = static_cast<double>(app.settings.height) * taskbarUIScale;
+    // Raw (already effective-height-normalized) bar height, matching the icon
+    // clamp in taskbar_paint_widget_bar so pick and paint agree.
+    const double boxH = static_cast<double>(app.settings.height);
     const double icon = std::clamp(iconRaw, 8.0, std::max(8.0, boxH - 8.0));
     const int pick = eh::shell::dock_slot_hooks::workspaces_pick_index(
         app.pointerX - hit.x, hit.w, scAct, wid, icon, app.workspaceStrip);
@@ -2510,7 +2744,11 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
   }
 
   if (type == "control_center") {
-    if (app.popupSurface) {
+    if (dismissedPopKind == TaskbarPopupKind::ControlCenter) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::ControlCenter) {
       taskbar_popup_close(app);
     } else {
       app.popupKind = TaskbarPopupKind::ControlCenter;
@@ -2519,30 +2757,47 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
         const std::string wid = app.ccWidgetId.empty() ? std::string("control_center") : app.ccWidgetId;
         static_cast<void>(eh::shell::dock_slot_hooks::control_center_weather_state(eh::config::shell_config_snapshot(), wid));
       }
-      taskbar_popup_create(app, static_cast<int>(app.pointerX), 620, 640);
+      // Size to what the paint path will actually lay out (UI-scaled cards,
+      // gaps and margins, animations resolved to their targets) instead of the
+      // fixed 620x640 constant, which clipped the panel's tail.
+      const int ccW = eh::shell::dock::kControlCenterPopupW();
+      const int ccH = taskbar_cc_want_height(app, ccW);
+      namespace ccl = eh::shell::dock::control_center;
+      ccl::cc_log("resize reason=taskbar-open open w=" + std::to_string(ccW) +
+                  " h=" + std::to_string(app.popupH) + " want=" + std::to_string(ccH) +
+                  " anchorX=" + std::to_string(slotCenterX));
+      taskbar_popup_create(app, slotCenterX, ccW, ccH);
     }
     wl_display_flush(app.display);
     return;
   }
 
   if (type == "volume_mixer") {
-    if (app.popupSurface) { taskbar_popup_close(app); }
+    if (dismissedPopKind == TaskbarPopupKind::VolumeMixer) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::VolumeMixer) { taskbar_popup_close(app); }
     else {
       app.popupKind = TaskbarPopupKind::VolumeMixer;
-      taskbar_popup_create(app, static_cast<int>(app.pointerX), 300, 440);
+      taskbar_popup_create(app, slotCenterX, 300, 440);
     }
     wl_display_flush(app.display);
     return;
   }
 
   if (type == "vpn") {
-    if (app.popupSurface) { taskbar_popup_close(app); }
+    if (dismissedPopKind == TaskbarPopupKind::Vpn) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Vpn) { taskbar_popup_close(app); }
     else {
       app.popupKind = TaskbarPopupKind::Vpn;
       auto& nm = eh::net::NetworkManagerService::instance();
       const int vpnCount = static_cast<int>(nm.state().vpnConnections.size());
       const int popupH = eh::shell::dock::popup::vpn::vpn_popup_height(vpnCount);
-      taskbar_popup_create(app, static_cast<int>(app.pointerX),
+      taskbar_popup_create(app, slotCenterX,
                            eh::shell::dock::popup::vpn::kVpnPopupW, popupH);
     }
     wl_display_flush(app.display);
@@ -2550,10 +2805,14 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
   }
 
   if (type == "battery") {
-    if (app.popupSurface) { taskbar_popup_close(app); }
+    if (dismissedPopKind == TaskbarPopupKind::Battery) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Battery) { taskbar_popup_close(app); }
     else {
       app.popupKind = TaskbarPopupKind::Battery;
-      taskbar_popup_create(app, static_cast<int>(app.pointerX),
+      taskbar_popup_create(app, slotCenterX,
                            eh::widgets::kBatteryPopupW, eh::widgets::battery_popup_height());
     }
     wl_display_flush(app.display);
@@ -2561,21 +2820,22 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
   }
 
   if (type == "bluetooth") {
-    if (app.popupSurface) { taskbar_popup_close(app); }
+    // If this click just dismissed the Bluetooth popup, treat it as a toggle-close
+    // and do not reopen it right away.
+    if (dismissedPopKind == TaskbarPopupKind::Bluetooth) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Bluetooth) { taskbar_popup_close(app); }
     else {
       app.popupKind = TaskbarPopupKind::Bluetooth;
-      taskbar_popup_create(app, static_cast<int>(app.pointerX),
+      taskbar_popup_create(app, slotCenterX,
                            eh::widgets::kBluetoothPopupW, eh::widgets::bluetooth_popup_height());
     }
     wl_display_flush(app.display);
     return;
   }
 
-  if (type == "launchpad") {
-    ipc_send_command("launchpad");
-    wl_display_flush(app.display);
-    return;
-  }
   if (type == "trash") { launch_exec_command("xdg-open trash:///"); wl_display_flush(app.display); return; }
 
   // Default: app activation / launch
@@ -2587,6 +2847,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
           eh::shell::paths::normalize_desktop_app_id(tl.appId) == normWid) {
         zwlr_foreign_toplevel_handle_v1_activate(tl.handle, app.seat);
         wl_display_flush(app.display);
+        taskbar_start_launch_bounce(app, normWid, false);
         found = true;
         break;
       }
@@ -2595,6 +2856,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
       if (auto desktop = find_desktop_file_for_appid(normWid)) {
         if (auto info = read_desktop_entry_info(*desktop)) {
           launch_exec_command(info->exec);
+          taskbar_start_launch_bounce(app, normWid, true);
         }
       }
     }
@@ -2848,10 +3110,11 @@ static void taskbar_frame_done(void* data, wl_callback* cb, uint32_t /*composito
   wl_callback_destroy(cb);
   app.frameCallback = nullptr;
   app.frameCallbackRequestedMs = 0;
-  if (app.frameRedrawPending) {
-    app.frameRedrawPending = false;
-    taskbar_draw(app);
-  }
+  // Tick first: while an animation is live this both advances it and — via
+  // taskbar_draw()'s schedule — requests the next frame, giving a vsync-locked
+  // frame chain for the launch bounce / auto-hide slide.
+  app.anim.tick();
+  if (app.frameRedrawPending || app.anim.has_active()) taskbar_draw(app);
 }
 
 static const wl_callback_listener g_taskbar_frame_listener = {
@@ -2947,6 +3210,11 @@ void taskbar_draw(TaskbarApp& app) {
 
   if (!app.enabled) { diag("exit:disabled"); debug_log("taskbar", "draw: #%llu disabled, exit early", (unsigned long long)drawCallCount); return; }
   app.frameRedrawPending = false;
+  // Advance the animation clock on every draw (not only from the frame
+  // callback) so input/config-triggered draws also progress the launch bounce
+  // and the auto-hide slide, and keep the frame chain alive while one runs.
+  app.anim.tick();
+  if (app.anim.has_active()) taskbar_schedule_frame(app);
   eh::shell::dock_slot_hooks::battery_widget_poll();
   eh::shell::dock_slot_hooks::bluetooth_widget_poll();
   if (app.mpris) {
@@ -3020,14 +3288,15 @@ void taskbar_draw(TaskbarApp& app) {
   const int radius = ts.radius;
   const int margin = isFloating ? ts.floatingAmount : 0;
 
-  // Pre-measure content width for fill mode
-  double fillContentW = 0;
+  // Pre-measure section widths for fill mode (bar is sized to the three-
+  // section layout, not just the raw content width).
+  eh::shell::taskbar::TaskbarSectionWidths fillSections{};
   if (isFill) {
     const auto tM0 = std::chrono::steady_clock::now();
-    fillContentW = eh::shell::taskbar::taskbar_measure_content_width(
+    fillSections = eh::shell::taskbar::taskbar_measure_sections(
         app, ts.leftWidgets, ts.centerWidgets, ts.rightWidgets);
     const double tM = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tM0).count();
-    if (tM > 0.5) std::cerr << "[taskbar-bench] measure_content_width=" << tM << "ms\n";
+    if (tM > 0.5) std::cerr << "[taskbar-bench] measure_sections=" << tM << "ms\n";
   }
 
   for (auto& up : app.layers) {
@@ -3063,11 +3332,21 @@ void taskbar_draw(TaskbarApp& app) {
 
     if (bufScale != 1.0) cairo_scale(cr, bufScale, bufScale);
 
-    const bool use_panel = !isFill;
+    // The three-section panel layout applies in every width mode;
+    // taskbar_paint_widget_bar falls back to the centered strip (with
+    // horizontal compression) when the sections would collide.
+    const bool use_panel = true;
     const double barW = [&]() -> double {
       if (isFloating) return static_cast<double>(logW) - static_cast<double>(margin) * 2.0;
       if (isFill) {
-        const double cw2 = fillContentW + 8.0;
+        const double ui = std::clamp(ts.scale, 0.5, 2.0) *
+                          std::clamp(eh::config::shell_config_snapshot().dock.shellUiScale, 0.5, 2.0);
+        const double pad = eh::shell::taskbar::strip_pad_px(ui);
+        const double secGap = eh::shell::taskbar::section_gap_px(ui);
+        // Half-width must clear the wider of the two side sections so the
+        // center section can sit on the bar's (screen) center with padding.
+        const double half = pad + std::max(fillSections.left, fillSections.right) + secGap;
+        const double cw2 = fillSections.center + 2.0 * half;
         return std::clamp(cw2, 80.0, static_cast<double>(logW));
       }
       return static_cast<double>(logW);
@@ -3211,8 +3490,13 @@ void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfi
   next.borderSize = t.borderSize;
   next.positionTop = t.positionTop;
   next.outputName = t.outputName;
+  next.uiGlobalScale = sc.dock.shellUiScale;
   // Theme follows the dock's setting (single source of truth for the shell).
   next.iconTheme = sc.dock.iconTheme;
+
+  // Grow the bar when the icon square plus breathing room outgrows the
+  // configured height, so widgets never paint flush against the bar edges.
+  next.height = eh::shell::taskbar::effective_height_px(next, sc.dock.shellUiScale);
 
   const bool geometryChanged =
       next.enabled        != app.settings.enabled       ||
@@ -3221,7 +3505,8 @@ void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfi
       next.floatingAmount != app.settings.floatingAmount ||
       next.edgeGap        != app.settings.edgeGap        ||
       next.exclusiveZoneGap != app.settings.exclusiveZoneGap ||
-      next.positionTop    != app.settings.positionTop;
+      next.positionTop    != app.settings.positionTop    ||
+      next.uiGlobalScale  != app.settings.uiGlobalScale;
 
   const bool visualChanged =
       next.radius             != app.settings.radius             ||
@@ -3440,6 +3725,62 @@ void taskbar_anim_start_slide(TaskbarApp& app) {
         app.animOffsetPx = app.animTargetPx;
       });
   taskbar_draw(app);
+}
+
+namespace {
+
+// Damped sine, identical to the dock's launch bounce: one full-weight hop that
+// rings out over the animation window.
+float taskbar_launch_bounce_sample(float u, float ampPx) {
+  constexpr float kPi = 3.14159265f;
+  const float damp = std::exp(-2.2f * u);
+  constexpr float angleOffset = -1.5707963f;
+  return damp * std::sin(u * kPi * 5.25f + angleOffset) * ampPx;
+}
+
+}  // namespace
+
+void taskbar_start_launch_bounce(TaskbarApp& app, const std::string& app_key_raw, const bool cold_start) {
+  if (app_key_raw.empty()) return;
+  const std::string anchor = eh::shell::paths::normalize_desktop_app_id(app_key_raw);
+  if (anchor.empty() || anchor == "unknown") return;
+
+  app.anim.cancel(app.launchBounceAnimId);
+  app.launchBounceAnimId = 0;
+  app.launchBounceLiftPx = 0.f;
+  app.launchBounceAnchorNorm = anchor;
+
+  const float dur = cold_start ? 520.f : 300.f;
+  const float amp = cold_start ? 12.f : 5.f;
+
+  app.launchBounceAnimId = app.anim.animate(
+      0.f, 1.f, dur, eh::shell::Easing::Linear,
+      [&app, amp](const float u) { app.launchBounceLiftPx = taskbar_launch_bounce_sample(u, amp); },
+      [&app] {
+        app.launchBounceLiftPx = 0.f;
+        app.launchBounceAnchorNorm.clear();
+        app.launchBounceAnimId = 0;
+      });
+  // taskbar_draw() ticks app.anim and re-requests a frame while an animation
+  // is live, so this both paints the first sample and starts the frame chain.
+  taskbar_draw(app);
+}
+
+double taskbar_launch_bounce_lift_y(const TaskbarApp& app, const std::string& slot_key) {
+  if (app.launchBounceAnchorNorm.empty()) return 0.0;
+  const std::string nk = eh::shell::paths::normalize_desktop_app_id(slot_key);
+  if (nk.empty()) return 0.0;
+  const std::string& anchor = app.launchBounceAnchorNorm;
+  if (nk == anchor || pin_identity_same_resolved_desktop(nk, anchor))
+    return static_cast<double>(app.launchBounceLiftPx);
+  // A pin can resolve to a different desktop id than the launch key
+  // (flatpak / appimage variants) — go through the pin-identity key cache
+  // that taskbar_paint refreshes whenever the pin list changes.
+  const auto it = app.pinIdentityKeys.find(nk);
+  if (it != app.pinIdentityKeys.end())
+    for (const auto& ik : it->second)
+      if (ik == anchor) return static_cast<double>(app.launchBounceLiftPx);
+  return 0.0;
 }
 
 void taskbar_tooltip_cancel(TaskbarApp& app) {

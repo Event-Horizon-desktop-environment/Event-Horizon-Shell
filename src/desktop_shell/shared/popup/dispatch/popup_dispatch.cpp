@@ -154,8 +154,17 @@ bool popup_dispatch_paint(DockApp& app, cairo_t* cr) {
 bool popup_dispatch_slot(DockApp& app, int slotKind, int slotCenterX, uint32_t serial) {
   using PK = PickSlot::Kind;
   auto k = static_cast<PK>(slotKind);
+  // If this same press just dismissed a popup (pressing the slot's icon on the
+  // dock), treat the click as a toggle-close: reset the flag and do not reopen
+  // the popup right away. Mirrors the Calendar/Weather/Media guards.
+  const auto dismissed_this_press = [&app](DockApp::PopupKind kind) -> bool {
+    if (app.popupDismissedThisPress != kind) return false;
+    app.popupDismissedThisPress = DockApp::PopupKind::None;
+    return true;
+  };
   switch (k) {
     case PK::VolumeMixer:
+      if (dismissed_this_press(DockApp::PopupKind::VolumeMixer)) return true;
       if (app.popupOpen && app.popupKind == DockApp::PopupKind::VolumeMixer) {
         popup_close(app);
         return true;
@@ -163,6 +172,7 @@ bool popup_dispatch_slot(DockApp& app, int slotKind, int slotCenterX, uint32_t s
       popup_open_volume_mixer(app, slotCenterX, serial);
       return true;
     case PK::Vpn:
+      if (dismissed_this_press(DockApp::PopupKind::Vpn)) return true;
       if (app.popupOpen && app.popupKind == DockApp::PopupKind::Vpn) {
         popup_close(app);
         return true;
@@ -170,6 +180,7 @@ bool popup_dispatch_slot(DockApp& app, int slotKind, int slotCenterX, uint32_t s
       popup_open_vpn(app, slotCenterX, serial);
       return true;
     case PK::Battery:
+      if (dismissed_this_press(DockApp::PopupKind::Battery)) return true;
       if (app.popupOpen && app.popupKind == DockApp::PopupKind::Battery) {
         popup_close(app);
         return true;
@@ -177,6 +188,7 @@ bool popup_dispatch_slot(DockApp& app, int slotKind, int slotCenterX, uint32_t s
       popup_open_battery(app, slotCenterX, serial);
       return true;
     case PK::Bluetooth:
+      if (dismissed_this_press(DockApp::PopupKind::Bluetooth)) return true;
       if (app.popupOpen && app.popupKind == DockApp::PopupKind::Bluetooth) {
         popup_close(app);
         return true;
@@ -184,6 +196,7 @@ bool popup_dispatch_slot(DockApp& app, int slotKind, int slotCenterX, uint32_t s
       popup_open_bluetooth(app, slotCenterX, serial);
       return true;
     case PK::ControlCenter:
+      if (dismissed_this_press(DockApp::PopupKind::ControlCenter)) return true;
       if (app.popupOpen && app.popupKind == DockApp::PopupKind::ControlCenter) {
         popup_close(app);
         return true;

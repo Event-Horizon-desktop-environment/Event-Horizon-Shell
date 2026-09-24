@@ -1,12 +1,17 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace sdbus {
@@ -88,6 +93,14 @@ public:
   void pair_device(const std::string& path);
   void set_device_trust(const std::string& path, bool trusted);
 
+  // Auto-reconnect: while enabled (and the adapter is powered and not
+  // scanning) the service pages paired devices back when they are in range
+  // (RSSI present) or have been connected during this process lifetime, with
+  // a per-device cooldown. Devices the user disconnected manually are left
+  // alone for a few minutes to honour explicit disconnects.
+  void set_auto_reconnect(bool enabled);
+  [[nodiscard]] bool auto_reconnect() const noexcept;
+
 private:
   BluezService();
   ~BluezService();
@@ -98,11 +111,28 @@ private:
 
   void refresh_locked();
   void bind_signals_locked();
+  void mark_connected_locked(const std::string& address);
+  void settle_on_disconnected(const std::string& address);
+  void auto_reconnect_worker();
+  void attempt_auto_reconnects();
 
   mutable std::mutex mtx_{};
   bool started_ = false;
   ChangeCallback on_change_{};
   std::chrono::steady_clock::time_point lastRefreshDebounce_{};
+
+  // Auto-reconnect state. `everConnected_` and `reconnectCooldown_` are
+  // guarded by mtx_; `autoReconnect_` is atomic so the worker thread can read
+  // it without taking the lock.
+  std::atomic<bool> autoReconnect_{true};
+  std::unordered_set<std::string> everConnected_{};
+  std::unordered_map<std::string, std::chrono::steady_clock::time_point> reconnectCooldown_{};
+
+  // Worker thread lifecycle.
+  std::thread worker_{};
+  std::mutex worker_mtx_{};
+  std::condition_variable worker_cv_{};
+  bool stopWorker_ = false;
 
   // rfkill cache.
   mutable std::chrono::steady_clock::time_point lastRfkillCheck_{};

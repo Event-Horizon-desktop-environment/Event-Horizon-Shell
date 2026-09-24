@@ -56,6 +56,15 @@ static const char* eh_pactl_exe() {
   return "pactl";
 }
 
+static const char* eh_pw_top_exe() {
+   
+  // pw-top ships in sbin on many distros, which is not always on a user PATH.
+  if (access("/usr/sbin/pw-top", X_OK) == 0) return "/usr/sbin/pw-top";
+  if (access("/usr/bin/pw-top", X_OK) == 0) return "/usr/bin/pw-top";
+  if (access("/bin/pw-top", X_OK) == 0) return "/bin/pw-top";
+  return "pw-top";
+}
+
 static bool str_eq(const char* a, const char* b) { return a && b && std::strcmp(a, b) == 0; }
 
 struct NodeListenerData {
@@ -1276,16 +1285,22 @@ EngineSettings PipeWireService::query_engine_settings() const {
   std::string rate_s;
   std::string force_s;
   std::string allowed_s;
+  std::string quantum_s;
+  std::string force_q_s;
   std::vector<std::string> lines;
   pw_split_lines(blob, &lines);
   for (const std::string& line : lines) {
-    if (!rate_s.empty() && !force_s.empty() && !allowed_s.empty()) break;
+    if (!rate_s.empty() && !force_s.empty() && !allowed_s.empty() && !quantum_s.empty() && !force_q_s.empty()) break;
     std::string tmp;
     if (rate_s.empty() && pw_meta_take_quoted_value(line, "clock.rate", &tmp)) rate_s = std::move(tmp);
     else if (force_s.empty() && pw_meta_take_quoted_value(line, "clock.force-rate", &tmp))
       force_s = std::move(tmp);
     else if (allowed_s.empty() && pw_meta_take_quoted_value(line, "clock.allowed-rates", &tmp))
       allowed_s = std::move(tmp);
+    else if (quantum_s.empty() && pw_meta_take_quoted_value(line, "clock.quantum", &tmp))
+      quantum_s = std::move(tmp);
+    else if (force_q_s.empty() && pw_meta_take_quoted_value(line, "clock.force-quantum", &tmp))
+      force_q_s = std::move(tmp);
   }
   if (rate_s.empty()) return es;
 
@@ -1293,6 +1308,8 @@ EngineSettings PipeWireService::query_engine_settings() const {
   es.clock_rate_hz = pw_parse_positive_int_value(rate_s, 48000);
   es.clock_force_rate_hz = force_s.empty() ? 0 : pw_parse_nonneg_int_value(force_s, 0);
   if (!allowed_s.empty()) es.allowed_rates_hz = pw_parse_int_bracket_list(allowed_s);
+  es.clock_quantum = quantum_s.empty() ? 0 : pw_parse_nonneg_int_value(quantum_s, 0);
+  es.clock_force_quantum = force_q_s.empty() ? 0 : pw_parse_nonneg_int_value(force_q_s, 0);
   return es;
 }
 
@@ -1333,6 +1350,181 @@ void PipeWireService::apply_engine_allowed_rates_hz(const std::vector<int>& rate
   (void)spawn_exec_wait_owned({eh_pw_metadata_exe(), "-n", "settings", "0", "clock.allowed-rates", allowed_meta});
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   emit_change_locked();
+}
+
+void PipeWireService::apply_engine_quantum(int quantum) {
+    
+  if (quantum < 0 || quantum > 2000000) return;
+  const std::string q_s = std::to_string(quantum);
+  (void)spawn_exec_wait_owned({eh_pw_metadata_exe(), "-n", "settings", "0", "clock.quantum", q_s});
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  emit_change_locked();
+}
+
+void PipeWireService::apply_engine_force_quantum(int quantum) {
+    
+  if (quantum < 0 || quantum > 2000000) return;
+  const std::string q_s = std::to_string(quantum);
+  (void)spawn_exec_wait_owned({eh_pw_metadata_exe(), "-n", "settings", "0", "clock.force-quantum", q_s});
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  emit_change_locked();
+}
+
+bool PipeWireService::restart_services() {
+   
+  // Restart the user PipeWire stack. Any live pw_context connection in this
+  // process is dropped by the restart; CLI-based queries (pw-metadata, pactl,
+  // pw-link) keep working against the fresh daemons.
+  return spawn_exec_wait_owned({"systemctl", "--user", "restart", "pipewire", "pipewire-pulse", "wireplumber"});
+}
+
+namespace {
+
+// Whitespace token split of a fixed-width pw-top column prefix.
+std::vector<std::string> pw_top_tokens(const std::string& s) {
+  std::vector<std::string> out;
+  size_t i = 0;
+  while (i < s.size()) {
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    if (i >= s.size()) break;
+    const size_t start = i;
+    while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    out.push_back(s.substr(start, i - start));
+  }
+  return out;
+}
+
+// Parses "40.1us" / "1.0us"; "---" / "???" / "0.0us" all map to 0.
+double pw_top_us(const std::string& s) {
+  if (s.empty() || s[0] == '-' || s[0] == '?') return 0.0;
+  char* endp = nullptr;
+  const double v = std::strtod(s.c_str(), &endp);
+  if (endp == s.c_str() || !std::isfinite(v) || v < 0.0) return 0.0;
+  return v;
+}
+
+long pw_top_err(const std::string& s) {
+  if (s.empty() || s[0] == '-' || s[0] == '?') return 0;
+  char* endp = nullptr;
+  const long v = std::strtol(s.c_str(), &endp, 10);
+  if (endp == s.c_str() || v < 0) return 0;
+  return v;
+}
+
+bool pw_top_is_int(const std::string& s) {
+  if (s.empty()) return false;
+  for (unsigned char c : s)
+    if (!std::isdigit(c)) return false;
+  return true;
+}
+
+// Parses the last *complete* snapshot block from a `pw-top -b` capture. A block
+// is committed when the next header line arrives, so a partial trailing block
+// (capture cut mid-print) is discarded.
+PwTopSample pw_parse_pw_top_batch(const std::string& blob) {
+  PwTopSample out{};
+  std::vector<std::string> lines;
+  pw_split_lines(blob, &lines);
+
+  size_t name_col = 0;
+  bool have_header = false;
+  std::vector<PwTopNode> block;
+  std::vector<PwTopNode> last_complete;
+
+  for (const std::string& raw : lines) {
+    // Header: "S   ID  QUANT   RATE    WAIT    BUSY   W/Q   B/Q  ERR FORMAT           NAME"
+    if (raw.find("QUANT") != std::string::npos && raw.find("RATE") != std::string::npos &&
+        raw.find("BUSY") != std::string::npos && raw.find("NAME") != std::string::npos) {
+      if (!block.empty()) last_complete = block;
+      block.clear();
+      name_col = raw.find("NAME");
+      have_header = true;
+      continue;
+    }
+    if (!have_header || raw.size() <= name_col) continue;
+
+    // Numeric columns precede NAME; the name is the remainder to end-of-line
+    // (it may be longer than the header column, so it is not width-clipped).
+    const std::vector<std::string> cols = pw_top_tokens(raw.substr(0, name_col));
+    if (cols.size() < 9) continue;
+    if (!pw_top_is_int(cols[1])) continue;
+
+    PwTopNode n{};
+    n.node_id = static_cast<std::uint32_t>(std::strtoul(cols[1].c_str(), nullptr, 10));
+    n.quantum = pw_parse_nonneg_int_value(cols[2], 0);
+    n.rate_hz = pw_parse_nonneg_int_value(cols[3], 0);
+    n.wait_us = pw_top_us(cols[4]);
+    n.busy_us = pw_top_us(cols[5]);
+    n.errors = pw_top_err(cols[8]);
+
+    std::string name = raw.substr(name_col);
+    trim_ascii_ws_inplace(&name);
+    while (!name.empty() && (name.front() == '+' || std::isspace(static_cast<unsigned char>(name.front()))))
+      name.erase(name.begin());
+    trim_ascii_ws_inplace(&name);
+    n.name = name.empty() ? ("node " + cols[1]) : name;
+    block.push_back(std::move(n));
+  }
+  if (!block.empty()) last_complete = block;
+  if (last_complete.empty()) return out;
+
+  out.available = true;
+  // Keep only nodes that are actually doing work: either they own a cycle
+  // (quantum > 0) or they reported non-zero processing time. This drops idle
+  // placeholder drivers (Dummy-Driver, Midi-Bridge, suspended ALSA nodes).
+  out.nodes.reserve(last_complete.size());
+  for (const PwTopNode& n : last_complete) {
+    if (n.quantum > 0 || n.busy_us > 0.0) out.nodes.push_back(n);
+  }
+  for (const PwTopNode& n : out.nodes) {
+    out.xruns_total += n.errors;
+    if (n.quantum > 0) ++out.active_nodes;
+  }
+
+  // Reference node = the one whose processing costs the largest fraction of its
+  // own cycle (the closest thing to a "worst DSP load" signal).
+  int ref = -1;
+  double ref_load = -1.0;
+  for (size_t i = 0; i < out.nodes.size(); ++i) {
+    const PwTopNode& n = out.nodes[i];
+    if (n.quantum <= 0 || n.rate_hz <= 0 || n.busy_us <= 0.0) continue;
+    const double cycle_us = static_cast<double>(n.quantum) * 1e6 / static_cast<double>(n.rate_hz);
+    if (cycle_us <= 0.0) continue;
+    const double load = n.busy_us / cycle_us * 100.0;
+    if (load > ref_load) {
+      ref_load = load;
+      ref = static_cast<int>(i);
+    }
+  }
+  if (ref >= 0) {
+    const PwTopNode& n = out.nodes[static_cast<size_t>(ref)];
+    out.reference_name = n.name;
+    out.reference_quantum = n.quantum;
+    out.reference_rate_hz = n.rate_hz;
+    out.reference_cycle_us = static_cast<double>(n.quantum) * 1e6 / static_cast<double>(n.rate_hz);
+    out.dsp_load_pct = ref_load;
+  }
+
+  std::sort(out.nodes.begin(), out.nodes.end(), [](const PwTopNode& a, const PwTopNode& b) {
+    if (a.busy_us != b.busy_us) return a.busy_us > b.busy_us;
+    return a.node_id < b.node_id;
+  });
+  return out;
+}
+
+} // namespace
+
+PwTopSample PipeWireService::query_pw_top_batch() const {
+   
+  PwTopSample out{};
+  std::string blob;
+  // `-b -n 2` prints two snapshots and exits immediately (~10ms), so this stays
+  // a cheap synchronous poll rather than a lingering process. The first
+  // iteration is always empty (every node still C/idle with QUANT=0, BUSY=---),
+  // so a single -n 1 capture parses to zero busy nodes and shows the empty
+  // state. The parser keeps the last complete block, i.e. the populated one.
+  if (!spawn_capture_stdout({eh_pw_top_exe(), "-b", "-n", "2"}, &blob)) return out;
+  return pw_parse_pw_top_batch(blob);
 }
 
 CompatDefaultSinkFormat PipeWireService::query_compat_default_sink_format() const {
@@ -1473,6 +1665,13 @@ void PipeWireService::apply_saved_defaults(const SavedDefaults& defaults) {
       (!cur.available || cur.allowed_rates_hz != defaults.engine_allowed_rates_hz)) {
     apply_engine_allowed_rates_hz(defaults.engine_allowed_rates_hz);
   }
+  if (defaults.engine_quantum > 0 && (!cur.available || cur.clock_quantum != defaults.engine_quantum)) {
+    apply_engine_quantum(defaults.engine_quantum);
+  }
+  if (defaults.engine_force_quantum > 0 &&
+      (!cur.available || cur.clock_force_quantum != defaults.engine_force_quantum)) {
+    apply_engine_force_quantum(defaults.engine_force_quantum);
+  }
   if (defaults.compat_pcm_format >= 0 && defaults.compat_pcm_format < 4) {
     apply_compat_default_sink_pcm_format(defaults.compat_pcm_format);
   }
@@ -1542,50 +1741,76 @@ static std::string pactl_card_profiles_inner_json(const std::string& card) {
   return {};
 }
 
-std::vector<BluetoothCardProfiles> PipeWireService::query_bluetooth_cards() const {
+std::vector<AudioCardProfiles> PipeWireService::query_audio_cards(bool bluetooth_only) const {
    
-  std::vector<BluetoothCardProfiles> out;
+  std::vector<AudioCardProfiles> out;
   std::string blob;
   if (!spawn_capture_stdout({eh_pactl_exe(), "-f", "json", "list", "cards"}, &blob))
     return out;
 
-  constexpr std::uint32_t kMaxCards = 4;
+  constexpr std::uint32_t kMaxCards = 6;
   size_t scan = 0;
   std::string card;
   while (out.size() < kMaxCards && extract_next_card_json_object(blob, &scan, &card)) {
-    const std::string driver = json_string_value_quoted(card, "driver");
-    std::string dlow = ascii_lower_copy(driver);
-    if (dlow.find("bluez") == std::string::npos) continue;
+    const std::string driver = ascii_lower_copy(json_string_value_quoted(card, "driver"));
+    const bool is_bt = driver.find("bluez") != std::string::npos;
+    if (is_bt != bluetooth_only) continue;
 
-    BluetoothCardProfiles bp{};
+    AudioCardProfiles bp{};
     unsigned idx_u = 0;
     if (!json_uint_field(card, "index", &idx_u)) continue;
     bp.card_index = static_cast<std::uint32_t>(idx_u);
-    bp.card_name = json_string_value_quoted(card, "name");
-    if (bp.card_name.empty()) bp.card_name = json_string_value_quoted(card, "device.description");
-    if (bp.card_name.empty()) bp.card_name = "Bluetooth audio";
+    bp.card_key = json_string_value_quoted(card, "name");
+    bp.card_name = json_string_value_quoted(card, "device.description");
+    if (bp.card_name.empty()) bp.card_name = json_string_value_quoted(card, "name");
+    if (bp.card_name.empty()) bp.card_name = "Audio card";
     bp.active_profile_key = json_string_value_quoted(card, "active_profile");
 
     const std::string prof_inner = pactl_card_profiles_inner_json(card);
     if (!prof_inner.empty()) {
       std::size_t pos = 0;
-      while (pos < prof_inner.size()) {
-        auto key_start = prof_inner.find('"', pos);
-        if (key_start == std::string::npos || key_start + 1 >= prof_inner.size()) break;
-        auto key_end = prof_inner.find('"', key_start + 1);
+      const std::size_t n = prof_inner.size();
+      constexpr std::string_view kDescKey = "\"description\":\"";
+      while (pos < n) {
+        // Skip separators/whitespace: the next real token is a profile key.
+        while (pos < n && (prof_inner[pos] == ',' || prof_inner[pos] == ' ' || prof_inner[pos] == '\n' ||
+                           prof_inner[pos] == '\r' || prof_inner[pos] == '\t'))
+          ++pos;
+        if (pos >= n || prof_inner[pos] != '"') break;
+        const std::size_t key_start = pos + 1;
+        const std::size_t key_end = prof_inner.find('"', key_start);
         if (key_end == std::string::npos) break;
-        const std::string_view key(prof_inner.data() + key_start + 1, key_end - key_start - 1);
-        constexpr std::string_view kDescKey = R"({"description":")";
-        auto desc_start = prof_inner.find(kDescKey, key_end + 1);
-        if (desc_start == std::string::npos) break;
-        desc_start += kDescKey.size();
-        auto desc_end = prof_inner.find('"', desc_start);
+        const std::string_view key(prof_inner.data() + key_start, key_end - key_start);
+
+        // Locate this profile's value object, then its description.
+        const std::size_t obj = prof_inner.find('{', key_end + 1);
+        if (obj == std::string::npos) break;
+        const std::size_t desc_at = prof_inner.find(kDescKey, obj + 1);
+        if (desc_at == std::string::npos) break;
+        const std::size_t desc_start = desc_at + kDescKey.size();
+        const std::size_t desc_end = prof_inner.find('"', desc_start);
         if (desc_end == std::string::npos) break;
-        BluetoothCardProfileOption opt;
+
+        AudioCardProfileOption opt;
         opt.key = key;
         opt.description = std::string(prof_inner.data() + desc_start, desc_end - desc_start);
         if (!opt.key.empty()) bp.profiles.push_back(std::move(opt));
+
+        // Jump past the rest of this value object (pactl emits fields after
+        // "description") so the next iteration starts at the next profile key.
+        int depth = 1;
         pos = desc_end + 1;
+        for (; pos < n; ++pos) {
+          if (prof_inner[pos] == '{')
+            ++depth;
+          else if (prof_inner[pos] == '}') {
+            --depth;
+            if (depth == 0) {
+              ++pos;
+              break;
+            }
+          }
+        }
       }
     }
     if (!bp.profiles.empty()) out.push_back(std::move(bp));
@@ -1593,10 +1818,65 @@ std::vector<BluetoothCardProfiles> PipeWireService::query_bluetooth_cards() cons
   return out;
 }
 
-void PipeWireService::apply_bluetooth_card_profile(std::uint32_t card_index, const std::string& profile_key) {
+// Map the codec name embedded in a bluez A2DP profile description
+// ("High Fidelity Playback (A2DP Sink, codec aptX)") to the numeric SPA codec
+// id that PipeWire's bluez "switch-codec" send-message accepts
+// (module-protocol-pulse message-handler.c parses it with atoi). Longest match
+// wins so "SBC-XQ" beats "SBC", "aptX HD" beats "aptX", etc. Returns the id as
+// a decimal string, or "" when the profile is not an A2DP codec (off,
+// HFP/CVSD/mSBC, audio-gateway, ...). The bare "a2dp-sink"/"a2dp-source"
+// profiles carry the device's highest-priority codec, so the description is
+// the only reliable way to resolve them.
+static const char* bt_a2dp_codec_id_token(const std::string& description) {
+  struct CodecMatch {
+    const char* token;  // media_codec->description substring, longest first
+    const char* id;     // SPA_BLUETOOTH_AUDIO_CODEC_* value
+  };
+  static constexpr CodecMatch kMatches[] = {
+      {"aptX-LL DUPLEX", "10"},    {"FastStream duplex SBC", "12"},
+      {"aptX-LL", "9"},            {"FastStream", "11"},
+      {"aptX HD", "7"},            {"SBC-XQ", "2"},
+      {"AAC-ELD", "5"},            {"aptX", "6"},
+      {"LDAC", "8"},               {"AAC", "4"},
+      {"SBC", "1"},                {"MPEG", "3"},
+  };
+  for (const CodecMatch& m : kMatches)
+    if (description.find(m.token) != std::string::npos) return m.id;
+  return "";
+}
+
+// True for Bluetooth profiles that negotiate a vendor codec (aptX, aptX HD,
+// LDAC, FastStream, Opus 05, ...). SPA codec ids 1-5 are the non-vendor A2DP
+// codecs (SBC, SBC-XQ, MPEG, AAC, AAC-ELD); everything from 6 up is a vendor
+// extension. BlueZ is notoriously unable to re-negotiate a vendor codec
+// mid-link after another codec has been active (the transport dies and the
+// switch silently reverts), which is exactly the aptX problem.
+static bool bt_profile_is_vendor_codec(const std::string& profile_key,
+                                       const std::string& profile_description) {
+  if (profile_key.rfind("a2dp-sink", 0) != 0 && profile_key.rfind("a2dp-source", 0) != 0)
+    return false;
+  const std::string id_s = bt_a2dp_codec_id_token(profile_description);
+  if (id_s.empty()) return false;
+  const long id = std::strtol(id_s.c_str(), nullptr, 10);
+  return id >= 6;
+}
+
+void PipeWireService::apply_card_profile(std::uint32_t card_index, const std::string& card_key,
+                                         const std::string& profile_key,
+                                         const std::string& profile_description) {
    
   if (profile_key.empty()) return;
   const std::string idx_s = std::to_string(card_index);
+
+  // For Bluetooth vendor-codec profiles (aptX & co.) first cycle through "off".
+  // Selecting the codec directly can silently fail because BlueZ won't
+  // re-negotiate the vendor A2DP transport mid-link; "off" releases every
+  // transport so the next request re-runs A2DP discovery and re-offers the
+  // codec. Non-vendor codecs (SBC/SBC-XQ/AAC) switch fine without this.
+  const bool is_bluez = card_key.rfind("bluez_card.", 0) == 0;
+  if (is_bluez && bt_profile_is_vendor_codec(profile_key, profile_description))
+    (void)spawn_exec_wait_owned({eh_pactl_exe(), "set-card-profile", idx_s, "off"});
+
   (void)spawn_exec_wait_owned({eh_pactl_exe(), "set-card-profile", idx_s, profile_key});
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   emit_change_locked();

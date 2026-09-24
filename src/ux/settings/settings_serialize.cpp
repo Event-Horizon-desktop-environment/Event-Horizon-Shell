@@ -64,6 +64,8 @@ static void save_launchpad_settings_to_file(const eh::config::ShellConfig& sc) {
   ap.insert_or_assign("launchpad_view_mode", static_cast<int64_t>(a.launchpadViewMode));
   ap.insert_or_assign("launchpad_folder_size_pct", static_cast<int64_t>(a.launchpadFolderSizePct));
   ap.insert_or_assign("launchpad_folder_gap_px", static_cast<int64_t>(a.launchpadFolderGapPx));
+  ap.insert_or_assign("launchpad_folder_columns", static_cast<int64_t>(a.launchpadFolderColumns));
+  ap.insert_or_assign("launchpad_folder_rows", static_cast<int64_t>(a.launchpadFolderRows));
   ap.insert_or_assign("overlay_opacity_launchpad", static_cast<double>(a.overlayOpacityLaunchpad));
   root.insert_or_assign("appearance", std::move(ap));
   // Preserve existing folder entries by re-reading the file
@@ -98,6 +100,8 @@ static void load_launchpad_appearance_from_file(Settings& s) {
       assign_int("launchpad_view_mode", s.launchpadViewMode, 0, 1);
       assign_int("launchpad_folder_size_pct", s.launchpadFolderSizePct, 50, 200);
       assign_int("launchpad_folder_gap_px", s.launchpadFolderGapPx, 4, 48);
+      assign_int("launchpad_folder_columns", s.launchpadFolderColumns, 2, 8);
+      assign_int("launchpad_folder_rows", s.launchpadFolderRows, 1, 6);
       if (auto d = (*ap)["overlay_opacity_launchpad"].value<double>()) {
         s.overlayOpacityLaunchpadPct = static_cast<int>(std::lround(std::clamp(*d, 0.0, 1.0) * 100.0));
       }
@@ -355,6 +359,27 @@ Settings load_settings() {
   s.taskbarOutputName = sc.taskbar.outputName;
   s.desktopWidgetsOutputName = sc.desktopWidgetsOutputName;
   s.plasmaTheme = sc.plasmaTheme;
+  // `[dashboard]` — clamped to the same ranges the TOML parser uses.
+  s.dashboardEnabled = sc.dashboard.enabled;
+  s.dashboardTriggerHeight = std::clamp(sc.dashboard.triggerHeight, 4, 48);
+  s.dashboardColumns = std::clamp(sc.dashboard.columns, 1, 8);
+  s.dashboardGap = std::clamp(sc.dashboard.gap, 0, 48);
+  s.dashboardMarginX = std::clamp(sc.dashboard.marginX, 0, 200);
+  s.dashboardMarginTop = std::clamp(sc.dashboard.marginTop, 0, 200);
+  s.dashboardMarginBottom = std::clamp(sc.dashboard.marginBottom, 0, 200);
+  s.dashboardMaxWidth = std::clamp(sc.dashboard.maxWidth, 0, 7680);
+  // Cards → picker tokens: "id" for span 1, "id:span" otherwise. An empty
+  // list in TOML means "defaults", so mirror that here.
+  s.dashboardWidgets.clear();
+  {
+    const std::vector<eh::config::DashboardCardConfig>& dashCards =
+        sc.dashboard.cards.empty() ? eh::config::DashboardConfig::default_cards() : sc.dashboard.cards;
+    s.dashboardWidgets.reserve(dashCards.size());
+    for (const auto& card : dashCards) {
+      if (card.id.empty()) continue;
+      s.dashboardWidgets.push_back(card.span > 1 ? card.id + ":" + std::to_string(card.span) : card.id);
+    }
+  }
   s.wallpaperEnabled = sc.wallpaperEnabled;
   s.wallpaperMode = sc.wallpaperMode;
   s.wallpaperImage = eh::wallpaper::normalize_wallpaper_path(sc.wallpaperImage);
@@ -503,6 +528,8 @@ Settings load_settings() {
     s.launchpadViewMode = ap.launchpadViewMode;
     s.launchpadFolderSizePct = ap.launchpadFolderSizePct;
     s.launchpadFolderGapPx = ap.launchpadFolderGapPx;
+    s.launchpadFolderColumns = ap.launchpadFolderColumns;
+    s.launchpadFolderRows = ap.launchpadFolderRows;
     s.overviewAxis = ap.overviewAxis;
     s.overviewCaptureMode = ap.overviewCaptureMode;
     s.overviewLiveUpdates = ap.overviewLiveUpdates;
@@ -539,6 +566,7 @@ Settings load_settings() {
   s.powerShowBatteryPercentage = sc.power.showBatteryPercentage;
   s.powerTunedProfile = sc.power.tunedProfile;
   s.powerEpp = sc.power.epp;
+  s.btAutoReconnect = sc.bluetooth.autoReconnect;
   s.notificationsDbusEnabled = sc.notifications.dbusEnabled;
   s.notificationsDoNotDisturb = sc.notifications.doNotDisturb;
   s.notificationsDefaultTimeoutMs = static_cast<int>(sc.notifications.defaultTimeoutMs);
@@ -593,6 +621,8 @@ Settings load_settings() {
   s.audioEngineClockRateHz = sc.audio.engine_clock_rate_hz;
   s.audioEngineForceRateHz = sc.audio.engine_force_rate_hz;
   s.audioEngineAllowedRatesHz = sc.audio.engine_allowed_rates_hz;
+  s.audioEngineQuantum = sc.audio.engine_quantum;
+  s.audioEngineForceQuantum = sc.audio.engine_force_quantum;
   s.audioCompatPcmFormat = sc.audio.compat_pcm_format;
 
   load_desktop_widgets_from_file(s);
@@ -808,6 +838,8 @@ eh::config::ShellConfig settings_to_shell_config(const Settings& s) {
   sc.appearance.launchpadViewMode = std::clamp(s.launchpadViewMode, 0, 1);
   sc.appearance.launchpadFolderSizePct = std::clamp(s.launchpadFolderSizePct, 50, 200);
   sc.appearance.launchpadFolderGapPx = std::clamp(s.launchpadFolderGapPx, 4, 48);
+  sc.appearance.launchpadFolderColumns = std::clamp(s.launchpadFolderColumns, 2, 8);
+  sc.appearance.launchpadFolderRows = std::clamp(s.launchpadFolderRows, 1, 6);
   sc.appearance.overviewAxis = std::clamp(s.overviewAxis, 0, 1);
   sc.appearance.overviewCaptureMode = std::clamp(s.overviewCaptureMode, 0, 1);
   sc.appearance.overviewLiveUpdates = s.overviewLiveUpdates;
@@ -834,6 +866,7 @@ eh::config::ShellConfig settings_to_shell_config(const Settings& s) {
   sc.power.showBatteryPercentage = s.powerShowBatteryPercentage;
   sc.power.tunedProfile = s.powerTunedProfile;
   sc.power.epp = s.powerEpp;
+  sc.bluetooth.autoReconnect = s.btAutoReconnect;
   sc.nightLight.enabled = s.nightlightEnabled;
   sc.nightLight.dayTemperature = std::clamp(s.nightlightDayTemp, 4000, 6500);
   sc.nightLight.nightTemperature = std::clamp(s.nightlightNightTemp, 2500, 4000);
@@ -870,7 +903,34 @@ eh::config::ShellConfig settings_to_shell_config(const Settings& s) {
   sc.audio.engine_clock_rate_hz = s.audioEngineClockRateHz;
   sc.audio.engine_force_rate_hz = s.audioEngineForceRateHz;
   sc.audio.engine_allowed_rates_hz = s.audioEngineAllowedRatesHz;
+  sc.audio.engine_quantum = s.audioEngineQuantum;
+  sc.audio.engine_force_quantum = s.audioEngineForceQuantum;
   sc.audio.compat_pcm_format = s.audioCompatPcmFormat;
+  // `[dashboard]` — always write back (the TOML writer emits the block), so a
+  // save from Settings can never clobber a hand-edited [dashboard] section.
+  sc.dashboard.enabled = s.dashboardEnabled;
+  sc.dashboard.triggerHeight = std::clamp(s.dashboardTriggerHeight, 4, 48);
+  sc.dashboard.columns = std::clamp(s.dashboardColumns, 1, 8);
+  sc.dashboard.gap = std::clamp(s.dashboardGap, 0, 48);
+  sc.dashboard.marginX = std::clamp(s.dashboardMarginX, 0, 200);
+  sc.dashboard.marginTop = std::clamp(s.dashboardMarginTop, 0, 200);
+  sc.dashboard.marginBottom = std::clamp(s.dashboardMarginBottom, 0, 200);
+  sc.dashboard.maxWidth = std::clamp(s.dashboardMaxWidth, 0, 7680);
+  sc.dashboard.cards.clear();
+  for (const std::string& tok : s.dashboardWidgets) {
+    if (tok.empty()) continue;
+    eh::config::DashboardCardConfig card;
+    const std::size_t colon = tok.rfind(':');
+    if (colon != std::string::npos && colon + 1 < tok.size()) {
+      const int span = std::atoi(tok.c_str() + colon + 1);
+      card.id = tok.substr(0, colon);
+      card.span = std::clamp(span, 1, 8);
+    } else {
+      card.id = tok;
+    }
+    if (!card.id.empty()) sc.dashboard.cards.push_back(std::move(card));
+  }
+  if (sc.dashboard.cards.empty()) sc.dashboard.cards = eh::config::DashboardConfig::default_cards();
   return sc;
 }
 

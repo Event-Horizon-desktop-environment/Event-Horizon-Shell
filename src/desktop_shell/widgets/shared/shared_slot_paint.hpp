@@ -12,7 +12,6 @@ enum class SlotKind : uint8_t {
   Settings,
   Spotlight,
   AppMenu,
-  Launchpad,
   AppDrawer,
   Clock,
   Weather,

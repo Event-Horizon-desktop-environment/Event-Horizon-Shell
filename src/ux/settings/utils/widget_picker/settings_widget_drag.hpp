@@ -18,6 +18,15 @@ inline constexpr const char* kDockWidgetPickIds[] = {
 inline constexpr int kDockWidgetPickCount =
     static_cast<int>(sizeof(kDockWidgetPickIds) / sizeof(kDockWidgetPickIds[0]));
 
+// Dashboard widget-picker IDs (its own list; sits behind the dock + desktop
+// lists in the picker's combined index space).
+inline constexpr const char* kDashboardWidgetPickIds[] = {
+    "clock", "weather", "calendar", "media", "volume",
+    "mic",    "network", "bluetooth", "mixer", "system",
+};
+inline constexpr int kDashboardWidgetPickCount =
+    static_cast<int>(sizeof(kDashboardWidgetPickIds) / sizeof(kDashboardWidgetPickIds[0]));
+
 // Dock widget-list layout constants.
 inline constexpr int kWidgetSectionPadT           = 8;
 inline constexpr int kWidgetSectionTitleBlock    = 20;

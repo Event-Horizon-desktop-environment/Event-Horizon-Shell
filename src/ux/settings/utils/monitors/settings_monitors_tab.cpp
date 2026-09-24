@@ -292,6 +292,13 @@ void compute_monitors_tab_layout(int content_x, int content_w, int content_top, 
   constexpr int gap = 10;
   constexpr int center_gap = 40;
 
+  // Pango-measured once (cached) so the slot exactly fits the m3 button label;
+  // otherwise m3::Button expands past the slot and shifts left, overlapping the
+  // Refresh button next to it. +4px slack guards against cross-machine metric drift.
+  static int portals_w = -1;
+  if (portals_w < 0)
+    portals_w = monitors_toolbar_btn_label_width_px("Restart portals") + 4;
+
   constexpr int kAboveCanvasPx = 126;
 
   constexpr int kBelowCanvasPx = 88;
@@ -305,12 +312,14 @@ void compute_monitors_tab_layout(int content_x, int content_w, int content_top, 
   lay->toolbar_btn_h = btn_h;
   lay->toolbar_y = content_top + 56;
   lay->toolbar_refresh_x = content_x + 16;
+  lay->toolbar_portals_x = lay->toolbar_refresh_x + btn_w + center_gap;
+  lay->toolbar_portals_w = portals_w;
   lay->toolbar_revert_x = content_x + content_w - 16 - btn_w;
   lay->toolbar_apply_x = lay->toolbar_revert_x - gap - btn_w;
   {
-    const int space = lay->toolbar_apply_x - (lay->toolbar_refresh_x + btn_w);
+    const int space = lay->toolbar_apply_x - (lay->toolbar_portals_x + portals_w);
     const int cg_w = 2 * btn_w + center_gap;
-    const int cg_x = lay->toolbar_refresh_x + btn_w + std::max(0, (space - cg_w) / 2);
+    const int cg_x = lay->toolbar_portals_x + portals_w + std::max(0, (space - cg_w) / 2);
     lay->center_btn_x = cg_x;
     lay->align_top_btn_x = cg_x + btn_w + center_gap;
   }

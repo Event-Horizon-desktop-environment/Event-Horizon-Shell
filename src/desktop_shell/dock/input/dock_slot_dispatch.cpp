@@ -16,7 +16,6 @@
 #include "desktop_shell/common/fs/shell_paths.hpp"
 #include "desktop_shell/common/log/shell_diag_log.hpp"
 #include "desktop_shell/dock/core/dock_bar.h"
-#include "desktop_shell/launchpad/host/launchpad_host.hpp"
 
 #include <iostream>
 
@@ -26,12 +25,11 @@ namespace eh::shell::dock {
 
 void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right, bool onDockSurface) {
   const DockPickResult pr = dock_pick_at(app, app.pointerX, app.pointerY);
-  if ((app.popupOpen || (app.launchpad && app.launchpad->is_open())) && onDockSurface && !dock_popup_pointer_on_any_popup_surface(app) && left) {
+  if (app.popupOpen && onDockSurface && !dock_popup_pointer_on_any_popup_surface(app) && left) {
     bool keep = false;
     if (pr.idx >= 0) {
       const auto& h = pr.all[static_cast<size_t>(pr.idx)];
       keep = eh::shell::popup::popup_keep_open_for_slot(app.popupKind, static_cast<int>(h.kind), h.key);
-      if (!keep && app.launchpad && app.launchpad->is_open() && h.kind == PickSlot::Kind::Launchpad) keep = true;
     }
     if (!keep) {
       popup_close(app);
@@ -181,30 +179,6 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
     return;
   }
 
-  if (hit.kind == PickSlot::Kind::Launchpad) {
-    std::cout << "[input] launchpad_popup\n";
-    if (eh_app_drawer_debug_level() >= 1) {
-      app_drawer::trace_line(1, "dock",
-                             "launchpad open request pick_idx=" + std::to_string(pr.idx) + " key=" + hit.key);
-    }
-    if (app.launchpad && app.launchpad->is_open()) {
-      if (eh_app_drawer_debug_level() >= 1) app_drawer::trace_line(1, "dock", "toggle close Launchpad");
-      app.launchpad->close();
-      wl_display_flush(app.display);
-      return;
-    }
-    if (app.launchpad) {
-      const int slotCenterX = static_cast<int>(std::round(dock_strip_slot_center_x(app, pr, pr.idx)));
-      if (eh_app_drawer_debug_level() >= 1) {
-        app_drawer::trace_line(1, "dock", "open Launchpad from dock slotCenterX=" + std::to_string(slotCenterX));
-      }
-      app.launchpad->toggle(slotCenterX, serial);
-    } else {
-      std::cerr << "[launchpad] widget clicked but DockApp::launchpad is null (Host not wired for this session)\n";
-    }
-    return;
-  }
-
   if (hit.kind == PickSlot::Kind::Trash) {
     if (right) {
       app.trashFull = eh::shell::fs::trash_has_files();
@@ -278,6 +252,28 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
     app.pinDragKeyRaw = rawPin;
     app.pinDragKey = eh::shell::paths::normalize_desktop_app_id(rawPin);
     app.pinClickHandle = (chosen && chosen->handle) ? chosen->handle : nullptr;
+
+    // Snapshot the painted pinned-run geometry now, while the retained hit
+    // rects still describe exactly what the pointer pressed on.
+    dock_pin_drag_capture_geometry(app);
+
+    // Start the glide state fresh, and seed the insert index with the pin's
+    // real position: the first commit then has hysteresis (a value of -1
+    // accepted the first rawInsert unopposed).
+    app.shellAnim.cancel(app.pinDragShiftAnimId);
+    app.pinDragShiftAnimId = 0;
+    app.pinDragShiftFrom.clear();
+    app.pinDragShiftT = 1.0;
+    app.pinDragInsertIdx = -1;
+    {
+      const auto keys = dock_pinned_filtered_keys(app.settings.pinnedApps);
+      for (size_t i = 0; i < keys.size(); ++i) {
+        if (keys[i] == app.pinDragKey) {
+          app.pinDragInsertIdx = static_cast<int>(i);
+          break;
+        }
+      }
+    }
     return;
   }
   if (!chosen || !chosen->handle) return;

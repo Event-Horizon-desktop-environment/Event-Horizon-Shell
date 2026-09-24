@@ -28,7 +28,7 @@ inline int open_state_inotify() {
     "general", "shell", "desktop", "autostart", "dock", "taskbar",
     "appearance", "wallpaper", "notifications", "keyboard", "audio",
     "power", "nightlight", "time", "default_apps", "mpris",
-    "widgets", "idle", "file_browser", "live_wallpaper", "launchpad"
+    "widgets", "idle", "file_browser", "live_wallpaper"
   };
   for (auto c : comps) {
     const std::string d = stateDir + "/" + std::string(c);

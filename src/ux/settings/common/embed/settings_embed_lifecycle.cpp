@@ -347,7 +347,25 @@ std::string settings_pid_path() {
   return std::string(d && *d ? d : "/tmp") + "/event-horizon-settings.pid";
 }
 
-bool pid_alive(int pid) { return pid > 0 && ::kill(pid, 0) == 0; }
+bool pid_alive(int pid) {
+  if (pid <= 0 || ::kill(pid, 0) != 0) return false;
+  // `kill(pid, 0)` also succeeds for a zombie. If a force-killed settings
+  // instance was never reaped it would otherwise keep the pidfile "alive" and
+  // block every new launch. Treat a zombie as dead so the stale pidfile is
+  // reclaimed.
+  char path[64];
+  std::snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+  FILE* f = std::fopen(path, "r");
+  if (!f) return true;
+  char buf[256];
+  const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+  std::fclose(f);
+  if (n == 0) return true;
+  buf[n] = '\0';
+  const char* close_paren = std::strrchr(buf, ')');
+  if (close_paren && close_paren[1] == ' ' && close_paren[2] == 'Z') return false;
+  return true;
+}
 
 std::string settings_log_path() {
   const char* d = std::getenv("XDG_STATE_HOME");

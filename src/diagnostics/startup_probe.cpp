@@ -375,6 +375,81 @@ static std::string monitors_section() {
   return ss.str() + "\n";
 }
 
+static std::string activewindow_section() {
+  if (getenv("WAYLAND_DISPLAY") == nullptr) return "";
+  const std::string raw = exec_capture("hyprctl activewindow 2>&1", 3000);
+  if (raw.empty()) return "";
+  std::ostringstream ss;
+  ss << "  --- hyprctl activewindow (" << raw.size() << " bytes) ---\n";
+  ss << "  " << raw.substr(0, 1500);
+  return ss.str() + "\n";
+}
+
+// Memory/CPU/IO pressure stall info — the key metric for "frozen desktop".
+static std::string psi_section() {
+  std::ostringstream ss;
+  for (const char* res : {"cpu", "memory", "io"}) {
+    const std::string path = std::string("/proc/pressure/") + res;
+    const std::string txt = read_file(path);
+    if (txt.empty()) {
+      ss << "  [" << res << "] (unavailable)\n";
+      continue;
+    }
+    std::istringstream ls(txt);
+    std::string line;
+    while (std::getline(ls, line)) {
+      if (line.rfind("some", 0) == 0) ss << "  [" << res << "] " << line << "\n";
+    }
+  }
+  return ss.str();
+}
+
+// True if any thread of pid is in uninterruptible (D) sleep.
+static bool pid_has_dstate(int pid) {
+  for (const auto& t : scan_threads(pid)) {
+    if (t.state == 'D') return true;
+  }
+  return false;
+}
+
+// Userspace stacks of a stuck process. Rate-limited by caller.
+static std::string stacks_section(int pid, const std::string& cmd) {
+  std::ostringstream ss;
+  ss << "  [stacks] " << cmd << " pid=" << pid << "\n";
+  // Kernel stacks first (cheap, no ptrace).
+  {
+    std::error_code ec;
+    const fs::path td = "/proc/" + std::to_string(pid) + "/task";
+    int shown = 0;
+    for (const auto& entry : fs::directory_iterator(td, ec)) {
+      const std::string name = entry.path().filename().string();
+      if (name.empty() || name[0] < '0' || name[0] > '9') continue;
+      const std::string ks = read_file(entry.path().string() + "/stack");
+      if (ks.empty()) continue;
+      ss << "    --- kernel stack tid=" << name << " ---\n";
+      ss << "    " << ks.substr(0, 1200) << "\n";
+      if (++shown >= 4) break;
+    }
+    if (shown == 0) ss << "    (kernel stacks unreadable)\n";
+  }
+  // Userspace backtraces via gdb (best effort).
+  {
+    char cmdbuf[256];
+    std::snprintf(cmdbuf, sizeof(cmdbuf),
+                  "command -v gdb >/dev/null 2>&1 && gdb -p %d -batch "
+                  "-ex 'thread apply all bt 8' -ex detach -ex quit 2>&1 | head -c 12000 "
+                  "|| echo NO-GDB",
+                  pid);
+    const std::string raw = exec_capture(cmdbuf, 12000);
+    if (raw.find("NO-GDB") != std::string::npos || raw.empty()) {
+      ss << "    (gdb unavailable — install gdb for userspace stacks)\n";
+    } else {
+      ss << raw.substr(0, 12000) << "\n";
+    }
+  }
+  return ss.str();
+}
+
 static std::string log_tail_section(const std::string& path) {
   std::ostringstream ss;
   struct stat st{};
@@ -417,7 +492,7 @@ int main(int argc, char** argv) {
 
   {
     std::ostringstream hdr;
-    hdr << "╌╌ startup-probe v2 — pid=" << getpid() << " start=" << now_str() << "\n";
+    hdr << "╌╌ startup-probe v3 — pid=" << getpid() << " start=" << now_str() << "\n";
     hdr << "  interval_ms=" << interval_ms << " max_samples=" << max_samples << "\n";
     hdr << "  WAYLAND_DISPLAY=" << (getenv("WAYLAND_DISPLAY") ? getenv("WAYLAND_DISPLAY") : "(null)") << "\n";
     hdr << "  XDG_SESSION_TYPE=" << (getenv("XDG_SESSION_TYPE") ? getenv("XDG_SESSION_TYPE") : "(null)") << "\n";
@@ -426,9 +501,10 @@ int main(int argc, char** argv) {
   std::cerr << "startup-probe: logging to " << logPath << " (pid=" << getpid() << ")\n";
 
   int sample = 0;
-  // Children seen in earlier samples, for respawn detection.
+  // Children seen in earlier samples, for respawn/death detection.
   std::map<std::string, int> prevChildPid;
   std::map<std::string, long long> prevLogSize;
+  long long lastStacksMs = -1000000;
   while (!g_stop && sample < max_samples) {
     const long long elapsed = timer_ms();
     log << "\n=== SAMPLE " << sample << " t=" << elapsed << "ms " << now_str() << " ===\n";
@@ -436,9 +512,11 @@ int main(int argc, char** argv) {
     const std::vector<ProcInfo> procs = scan_procs();
     log << "[processes]\n" << proc_section(procs);
 
-    // Respawn / first-birth detection.
+    // Respawn / first-birth / death detection.
+    std::map<std::string, int> curPid;
     for (const auto& p : procs) {
-      if (p.cmd.find("horizon-") == std::string::npos) continue;
+      if (p.cmd.find("horizon-") == std::string::npos && p.cmd != "EventHorizon") continue;
+      curPid[p.cmd] = p.pid;
       auto it = prevChildPid.find(p.cmd);
       if (it == prevChildPid.end()) {
         log << "[born] " << p.cmd << " first-seen pid=" << p.pid << ", t=" << elapsed
@@ -448,6 +526,23 @@ int main(int argc, char** argv) {
         log << "[respawn] " << p.cmd << " pid " << it->second << " -> " << p.pid
             << ", t=" << elapsed << "ms\n";
         it->second = p.pid;
+      }
+    }
+    for (auto it = prevChildPid.begin(); it != prevChildPid.end();) {
+      if (curPid.find(it->first) == curPid.end()) {
+        log << "[death] " << it->first << " last-pid=" << it->second << " gone at t=" << elapsed
+            << "ms\n";
+        // Best-effort crash record + recent journal context.
+        log << exec_capture("coredumpctl --no-pager info " + std::to_string(it->second) +
+                                " 2>&1 | head -50",
+                            6000).substr(0, 4000)
+            << "\n";
+        log << exec_capture("journalctl --user --no-pager -n 30 -o short-precise 2>&1 | tail -30",
+                            5000).substr(0, 4000)
+            << "\n";
+        it = prevChildPid.erase(it);
+      } else {
+        ++it;
       }
     }
 
@@ -508,11 +603,15 @@ int main(int argc, char** argv) {
 
     log << "[hyprctl layers]\n" << layers_section();
     log << monitors_section();
+    log << activewindow_section();
+    log << "[psi]\n" << psi_section();
 
     log << "[child logs]\n";
+    long long dockSilentMs = -1;
+    long long ccSilentMs = -1;
     for (const char* name : {"horizon-wallpaper.log", "horizon-desktop.log",
                              "horizon-dock.log", "horizon-taskbar.log",
-                             "horizon-notifications.log"}) {
+                             "horizon-notifications.log", "horizon-controlcenter.log"}) {
       const std::string path = (stateDir / name).string();
       struct stat st{};
       const long long size = (::stat(path.c_str(), &st) == 0) ? (long long)st.st_size : 0;
@@ -523,6 +622,16 @@ int main(int argc, char** argv) {
           log << "  [growth] " << name << " += " << delta << " bytes\n";
       }
       prevLogSize[name] = size;
+      if (::stat(path.c_str(), &st) == 0) {
+        const long long ageMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now() -
+                std::chrono::system_clock::from_time_t(st.st_mtime))
+                .count();
+        log << "  [silent] " << name << " no-write-for=" << (ageMs / 1000) << "s\n";
+        if (std::strcmp(name, "horizon-dock.log") == 0) dockSilentMs = ageMs;
+      if (std::strcmp(name, "horizon-controlcenter.log") == 0) ccSilentMs = ageMs;
+      }
       log << log_tail_section(path);
     }
     log << "[EH-logs]\n";
@@ -549,6 +658,37 @@ int main(int argc, char** argv) {
     }
 
     log << clients_section();
+
+    // Freeze forensics: dump stacks when the dock looks stuck — a D-state
+    // thread anywhere in the shell, or the dock alive but log-silent >15s.
+    // Rate-limited so the probe itself never becomes the load.
+    {
+      int dockPid = -1;
+      bool anyD = false;
+      for (const auto& p : procs) {
+        if (p.cmd.find("horizon-dock") != std::string::npos) dockPid = p.pid;
+        if ((p.cmd.find("horizon-") != std::string::npos || p.cmd == "EventHorizon") &&
+            (p.state == 'D' || pid_has_dstate(p.pid))) {
+          anyD = true;
+        }
+      }
+      const bool dockStuck = dockPid > 0 && dockSilentMs > 15000;
+      if ((anyD || dockStuck) && elapsed - lastStacksMs > 30000) {
+        lastStacksMs = elapsed;
+        log << "[freeze-trigger] dstate=" << (anyD ? "yes" : "no")
+            << " dock_silent_s=" << (dockSilentMs / 1000)
+            << " cc_silent_s=" << (ccSilentMs >= 0 ? std::to_string(ccSilentMs / 1000) : std::string("n/a"))
+            << "\n";
+        for (const auto& p : procs) {
+          if ((p.cmd.find("horizon-") != std::string::npos || p.cmd == "EventHorizon") &&
+              (p.state == 'D' || pid_has_dstate(p.pid) || p.pid == dockPid)) {
+            log << stacks_section(p.pid, p.cmd);
+          }
+        }
+        log << std::flush;
+      }
+    }
+
     log << "=== END SAMPLE " << sample << " ===\n" << std::flush;
     ++sample;
 

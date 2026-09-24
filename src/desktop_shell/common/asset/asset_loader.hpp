@@ -6,7 +6,6 @@
 namespace eh::shell::asset {
 
 cairo_surface_t* load_brand_logo_surface();
-cairo_surface_t* load_launchpad_logo_surface(bool light = false);
 cairo_surface_t* load_trash_empty_surface();
 cairo_surface_t* load_trash_full_surface();
 

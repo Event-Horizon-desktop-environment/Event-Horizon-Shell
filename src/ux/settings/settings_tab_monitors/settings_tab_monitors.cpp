@@ -413,12 +413,16 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
   const bool dirtyMon = app.monitorsTab.dirty;
   const bool hRef = point_in_rect(app.pointerX, pyH, monLay.toolbar_refresh_x, monLay.toolbar_y,
                                   monLay.toolbar_btn_w, monLay.toolbar_btn_h);
+  const bool hPortals = point_in_rect(app.pointerX, pyH, monLay.toolbar_portals_x, monLay.toolbar_y,
+                                      monLay.toolbar_portals_w, monLay.toolbar_btn_h);
   const bool hApply = point_in_rect(app.pointerX, pyH, monLay.toolbar_apply_x, monLay.toolbar_y,
                                     monLay.toolbar_btn_w, monLay.toolbar_btn_h);
   const bool hRev = point_in_rect(app.pointerX, pyH, monLay.toolbar_revert_x, monLay.toolbar_y,
                                   monLay.toolbar_btn_w, monLay.toolbar_btn_h);
   paint_mon_small_btn(monLay.toolbar_refresh_x, monLay.toolbar_y, monLay.toolbar_btn_w,
                       monLay.toolbar_btn_h, "Refresh", hRef, 1.f);
+  paint_mon_small_btn(monLay.toolbar_portals_x, monLay.toolbar_y, monLay.toolbar_portals_w,
+                      monLay.toolbar_btn_h, "Restart portals", hPortals, 1.f);
   paint_mon_small_btn(monLay.toolbar_apply_x, monLay.toolbar_y, monLay.toolbar_btn_w,
                       monLay.toolbar_btn_h, "Apply", hApply, dirtyMon ? 1.f : 0.45f);
   paint_mon_small_btn(monLay.toolbar_revert_x, monLay.toolbar_y, monLay.toolbar_btn_w,

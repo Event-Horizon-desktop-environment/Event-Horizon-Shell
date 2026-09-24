@@ -14,6 +14,7 @@
 #include "ux/settings/settings_app_types.hpp"
 #include "ux/settings/settings_tab_dock/settings_tab_dock.hpp"
 #include "ux/settings/settings_tab_taskbar/settings_tab_taskbar.hpp"
+#include "ux/settings/settings_tab_dashboard/settings_tab_dashboard.hpp"
 #include "ux/settings/utils/scroll/settings_scroll.hpp"
 #include "ux/settings/settings_serialize.hpp"
 
@@ -36,6 +37,11 @@ std::string widget_display_title(const std::string& id) {
   if (id == "system_monitor") return "System Monitor";
   if (id == "media") return "Media";
   if (id == "media_compact") return "Media Compact";
+  if (id == "volume") return "Volume";
+  if (id == "mic") return "Microphone";
+  if (id == "network") return "Network";
+  if (id == "mixer") return "Mixer";
+  if (id == "system") return "System Monitor";
   if (id == "workspaces") return "Workspaces";
   if (id == "world_clock") return "World Clock";
   if (id == "control_center") return "Control Center";
@@ -66,6 +72,7 @@ int widget_section_block_height(int nwidgets) {
 }
 
 static int tab_idx_for_widgets(int activeTab) {
+  if (activeTab == 34) return 34;
   if (activeTab == 1) return 1;
   if (activeTab == 11) return 11;
   return 0;
@@ -73,6 +80,7 @@ static int tab_idx_for_widgets(int activeTab) {
 
 std::vector<std::string>* widgets_for_section(App& app, int section) {
   const int tabIdx = tab_idx_for_widgets(app.activeTab);
+  if (tabIdx == 34) return &app.settings.dashboardWidgets;
   if (tabIdx == 1) {
     if (section == 0) return &app.settings.panelLeftWidgets;
     if (section == 1) return &app.settings.panelCenterWidgets;
@@ -90,6 +98,7 @@ std::vector<std::string>* widgets_for_section(App& app, int section) {
 
 const std::vector<std::string>* widgets_for_section_for_tab(const App& app, int section,
                                                             int tabIdx) {
+  if (tabIdx == 34) return &app.settings.dashboardWidgets;
   if (tabIdx == 1) {
     if (section == 0) return &app.settings.panelLeftWidgets;
     if (section == 1) return &app.settings.panelCenterWidgets;
@@ -117,6 +126,7 @@ static int tb_section_stack_top() {
 }
 
 static int widget_section_stack_top_for_tab(int tabIdx) {
+  if (tabIdx == 34) return eh::settings::dashboard_tab::kWidgetsSectionTop;
   if (tabIdx == 1) {
     constexpr int kPanelModeCardTop = kContentTop + 80 + kCardGap;
     return kPanelModeCardTop + kSpacingL + 54 + 4 * kSliderRowH + kSpacingL + kCardGap +
@@ -138,7 +148,9 @@ int widget_section_y0_for_tab(const App& app, int sectionIdx, int tabIdx) {
 }
 
 int widget_section_y0(const App& app, int sectionIdx) {
-  int tabIdx = app.activeTab == 1 ? 1 : (app.activeTab == 11 ? 11 : 0);
+  int tabIdx = app.activeTab == 34 ? 34
+               : app.activeTab == 1 ? 1
+               : (app.activeTab == 11 ? 11 : 0);
   if (app.activeTab == 0 && dock_m3_is_widgets_child_tab()) {
     // Widgets child tab: embedded toggle card + gap + dock card
     const int widgetsTop = kContentTop + kDockChildTabH + 12;
@@ -183,7 +195,9 @@ double settings_dock_widgets_card_fill_height_px(const App& app) {
 }
 
 void widget_section_row_inner_geometry(const App& app, double* rowX, double* rowW) {
-  const int contentX = 16 + 240 + 16;
+  // Tab 34 paints with the real sidebar width (260); tabs 0/1/11 keep their
+  // historical 240 hardcode.
+  const int contentX = app.activeTab == 34 ? (kSpacingL + kSidebarW + kSpacingL) : (16 + 240 + 16);
   const int contentW = app.width - contentX - 16;
   const double cardX = static_cast<double>(contentX + 8);
   const double cardW = static_cast<double>(contentW - 16);
@@ -258,7 +272,7 @@ static size_t insert_before_row_geoms(double px, double py,
 }
 
 double settings_logical_content_y_tab01(const App& app) {
-  if (app.activeTab == 0 || app.activeTab == 1 || app.activeTab == 11)
+  if (app.activeTab == 0 || app.activeTab == 1 || app.activeTab == 11 || app.activeTab == 34)
     return app.pointerY + settings_scroll_px(app);
   return app.pointerY;
 }
@@ -277,8 +291,24 @@ static bool widget_pointer_in_section_list_card(const App& app, int sectionIdx, 
 
 // Drag state management.
 void widget_drag_update_insert(App& app) {
-  if (app.activeTab != 0 && app.activeTab != 1 && app.activeTab != 11) return;
+  if (app.activeTab != 0 && app.activeTab != 1 && app.activeTab != 11 && app.activeTab != 34)
+    return;
   if (app.widgetDragSection < 0 || app.widgetDragFromIndex < 0) return;
+
+  // Dashboard tab: single flat list, section always 0.
+  if (app.activeTab == 34) {
+    app.widgetDragTargetSection = 0;
+    auto* vTarget = &app.settings.dashboardWidgets;
+    const std::optional<size_t> skip =
+        (app.widgetDragSection == 0)
+            ? std::optional<size_t>{static_cast<size_t>(app.widgetDragFromIndex)}
+            : std::nullopt;
+    std::vector<WidgetRowGeom> geoms;
+    layout_section_widget_rows(app, 0, *vTarget, skip, geoms);
+    app.widgetDragInsertBefore = insert_before_row_geoms(
+        app.pointerX, settings_logical_content_y_tab01(app), geoms, geoms.size());
+    return;
+  }
 
   // Dock / taskbar widgets child tab: three-column card layout.
   if ((app.activeTab == 0 && dock_m3_is_widgets_child_tab()) ||
@@ -425,15 +455,25 @@ void widget_drag_apply(App& app) {
     *vSrc = std::move(tmp);
   } else {
     auto* vTgt = widgets_for_section(app, tgtSec);
-    std::vector<std::string> src = *vSrc;
-    src.erase(src.begin() + static_cast<long>(from));
-    *vSrc = std::move(src);
+    if (vTgt == vSrc) {
+      // Same backing list (dashboard single-list tab): reorder in place.
+      std::vector<std::string> tmp = *vSrc;
+      tmp.erase(tmp.begin() + static_cast<long>(from));
+      size_t ins = app.widgetDragInsertBefore;
+      if (ins > tmp.size()) ins = tmp.size();
+      tmp.insert(tmp.begin() + static_cast<long>(ins), item);
+      *vSrc = std::move(tmp);
+    } else {
+      std::vector<std::string> src = *vSrc;
+      src.erase(src.begin() + static_cast<long>(from));
+      *vSrc = std::move(src);
 
-    std::vector<std::string> tgt = *vTgt;
-    size_t ins = app.widgetDragInsertBefore;
-    if (ins > tgt.size()) ins = tgt.size();
-    tgt.insert(tgt.begin() + static_cast<long>(ins), item);
-    *vTgt = std::move(tgt);
+      std::vector<std::string> tgt = *vTgt;
+      size_t ins = app.widgetDragInsertBefore;
+      if (ins > tgt.size()) ins = tgt.size();
+      tgt.insert(tgt.begin() + static_cast<long>(ins), item);
+      *vTgt = std::move(tgt);
+    }
   }
   save_settings(app.settings);
 }
@@ -489,7 +529,8 @@ bool hit_widget_row_drag_hit(const App& app, int section, size_t& outIdx) {
 
 void widget_section_add_button_rect(const App& app, int sectionIdx, double* bx, double* by,
                                     double* bw, double* bh) {
-  const int contentX = 16 + 240 + 16;
+  const int contentX =
+      app.activeTab == 34 ? (kSpacingL + kSidebarW + kSpacingL) : (16 + 240 + 16);
   const double cardX = contentX + 8;
   const int y0 = widget_section_y0(app, sectionIdx);
   const auto* vw = widgets_for_section_const(app, sectionIdx);

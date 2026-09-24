@@ -127,6 +127,9 @@ struct ControlCenterState {
   int hoverRowIdx = -1;
   int hoverStreamId = -1;
 
+  // Last settle-triggered resize (debounces post-animation/streaming growth).
+  uint64_t ccLastSettleResizeMs = 0;
+
   // Benchmarks
   uint64_t openBenchStartMs = 0;
   bool openBenchLoggedFirstConfigure = false;

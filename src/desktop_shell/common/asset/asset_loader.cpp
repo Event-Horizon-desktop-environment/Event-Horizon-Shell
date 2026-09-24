@@ -168,39 +168,6 @@ cairo_surface_t* load_brand_logo_surface() {
   return eh::shell::create_material_glyph_surface("settings", 48);
 }
 
-cairo_surface_t* load_launchpad_logo_surface(bool light) {
-   
-  static bool loggedDark = false;
-  static bool loggedLight = false;
-  if (light) {
-    cairo_surface_t* s = load_asset("Light_Launchpad.png", "Light_Launchpad.svg", 128);
-    if (s) {
-      if (!loggedLight && eh_verbose_enabled()) {
-        loggedLight = true;
-        std::cout << "[assets] launchpad_logo_light: loaded\n";
-      }
-      return s;
-    }
-    if (!loggedLight && eh_verbose_enabled()) {
-      loggedLight = true;
-      std::cout << "[assets] launchpad_logo_light: not_found\n";
-    }
-    return nullptr;
-  }
-  cairo_surface_t* s = load_asset("Dark_Launchpad.png", "Dark_Launchpad.svg", 128);
-  if (s) {
-    if (!loggedDark && eh_verbose_enabled()) {
-      loggedDark = true;
-      std::cout << "[assets] launchpad_logo_dark: loaded\n";
-    }
-    return s;
-  }
-  if (!loggedDark && eh_verbose_enabled()) {
-    loggedDark = true;
-    std::cout << "[assets] launchpad_logo_dark: not_found\n";
-  }
-  return nullptr;
-}
 
 cairo_surface_t* load_trash_empty_surface() {
    

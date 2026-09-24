@@ -163,10 +163,11 @@ void control_center_set_default_source(std::string_view source_name) {
 }
 
 void paint_control_center_audio_output_card(cairo_t* cr, double x, double y, double w, double h,
-                                            const ControlCenterAudioOutputState& as, double inner_glass_scale) {
+                                            const ControlCenterAudioOutputState& as, double inner_glass_scale,
+                                            double corner_radius) {
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   const double s = std::clamp(inner_glass_scale, 0.0, 1.0);
-  const double r = std::max(14.0, std::min(w, h) * 0.16);
+  const double r = corner_radius >= 0.0 ? corner_radius : std::max(14.0, std::min(w, h) * 0.16);
   cc_paint_glass_card_mc(cr, x, y, w, h, r, s, mc);
 
   const double icx = x + 24.0;
@@ -201,14 +202,16 @@ void paint_control_center_audio_output_card(cairo_t* cr, double x, double y, dou
       (as.volume_fill_t_override >= 0.0 && as.volume_fill_t_override <= 1.0)
           ? std::clamp(as.volume_fill_t_override, 0.0, 1.0)
           : std::clamp(static_cast<double>(as.volume_pct) / 100.0, 0.0, 1.0));
-  const double as_h = 38.0;
+  const double as_h = cc::kAudioTrackH + 2.0 * cc::kAudioHitPadV;
   eh::ui::Slider sl;
   sl.setRange(0.0f, 1.0f);
   sl.setStep(0.01f);
   sl.setValue(t);
-  sl.setGeometry(static_cast<float>(x + 10.0),
-                 static_cast<float>((y + cc::kAudioTrackYFromCardTop) - as_h * 0.5),
-                 static_cast<float>(w - 20.0),
+  // Widget box == hit box from control_center_audio_slider_layout():
+  // same shared constants, cannot drift (see Docs/hit-testing.md).
+  sl.setGeometry(static_cast<float>(x + cc::kAudioTrackXPad - cc::kAudioHitPadH),
+                 static_cast<float>((y + cc::kAudioTrackYFromCardTop) - cc::kAudioHitPadV),
+                 static_cast<float>(w - 2.0 * cc::kAudioTrackXPad + 2.0 * cc::kAudioHitPadH),
                  static_cast<float>(as_h));
   sl.setAccentColor(static_cast<float>(mc.accentR), static_cast<float>(mc.accentG), static_cast<float>(mc.accentB));
   sl.setTrackColor(static_cast<float>(mc.drawerDimR), static_cast<float>(mc.drawerDimG), static_cast<float>(mc.drawerDimB));
@@ -216,10 +219,11 @@ void paint_control_center_audio_output_card(cairo_t* cr, double x, double y, dou
 }
 
 void paint_control_center_audio_input_card(cairo_t* cr, double x, double y, double w, double h,
-                                           const ControlCenterAudioInputState& as, double inner_glass_scale) {
+                                           const ControlCenterAudioInputState& as, double inner_glass_scale,
+                                           double corner_radius) {
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   const double s = std::clamp(inner_glass_scale, 0.0, 1.0);
-  const double r = std::max(14.0, std::min(w, h) * 0.16);
+  const double r = corner_radius >= 0.0 ? corner_radius : std::max(14.0, std::min(w, h) * 0.16);
   cc_paint_glass_card_mc(cr, x, y, w, h, r, s, mc);
 
   const double icx = x + 24.0;
@@ -252,14 +256,16 @@ void paint_control_center_audio_input_card(cairo_t* cr, double x, double y, doub
       (as.volume_fill_t_override >= 0.0 && as.volume_fill_t_override <= 1.0)
           ? std::clamp(as.volume_fill_t_override, 0.0, 1.0)
           : std::clamp(static_cast<double>(as.volume_pct) / 100.0, 0.0, 1.0));
-  const double as_h = 38.0;
+  const double as_h = cc::kAudioTrackH + 2.0 * cc::kAudioHitPadV;
   eh::ui::Slider sl;
   sl.setRange(0.0f, 1.0f);
   sl.setStep(0.01f);
   sl.setValue(t);
-  sl.setGeometry(static_cast<float>(x + 10.0),
-                 static_cast<float>((y + cc::kAudioTrackYFromCardTop) - as_h * 0.5),
-                 static_cast<float>(w - 20.0),
+  // Widget box == hit box from control_center_audio_slider_layout():
+  // same shared constants, cannot drift (see Docs/hit-testing.md).
+  sl.setGeometry(static_cast<float>(x + cc::kAudioTrackXPad - cc::kAudioHitPadH),
+                 static_cast<float>((y + cc::kAudioTrackYFromCardTop) - cc::kAudioHitPadV),
+                 static_cast<float>(w - 2.0 * cc::kAudioTrackXPad + 2.0 * cc::kAudioHitPadH),
                  static_cast<float>(as_h));
   sl.setAccentColor(static_cast<float>(mc.accentR), static_cast<float>(mc.accentG), static_cast<float>(mc.accentB));
   sl.setTrackColor(static_cast<float>(mc.drawerDimR), static_cast<float>(mc.drawerDimG), static_cast<float>(mc.drawerDimB));

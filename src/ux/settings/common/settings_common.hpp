@@ -103,7 +103,7 @@ static constexpr int kContentTop = 16;
 
 static constexpr int kCardPad    = kSpacingL;
 static constexpr int kCardGap    = kSpacingM;
-static constexpr double kCardRad = 14.0;
+static constexpr double kCardRad = 18.0;
 
 static constexpr int kAppearanceIconCardH = 240;
 static constexpr int kWallpaperToggleBandH = 80;

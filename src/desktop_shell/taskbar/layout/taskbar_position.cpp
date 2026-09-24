@@ -29,8 +29,10 @@ TaskbarPopupPositionOutput taskbar_compute_popup_position(TaskbarApp& app, int a
   out.wl_out = ref->wlOut;
 
   const int layerW = taskbar_layer_w(app);
-  const int clearance =
-      (app.settings.widthMode == 0 ? app.settings.floatingAmount : 0) + app.settings.height + (app.settings.widthMode == 0 ? 6 : 0);
+  // Clear the bar's top edge exactly: edge margin (edgeGap) plus the
+  // floating inset, plus the painted bar height. The previous calculation
+  // dropped edgeGap, so popups sank into the bar by that much.
+  const int clearance = eh::shell::taskbar::popup_bottom_clearance_px(app.settings);
 
   PopupPositionInput in{};
   in.anchor_x = anchorX;

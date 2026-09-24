@@ -182,8 +182,7 @@ bool dock_tray_list_token_local(const ShellConfig& c, const std::string& token) 
   return it != c.widgets.end() && it->second.type == "system_tray";
 }
 
-void dock_migrate_legacy_autosep_slots(ShellConfig& c) {
-   
+void dock_migrate_legacy_autosep_slots(ShellConfig& c) { 
   auto fix = [&](std::vector<std::string>& v) {
     for (size_t i = 0; i + 1 < v.size(); ++i) {
       if (dock_tray_list_token_local(c, v[i]) && v[i + 1] == "settings_button") {
@@ -343,6 +342,48 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     if (auto s = (*tb)["icon_theme"].value<std::string>()) c.taskbar.iconTheme = trim(*s);
   }
 
+  if (const auto* db = root.get_as<toml::table>("dashboard")) {
+    if (auto v = (*db)["enabled"].value<bool>()) c.dashboard.enabled = *v;
+    if (auto v = (*db)["config_version"].value<int64_t>())
+      c.dashboard.configVersion = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(99)));
+    if (auto v = (*db)["trigger_height"].value<int64_t>())
+      c.dashboard.triggerHeight = static_cast<int>(std::clamp(*v, INT64_C(4), INT64_C(48)));
+    if (auto v = (*db)["columns"].value<int64_t>())
+      c.dashboard.columns = static_cast<int>(std::clamp(*v, INT64_C(1), INT64_C(8)));
+    if (auto v = (*db)["gap"].value<int64_t>())
+      c.dashboard.gap = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(48)));
+    if (auto v = (*db)["margin_x"].value<int64_t>())
+      c.dashboard.marginX = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(200)));
+    if (auto v = (*db)["margin_top"].value<int64_t>())
+      c.dashboard.marginTop = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(200)));
+    if (auto v = (*db)["margin_bottom"].value<int64_t>())
+      c.dashboard.marginBottom = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(200)));
+    if (auto v = (*db)["max_width"].value<int64_t>())
+      c.dashboard.maxWidth = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(7680)));
+    // Widgets: ["clock", "media:2", ...] — "id" or "id:span". An explicit
+    // list replaces the default order/set entirely.
+    if (const auto* a = (*db)["widgets"].as_array()) {
+      c.dashboard.cards.clear();
+      for (const auto& el : *a) {
+        const auto* s = el.as_string();
+        if (!s) continue;
+        std::string tok = trim(std::string(s->get()));
+        if (tok.empty()) continue;
+        DashboardCardConfig card;
+        const std::size_t colon = tok.rfind(':');
+        if (colon != std::string::npos && colon + 1 < tok.size()) {
+          const int span = atoi(tok.c_str() + colon + 1);
+          card.id = trim(tok.substr(0, colon));
+          card.span = static_cast<int>(std::clamp(span, 1, 8));
+        } else {
+          card.id = tok;
+        }
+        if (!card.id.empty()) c.dashboard.cards.push_back(std::move(card));
+      }
+      if (c.dashboard.cards.empty()) c.dashboard.cards = DashboardConfig::default_cards();
+    }
+  }
+
   if (const auto* dt = root.get_as<toml::table>("desktop")) {
     if (auto v = (*dt)["enabled"].value<bool>()) c.desktopEnabled = *v;
     if (auto s = (*dt)["output"].value<std::string>()) c.desktopOutputName = eh::shell::trim_output_assign(*s);
@@ -443,6 +484,10 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
       c.keyboard.repeatDelay = static_cast<int>(std::clamp(*v, INT64_C(150), INT64_C(1000)));
   }
 
+  if (const auto* bt = root.get_as<toml::table>("bluetooth")) {
+    if (auto v = (*bt)["auto_reconnect"].value<bool>()) c.bluetooth.autoReconnect = *v;
+  }
+
   if (const auto* ap = root.get_as<toml::table>("appearance")) {
     if (auto v = (*ap)["overlay_opacity_advanced"].value<bool>()) c.appearance.overlayOpacityAdvanced = *v;
     auto assign_overlay = [&](const char* key, float& out) {
@@ -488,6 +533,12 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     }
     if (auto v = (*ap)["launchpad_view_mode"].value<int64_t>()) {
       c.appearance.launchpadViewMode = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(1)));
+    }
+    if (auto v = (*ap)["launchpad_folder_columns"].value<int64_t>()) {
+      c.appearance.launchpadFolderColumns = static_cast<int>(std::clamp(*v, INT64_C(2), INT64_C(8)));
+    }
+    if (auto v = (*ap)["launchpad_folder_rows"].value<int64_t>()) {
+      c.appearance.launchpadFolderRows = static_cast<int>(std::clamp(*v, INT64_C(1), INT64_C(6)));
     }
     if (auto v = (*ap)["overview_axis"].value<int64_t>()) {
       c.appearance.overviewAxis = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(1)));
@@ -706,6 +757,8 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
       c.audio.engine_allowed_rates_hz = std::move(rates);
     }
     if (auto v = (*au)["compat_pcm_format"].value<int64_t>()) c.audio.compat_pcm_format = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(3)));
+    if (auto v = (*au)["engine_quantum"].value<int64_t>()) c.audio.engine_quantum = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(65536)));
+    if (auto v = (*au)["engine_force_quantum"].value<int64_t>()) c.audio.engine_force_quantum = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(65536)));
   }
 
   if (const auto* wtab = root.get_as<toml::table>("widget")) {
@@ -754,12 +807,14 @@ constexpr ComponentInfo kComponents[] = {
   {"autostart",     "autostart"},
   {"dock",          "dock"},
   {"taskbar",       "taskbar"},
+  {"dashboard",     "dashboard"},
   {"appearance",    "appearance"},
   {"wallpaper",     "wallpaper"},
   {"notifications", "notifications"},
   {"keyboard",      "keyboard"},
   {"audio",         "audio"},
   {"power",         "power"},
+  {"bluetooth",     "bluetooth"},
   {"vram_boost",    "vram_boost"},
   {"nightlight",    "nightlight"},
   {"time",          "time"},
@@ -769,6 +824,10 @@ constexpr ComponentInfo kComponents[] = {
   {"idle",          "idle"},
   {"file_browser",  "file_browser"},
   {"live_wallpaper","live_wallpaper"},
+  // launchpad.toml also carries the [folder] array: it merges last so its
+  // [appearance] wins, but it is never WRITTEN here (dedicated savers own it
+  // and preserve folders — see the skip in write_state_settings_toml).
+  {"launchpad",     "appearance"},
 };
 
 toml::table merge_declarative_and_state() {
@@ -1260,6 +1319,27 @@ bool write_state_settings_toml(const ShellConfig& c) {
     root.insert_or_assign("taskbar", std::move(tb));
   }
   {
+    toml::table db;
+    db.insert_or_assign("enabled", merged.dashboard.enabled);
+    db.insert_or_assign("trigger_height", static_cast<int64_t>(merged.dashboard.triggerHeight));
+    db.insert_or_assign("columns", static_cast<int64_t>(merged.dashboard.columns));
+    db.insert_or_assign("gap", static_cast<int64_t>(merged.dashboard.gap));
+    db.insert_or_assign("margin_x", static_cast<int64_t>(merged.dashboard.marginX));
+    db.insert_or_assign("margin_top", static_cast<int64_t>(merged.dashboard.marginTop));
+    db.insert_or_assign("margin_bottom", static_cast<int64_t>(merged.dashboard.marginBottom));
+    db.insert_or_assign("max_width", static_cast<int64_t>(merged.dashboard.maxWidth));
+    {
+      toml::array cards;
+      const auto& src = merged.dashboard.cards.empty() ? DashboardConfig::default_cards()
+                                                       : merged.dashboard.cards;
+      for (const auto& card : src) {
+        cards.push_back(card.span > 1 ? card.id + ":" + std::to_string(card.span) : card.id);
+      }
+      db.insert_or_assign("widgets", std::move(cards));
+    }
+    root.insert_or_assign("dashboard", std::move(db));
+  }
+  {
     toml::table dt;
     dt.insert_or_assign("enabled", merged.desktopEnabled);
     dt.insert_or_assign("output", merged.desktopOutputName.empty() ? std::string("") : merged.desktopOutputName);
@@ -1382,6 +1462,11 @@ bool write_state_settings_toml(const ShellConfig& c) {
     root.insert_or_assign("keyboard", std::move(kb));
   }
   {
+    toml::table bt;
+    bt.insert_or_assign("auto_reconnect", merged.bluetooth.autoReconnect);
+    root.insert_or_assign("bluetooth", std::move(bt));
+  }
+  {
     const ShellAppearance& a = merged.appearance;
     toml::table ap;
     ap.insert_or_assign("overlay_opacity_advanced", a.overlayOpacityAdvanced);
@@ -1410,6 +1495,8 @@ bool write_state_settings_toml(const ShellConfig& c) {
     ap.insert_or_assign("launchpad_view_mode", static_cast<int64_t>(a.launchpadViewMode));
     ap.insert_or_assign("launchpad_folder_size_pct", static_cast<int64_t>(a.launchpadFolderSizePct));
     ap.insert_or_assign("launchpad_folder_gap_px", static_cast<int64_t>(a.launchpadFolderGapPx));
+    ap.insert_or_assign("launchpad_folder_columns", static_cast<int64_t>(a.launchpadFolderColumns));
+    ap.insert_or_assign("launchpad_folder_rows", static_cast<int64_t>(a.launchpadFolderRows));
     ap.insert_or_assign("overview_axis", static_cast<int64_t>(a.overviewAxis));
     ap.insert_or_assign("overview_capture_mode", static_cast<int64_t>(a.overviewCaptureMode));
     ap.insert_or_assign("overview_live_updates", a.overviewLiveUpdates);
@@ -1538,6 +1625,8 @@ bool write_state_settings_toml(const ShellConfig& c) {
       au.insert_or_assign("engine_allowed_rates_hz", std::move(rates));
     }
     au.insert_or_assign("compat_pcm_format", static_cast<int64_t>(merged.audio.compat_pcm_format));
+    au.insert_or_assign("engine_quantum", static_cast<int64_t>(merged.audio.engine_quantum));
+    au.insert_or_assign("engine_force_quantum", static_cast<int64_t>(merged.audio.engine_force_quantum));
     root.insert_or_assign("audio", std::move(au));
   }
 
@@ -1555,6 +1644,13 @@ bool write_state_settings_toml(const ShellConfig& c) {
   // Then persist the merged result as one TOML per component.
   debug_log("config", "write_state_settings_toml: writing component files");
   for (const auto& ci : kComponents) {
+    // launchpad.toml is owned by dedicated savers (settings serialize + the
+    // launchpad host) that preserve the [folder] array — the generic writer
+    // below would strip everything but [appearance] and delete user folders.
+    if (ci.name == "launchpad") {
+      debug_log("config", "write_state_settings_toml:  component=launchpad SKIP (dedicated saver owns it)");
+      continue;
+    }
     if (auto* sec = root.get_as<toml::table>(ci.section)) {
       toml::table comp_root;
       comp_root.insert_or_assign(ci.section, *sec);

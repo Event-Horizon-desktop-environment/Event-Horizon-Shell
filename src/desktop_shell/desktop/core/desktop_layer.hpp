@@ -45,6 +45,12 @@ struct DesktopLayer {
   bool widgetConfigured = false;
   bool menuConfigured = false;
   bool menuSurfaceHidden = false;
+  // True once a menu buffer has been attached+committed after the last
+  // (re)configure. Detaching (hide path) unmaps the layer surface, which per
+  // wlr-layer-shell returns it to the unconfigured state, so menuConfigured
+  // must be dropped exactly then and a fresh configure awaited before the
+  // next buffer attach.
+  bool menuMapped = false;
 };
 
 namespace desktop {

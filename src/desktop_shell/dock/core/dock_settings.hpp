@@ -4,12 +4,6 @@
 #include <string>
 #include <vector>
 
-struct LaunchpadFolderDef {
-  std::string name;
-  std::vector<std::string> appIds;
-  bool operator==(const LaunchpadFolderDef&) const = default;
-};
-
 struct DockSettings {
 
   bool dockShowDock = true;

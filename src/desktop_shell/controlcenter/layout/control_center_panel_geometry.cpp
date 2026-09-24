@@ -1,7 +1,11 @@
 #include "desktop_shell/controlcenter/layout/control_center_panel_geometry.hpp"
 
+#include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
+#include "desktop_shell/shared/popup/geometry/layout.hpp"
 #include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/dock/input/dock_position.hpp"
 #include "desktop_shell/controlcenter/state/control_center_state.hpp"
+#include "desktop_shell/common/time/mono_time.hpp"
 #include "configuration/shell_config.hpp"
 
 #include <algorithm>
@@ -64,17 +68,37 @@ double cc_layout_card_h() {
   return 92.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock);
 }
 
-static double compute_popup_height() {
-  return cc_layout_media_y() + cc_layout_card_h() + cc_layout_row_gap()
-       + cc_layout_card_h() + cc_layout_pad();
-}
-
 double control_center_popup_height() {
-  return compute_popup_height();
+  eh::shell::dock::control_center::ControlCenterState def{};
+  return eh::shell::dock::control_center::cc_compute_layout(
+             static_cast<double>(eh::shell::dock::kControlCenterPopupW()), def,
+             eh::shell::now_mono_ms())
+      .totalH;
 }
 
-double control_center_popup_height(const DockApp& /*app*/) {
-  return compute_popup_height();
+double control_center_popup_height(const DockApp& app) {
+  namespace ccl = eh::shell::dock::control_center;
+  const double W = static_cast<double>(app.popupW > 0 ? app.popupW : eh::shell::dock::kControlCenterPopupW());
+  // Size with animations resolved to their targets so the surface is born at
+  // its resting height; paint/hit keep using the interpolated (animated) form.
+  int wantH = static_cast<int>(std::ceil(
+      ccl::cc_compute_layout(W, const_cast<ccl::ControlCenterState&>(app.ccState),
+                             eh::shell::now_mono_ms(), true)
+          .totalH));
+  // Clamp so fully-expanded content never runs under the dock: reserve the
+  // bottom clearance plus a breathing row at the top.
+  if (DockOutputLayer* L = dock_popup_margin_reference_layer(const_cast<DockApp&>(app))) {
+    for (const auto& u : app.outputSlots) {
+      if (u && u->output == L->wlOut && u->logical_h > 0) {
+        int marginBottom = 0, marginLeft = 0;
+        if (dock_popup_compute_layer_margins(const_cast<DockApp&>(app), L, app.popupAnchorX,
+                                             &marginLeft, &marginBottom))
+          wantH = std::min(wantH, u->logical_h - marginBottom - 12);
+        break;
+      }
+    }
+  }
+  return static_cast<double>(std::max(200, wantH));
 }
 
 double control_center_network_offset_y(const eh::shell::dock::control_center::ControlCenterState& /*state*/) {

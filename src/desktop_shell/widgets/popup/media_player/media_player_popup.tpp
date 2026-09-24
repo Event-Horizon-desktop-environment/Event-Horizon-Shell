@@ -17,52 +17,6 @@ namespace eh::shell::dock::popup::media_player {
 namespace {
 
 // ════════════════════════════════════════════════════════════════════════════
-// Constants (matching DesktopMediaPlayerWidget)
-// ════════════════════════════════════════════════════════════════════════════
-
-constexpr double kW = 340.0;
-constexpr double kH = 420.0;
-
-constexpr double kOuterR      = 22.0;
-constexpr double kOuterMargin = 14.0;
-
-constexpr double kInnerX = kOuterMargin;
-constexpr double kInnerY = kOuterMargin;
-constexpr double kInnerW = kW - 2.0 * kOuterMargin;
-constexpr double kInnerH = kH - 2.0 * kOuterMargin;
-constexpr double kInnerR = 18.0;
-
-constexpr double kColW    = kInnerW - 28.0;
-constexpr double kColPadX = 14.0;
-constexpr double kColX    = kInnerX + kColPadX;
-
-constexpr double kContentTopPad    =  8.0;
-constexpr double kContentBottomPad = 10.0;
-
-constexpr double kCloseBtnSize = 32.0;
-constexpr double kCloseBtnIcon = 18.0;
-constexpr double kCloseBtnMarg =  8.0;
-constexpr double kCloseBtnCx = kInnerX + kInnerW - kCloseBtnMarg - kCloseBtnSize / 2.0;
-constexpr double kCloseBtnCy = kInnerY + kCloseBtnMarg + kCloseBtnSize / 2.0;
-
-constexpr double kArtSize = std::clamp(kColW * 0.52, 80.0, 220.0);
-constexpr double kArtR    = kArtSize / 2.0;
-constexpr double kArtTop  = kInnerY + kContentTopPad;
-constexpr double kArtCy   = kArtTop + kArtR;
-
-constexpr double kBoost    = 1.24;
-constexpr double kBtnSmall = 42.0 * kBoost;
-constexpr double kBtnPlay  = 52.0 * kBoost;
-constexpr double kBtnGap   = 14.0 * kBoost;
-
-constexpr double kSeekAreaH = 22.0;
-constexpr double kBarH      =  4.0;
-constexpr double kThumbR    =  4.0;
-
-constexpr double kSpacing = 3.0;
-
-// Hover part enum.
-enum class MediaHover : int { None = 0, Close, Prev, Play, Next, Seekbar };
 
 void rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
   const double rad = std::min({r, w * 0.5, h * 0.5});
@@ -168,6 +122,58 @@ void draw_art_ring(cairo_t* cr, double cx, double cy, double r,
   cairo_restore(cr);
 }
 
+} // anonymous namespace (paint-local helpers above; shared geometry below)
+
+// Shared paint/hit geometry (single source; also used by
+// media_player_popup.cpp click handling — see Docs/hit-testing.md).
+// Constants (matching DesktopMediaPlayerWidget)
+// ════════════════════════════════════════════════════════════════════════════
+
+constexpr double kW = 340.0;
+constexpr double kH = 420.0;
+
+constexpr double kOuterR      = 22.0;
+constexpr double kOuterMargin = 14.0;
+
+constexpr double kInnerX = kOuterMargin;
+constexpr double kInnerY = kOuterMargin;
+constexpr double kInnerW = kW - 2.0 * kOuterMargin;
+constexpr double kInnerH = kH - 2.0 * kOuterMargin;
+constexpr double kInnerR = 18.0;
+
+constexpr double kColW    = kInnerW - 28.0;
+constexpr double kColPadX = 14.0;
+constexpr double kColX    = kInnerX + kColPadX;
+
+constexpr double kContentTopPad    =  8.0;
+constexpr double kContentBottomPad = 10.0;
+
+constexpr double kCloseBtnSize = 32.0;
+constexpr double kCloseBtnIcon = 18.0;
+constexpr double kCloseBtnMarg =  8.0;
+constexpr double kCloseBtnCx = kInnerX + kInnerW - kCloseBtnMarg - kCloseBtnSize / 2.0;
+constexpr double kCloseBtnCy = kInnerY + kCloseBtnMarg + kCloseBtnSize / 2.0;
+
+constexpr double kArtSize = std::clamp(kColW * 0.52, 80.0, 220.0);
+constexpr double kArtR    = kArtSize / 2.0;
+constexpr double kArtTop  = kInnerY + kContentTopPad;
+constexpr double kArtCy   = kArtTop + kArtR;
+
+constexpr double kBoost    = 1.24;
+constexpr double kBtnSmall = 42.0 * kBoost;
+constexpr double kBtnPlay  = 52.0 * kBoost;
+constexpr double kBtnGap   = 14.0 * kBoost;
+
+constexpr double kSeekAreaH = 22.0;
+constexpr double kBarH      =  4.0;
+constexpr double kThumbR    =  4.0;
+
+constexpr double kSpacing = 3.0;
+
+// Hover part enum.
+
+enum class MediaHover : int { None = 0, Close, Prev, Play, Next, Seekbar };
+
 struct Layout {
   double titleY  = 0;
   double artistY = 0;
@@ -177,7 +183,8 @@ struct Layout {
   double ctrlY   = 0;
 };
 
-Layout compute_layout(int titleH, int artistH, int albumH,
+
+inline Layout compute_layout(int titleH, int artistH, int albumH,
                       bool hasArtist, bool hasAlbum) {
   Layout L;
   const double artBottom = kArtTop + kArtSize;
@@ -200,12 +207,14 @@ Layout compute_layout(int titleH, int artistH, int albumH,
   return L;
 }
 
-bool hit_circle(double px, double py, double cx, double cy, double r) {
+
+inline bool hit_circle(double px, double py, double cx, double cy, double r) {
   const double dx = px - cx, dy = py - cy;
   return dx * dx + dy * dy <= r * r;
 }
 
-MediaHover compute_hover(double px, double py,
+
+inline MediaHover compute_hover(double px, double py,
                           double seekY, double ctrlY,
                           bool active,
                           bool canPrev, bool canNext,
@@ -234,8 +243,6 @@ MediaHover compute_hover(double px, double py,
 
   return MediaHover::None;
 }
-
-} // anonymous namespace
 
 // ════════════════════════════════════════════════════════════════════════════
 // Paint

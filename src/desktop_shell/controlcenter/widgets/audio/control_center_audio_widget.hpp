@@ -38,7 +38,8 @@ struct ControlCenterInputDevice {
 [[nodiscard]] ControlCenterAudioOutputState control_center_audio_output_state(const ControlCenterState* cs = nullptr);
 [[nodiscard]] std::vector<ControlCenterOutputDevice> control_center_output_devices();
 void paint_control_center_audio_output_card(cairo_t* cr, double x, double y, double w, double h,
-                                            const ControlCenterAudioOutputState& as, double inner_glass_scale);
+                                            const ControlCenterAudioOutputState& as, double inner_glass_scale,
+                                            double corner_radius = -1.0);  // <0 = auto radius
 void control_center_set_audio_output_volume(double normalized_0_1);
 void control_center_set_audio_output_mute(bool muted);
 void control_center_set_default_sink(std::string_view sink_name);
@@ -46,7 +47,8 @@ void control_center_set_default_sink(std::string_view sink_name);
 [[nodiscard]] ControlCenterAudioInputState control_center_audio_input_state(const ControlCenterState* cs = nullptr);
 [[nodiscard]] std::vector<ControlCenterInputDevice> control_center_input_devices();
 void paint_control_center_audio_input_card(cairo_t* cr, double x, double y, double w, double h,
-                                           const ControlCenterAudioInputState& as, double inner_glass_scale);
+                                           const ControlCenterAudioInputState& as, double inner_glass_scale,
+                                           double corner_radius = -1.0);  // <0 = auto radius
 void control_center_set_audio_input_volume(double normalized_0_1);
 void control_center_set_audio_input_mute(bool muted);
 void control_center_set_default_source(std::string_view source_name);

@@ -92,6 +92,8 @@ struct ShellAppearance {
   int launchpadViewMode = 1;
   int launchpadFolderSizePct = 100;
   int launchpadFolderGapPx = 16;
+  int launchpadFolderColumns = 3;
+  int launchpadFolderRows = 3;
 
   int overviewAxis = 0;             // 0=Vertical, 1=Horizontal
   int overviewCaptureMode = 0;      // 0=Snapshot (procedural), 1=Screencopy (live output capture)
@@ -318,6 +320,13 @@ struct PowerSettings {
   int epp = 2;                // 0=perf, 1=bal_perf, 2=default, 3=bal_power, 4=power
 };
 
+struct BluetoothSettings {
+  // Reconnect paired devices the app has seen/used when they come back in
+  // range and are not connected (BlueZ remembers devices itself; this is the
+  // host-side nudge that catches what device-initiated reconnects miss).
+  bool autoReconnect = true;
+};
+
 struct VramBoostSettings {
   bool enabled = true;          // dmem cgroup VRAM prioritization for the foreground app
   bool onlyFullscreen = true;   // only boost fullscreen windows
@@ -333,6 +342,8 @@ struct AudioSettings {
   int engine_clock_rate_hz = 48000;
   int engine_force_rate_hz = 0;
   std::vector<int> engine_allowed_rates_hz;
+  int engine_quantum = 0;        // 0 = unset (PipeWire default buffer size)
+  int engine_force_quantum = 0;  // 0 = unset / Auto
   int compat_pcm_format = 0;
 };
 
@@ -364,8 +375,46 @@ struct FileBrowserSettings {
   bool window_controls_left = false;
 };
 
+// Top-edge dashboard: an ordered, modular grid of control-center-style
+// widgets revealed by hovering the top of the screen. The `cards` list is
+// both the set and the order — a card is either a widget id ("clock") or
+// an id with an explicit column span ("media:2"). Reordering or removing
+// entries is all it takes to rearrange or show a single widget.
+struct DashboardCardConfig {
+  std::string id;
+  int span = 1;
+};
+
+struct DashboardConfig {
+  // Schema version of this block. 0 = written before versions existed (v0
+  // defaults: gap 12, max_width 1800, pre-reorder widget list); see
+  // dashboard_migrate_legacy_defaults. Current version is 1.
+  int configVersion = 0;
+  bool enabled = true;
+  int triggerHeight = 8;  // px hover strip at the top edge while hidden
+  int columns = 4;        // grid columns inside the panel
+  int gap = 0;            // px between cards; 0 = one continuous sheet
+  int marginX = 14;       // px panel side margin (surface is full-width)
+  int marginTop = 12;     // px panel top margin
+  int marginBottom = 14;  // px panel bottom margin
+  int maxWidth = 0;       // px panel cap; 0 = full width minus margins (default: the
+                          // trigger strip spans the screen, so the panel must too —
+                          // otherwise moving down off the strip misses the panel)
+  std::vector<DashboardCardConfig> cards;
+
+  // Default layout when no [dashboard] section (or no widgets) is present.
+  // Spans pack into `columns` = 4: time/info row, media/connectivity row,
+  // control/monitor row.
+  [[nodiscard]] static std::vector<DashboardCardConfig> default_cards() {
+    return {{"clock", 1},  {"weather", 1}, {"calendar", 2},
+            {"media", 2},  {"network", 1}, {"bluetooth", 1},
+            {"volume", 1}, {"mic", 1},     {"mixer", 1},  {"system", 1}};
+  }
+};
+
 struct ShellConfig {
   DockSettings dock{};
+  DashboardConfig dashboard{};
   ShellAppearance appearance{};
   ShellRendererBackend renderer = ShellRendererBackend::Vulkan;
   bool wallpaperEnabled = false;
@@ -404,6 +453,7 @@ struct ShellConfig {
   IdleSettings idle{};
   KeyboardSettings keyboard{};
   PowerSettings power{};
+  BluetoothSettings bluetooth{};
   VramBoostSettings vramBoost{};
   AudioSettings audio{};
   FileBrowserSettings fileBrowser{};

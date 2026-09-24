@@ -5,6 +5,7 @@
 #include "bootstrap/loop/poll_mux.hpp"
 #include "wl/core/gpu_page_trim.hpp"
 #include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/dock/core/dock_boot_log.hpp"
 #include "desktop_shell/dock/pinned/dock_pinned.h"
 #include "desktop_shell/shared/toplevel/toplevel_hooks.hpp"
 #include "desktop_shell/common/os_logo/os_logo.hpp"
@@ -28,6 +29,8 @@
 #include "desktop_shell/power_confirm/power_confirm.hpp"
 #include "desktop_shell/shared/popup/dispatch/popup_dispatch.hpp"
 #include "desktop_shell/dock/input/dock_position.hpp"
+#include "desktop_shell/dashboard/dashboard_layout.hpp"
+#include "desktop_shell/dashboard/dashboard_surface.hpp"
 
 #include <cairo/cairo.h>
 #if EH_HAVE_RSVG
@@ -110,7 +113,6 @@
 #include "desktop_shell/spotlight/search/spotlight_query.hpp"
 #include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
 #include "desktop_shell/shared/popup/buffer/buffer.hpp"
-#include "desktop_shell/launchpad/host/launchpad_host.hpp"
 #include "desktop_shell/shared/popup/caret/caret.hpp"
 #include "desktop_shell/shared/popup/paint/finish.hpp"
 #include "desktop_shell/shared/popup/paint/paint.hpp"
@@ -326,7 +328,8 @@ static void dock_apply_poll_timer_interval(DockApp& app) {
     (void)timerfd_settime(app.pollTimerFd, 0, &its, nullptr);
     return;
   }
-  if (!dock_first_media_widget_id(app.settings).empty() || !dock_first_control_center_widget_id(app.settings).empty()) {
+  if (!dock_first_media_widget_id(app.settings).empty() || eh::shell::dashboard::dashboard_has_card(app, "media") ||
+      !dock_first_control_center_widget_id(app.settings).empty()) {
     its.it_interval.tv_sec = 0;
     its.it_interval.tv_nsec = 400 * 1000 * 1000;
   } else {
@@ -653,6 +656,11 @@ int dock_compute_widget_strip_width(DockApp& app, const std::vector<std::string>
   return w;
 }
 
+// Computed fallback geometry for the pinned-drag: derived from the same strip
+// geometry the picker uses (slot-width walk includes every widget, lr layout,
+// paint's inner margin), and the slot pitch is measured from the actual pinned
+// slot positions instead of assuming (icon + gap) — with dockPinnedAppsTrayPill
+// the painted pitch is icon only, and the error grew by gap * index.
 DockPinnedDragGeometry dock_pinned_drag_geometry(DockApp& app) {
   MANGOWM_FN();
   DockPinnedDragGeometry out;
@@ -664,61 +672,117 @@ DockPinnedDragGeometry dock_pinned_drag_geometry(DockApp& app) {
   dock_fill_pick_result_slots(app, hitSnap, app.settings.leftWidgets, app.settings.centerWidgets, app.settings.rightWidgets,
                                scratch);
 
-  const double icon = static_cast<double>(dock_effective_icon_px(app.settings));
-  const double gap = static_cast<double>(dock_effective_gap_px(app.settings));
-  const double total = dock_pick_layout_total_width(app, scratch.all);
-
   double px{}, py{}, boxW{}, boxH{};
   dock_pill_geometry(app, px, py, boxW, boxH);
-  const double midX = px + boxW * 0.5;
-  const double stripInner = 8.0 * dock_ui_scale(app.settings);
-  const double hScale = widget_strip_h_scale(boxW, total, stripInner);
-  const double startLayoutX = px + (boxW - total) * 0.5;
+  const DockStripGeom g = dock_compute_strip_geom(app, scratch, px, boxW);
 
-  const auto& scPick = eh::config::shell_config_snapshot();
-  auto pick_slot_w = [&](const PickSlot& s) -> double {
-    if (s.kind == PickSlot::Kind::Clock) {
-      return eh::shell::dock_slot_hooks::dock_clock_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight));
-    }
-    if (s.kind == PickSlot::Kind::Weather) {
-      return eh::shell::dock_slot_hooks::dock_weather_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight));
-    }
-    if (s.kind == PickSlot::Kind::Media) {
-      const eh::mpris::PlayerSnapshot snap = app.mpris ? app.mpris->snapshot() : eh::mpris::PlayerSnapshot{};
-      return eh::shell::dock_slot_hooks::dock_media_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight), snap);
-    }
-    if (s.kind == PickSlot::Kind::Workspaces) {
-      return eh::shell::dock_slot_hooks::dock_workspaces_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight),
-                                                      app.workspaceStrip);
-    }
-    if (s.kind == PickSlot::Kind::ControlCenter) {
-      return eh::shell::dock_slot_hooks::dock_control_center_slot_width(scPick, s.key, icon, static_cast<double>(app.dockHeight));
-    }
-    if (s.kind == PickSlot::Kind::Bluetooth) {
-      return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight));
-    }
-    return icon;
-  };
-
-  double curLayout = startLayoutX;
-  bool foundFirst = false;
+  double firstSurf = 0.0;
+  double lastSurf = 0.0;
+  double prevSurf = 0.0;
+  double strideSum = 0.0;
+  double iconSurf = 0.0;
+  int strideN = 0;
+  int prevIdx = -1;
+  int n = 0;
   for (size_t i = 0; i < scratch.all.size(); ++i) {
     const PickSlot& s = scratch.all[i];
-    const double sw = pick_slot_w(s);
-    if (s.kind == PickSlot::Kind::App && s.isPinned) {
-      if (!foundFirst) {
-        out.firstPinnedLeftSurf = strip_layout_x_to_surface(curLayout, midX, hScale);
-        foundFirst = true;
-      }
-      ++out.pinnedCount;
+    if (!(s.kind == PickSlot::Kind::App && s.isPinned)) continue;
+    const double layoutL = dock_slot_layout_x(app, scratch, g, static_cast<int>(i));
+    const double surfL = strip_layout_x_to_surface(layoutL, g.midX, g.hScale);
+    if (n == 0) firstSurf = surfL;
+    else if (prevIdx == static_cast<int>(i) - 1) {
+      strideSum += surfL - prevSurf;
+      ++strideN;
     }
-    curLayout += sw + (i + 1 < scratch.all.size() ? dock_gap_after_pick(app.settings, scratch.all, i, gap) : 0.0);
+    prevSurf = surfL;
+    prevIdx = static_cast<int>(i);
+    lastSurf = surfL;
+    iconSurf = g.w[i] * g.hScale;
+    ++n;
+  }
+  if (n <= 0) return out;
+
+  out.firstPinnedLeftSurf = firstSurf;
+  out.pinnedCount = n;
+  out.iconSurf = iconSurf;
+  if (strideN > 0) out.slotStrideSurf = strideSum / static_cast<double>(strideN);
+  else if (n > 1) out.slotStrideSurf = (lastSurf - firstSurf) / static_cast<double>(n - 1);
+  else out.slotStrideSurf = iconSurf + g.gap * g.hScale;
+  out.valid = true;
+  return out;
+}
+
+// Capture the pinned-run geometry once at drag press. Primary source: the
+// exact rects paint produced (retained hit rects, surface coords) — validated
+// the same way dock_pick_retained() validates them. Falls back to the
+// computed geometry above when paint has not run or the slot set drifted.
+void dock_pin_drag_capture_geometry(DockApp& app) {
+  MANGOWM_FN();
+  app.pinDragGeometryValid = false;
+  app.pinDragFirstLeftSurf = 0.0;
+  app.pinDragSlotStrideSurf = 0.0;
+  app.pinDragIconSurf = 0.0;
+  app.pinDragPinnedCount = 0;
+  if (!app.configured) return;
+
+  DockPickResult scratch;
+  eh::shell::dock::dock_ensure_workspace_strip(app);
+  const auto hitSnap = eh::shell::shared::build_running_snapshot(app.toplevels, app.appFirstSeenSerial, app.settings.dockGroupApps);
+  dock_fill_pick_result_slots(app, hitSnap, app.settings.leftWidgets, app.settings.centerWidgets, app.settings.rightWidgets,
+                               scratch);
+  const auto& retained = app.dockRetainedHits;
+  bool usable = !retained.empty() && retained.size() == scratch.all.size();
+  if (usable) {
+    for (size_t i = 0; i < retained.size(); ++i) {
+      if (retained[i].key != scratch.all[i].key) {
+        usable = false;
+        break;
+      }
+    }
+  }
+  if (usable) {
+    double first = 0.0;
+    double last = 0.0;
+    double prev = 0.0;
+    double strideSum = 0.0;
+    double iconW = 0.0;
+    int strideN = 0;
+    int prevIdx = -1;
+    int n = 0;
+    for (size_t i = 0; i < scratch.all.size(); ++i) {
+      const PickSlot& s = scratch.all[i];
+      if (!(s.kind == PickSlot::Kind::App && s.isPinned)) continue;
+      const auto& h = retained[i];
+      if (n == 0) first = h.x;
+      else if (prevIdx == static_cast<int>(i) - 1) {
+        strideSum += h.x - prev;
+        ++strideN;
+      }
+      prev = h.x;
+      prevIdx = static_cast<int>(i);
+      last = h.x;
+      iconW = h.w;
+      ++n;
+    }
+    if (n >= 2) {
+      app.pinDragFirstLeftSurf = first;
+      app.pinDragPinnedCount = n;
+      app.pinDragIconSurf = iconW;
+      app.pinDragSlotStrideSurf = strideN > 0 ? strideSum / static_cast<double>(strideN)
+                                              : (last - first) / static_cast<double>(n - 1);
+      app.pinDragGeometryValid = true;
+      return;
+    }
   }
 
-  out.slotStrideSurf = (icon + gap) * hScale;
-  out.iconSurf = icon * hScale;
-  out.valid = foundFirst && out.pinnedCount > 0;
-  return out;
+  const DockPinnedDragGeometry geo = dock_pinned_drag_geometry(app);
+  if (geo.valid) {
+    app.pinDragFirstLeftSurf = geo.firstPinnedLeftSurf;
+    app.pinDragSlotStrideSurf = geo.slotStrideSurf;
+    app.pinDragIconSurf = geo.iconSurf;
+    app.pinDragPinnedCount = geo.pinnedCount;
+    app.pinDragGeometryValid = true;
+  }
 }
 
 static int compute_desired_surface_width(DockApp& app) {
@@ -1038,7 +1102,7 @@ static bool dock_widget_token_warrants_app_icon_heat(const std::string& w, const
   if (dock_strip_widget_blocked(st, w)) return false;
   if (w == "pinned_apps" || w == "running_apps") return false;
   if (eh::config::widget_token_is_system_tray(w)) return false;
-  if (w == "settings_button" || w == "distro_spotlight" || w == "app_menu" || w == "launchpad")
+  if (w == "settings_button" || w == "distro_spotlight" || w == "app_menu")
     return false;
   const std::string impl = eh::config::widget_implementation_type(w);
   if (impl == "clock" || impl == "weather" || impl == "media" || impl == "workspaces" || impl == "control_center" ||
@@ -1064,9 +1128,6 @@ static void dock_warm_startup_caches(DockApp& app) {
   if (dock_widget_lists_contain(app.settings, "distro_spotlight") ||
       dock_widget_lists_contain_impl(app.settings, "app_drawer")) {
     if (!app.distroSpotlightLogo) app.distroSpotlightLogo = eh_os_logo::load_distro_logo_cairo_surface();
-  }
-  if (dock_widget_lists_contain(app.settings, "launchpad")) {
-    // logos loaded on demand by launchpad_host at 48 px
   }
   if (dock_widget_lists_contain(app.settings, "trash")) {
     if (!app.trashEmptyLogo) app.trashEmptyLogo = eh::shell::asset::load_trash_empty_surface();
@@ -1144,6 +1205,9 @@ void dock_maybe_reload_settings(DockApp& app, const char* source) {
 
   if (std::strcmp(source, "startup") != 0) eh::config::shell_config_invalidate_light();
   const eh::config::ShellConfig loaded = eh::config::shell_config_snapshot_skip_matugen();
+  // Dashboard config is independent of [dock]; apply it on every reload path
+  // (this runs before the dock-settings equality early-return below).
+  eh::shell::dashboard::dashboard_on_config_changed(app, loaded.dashboard);
   DockSettings next = loaded.dock;
   const eh::config::ShellRendererBackend prevRenderer = app.dockRendererBackend;
   if (dock_settings_equal(next, app.settings) && loaded.renderer == app.dockRendererBackend) {
@@ -1474,113 +1538,50 @@ void dock_draw(DockApp& app, bool* committed) {
 
     const bool dockHidden = !app.settings.dockShowDock;
     if (!dockHidden) {
+      // Soft drop shadow (matches system monitor cards; Hyprland handles blur).
+      {
+        rounded_rect(cr, x, y + 2.0, boxW, boxH, radius);
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.22);
+        cairo_fill(cr);
+      }
       rounded_rect(cr, x, y, boxW, boxH, radius);
       cairo_set_source_rgba(cr, ehChrome.dockFillR * 0.35, ehChrome.dockFillG * 0.35,
                             ehChrome.dockFillB * 0.35, bgAlpha * 0.78);
       cairo_fill_preserve(cr);
 
-      // Liquid glass perimeter rim.
+      // Frosted edge treatment: milky lift + bottom-weighted edge light.
       if (app.settings.dockLiquidGlass) {
-        const double rimW = std::max(1.0, 2.0 * std::min(1.0, boxH / 70.0));
-        const bool tinted = app.settings.dockColoredGlass;
-        const double tintR = tinted ? ehChrome.accentR : 1.0;
-        const double tintG = tinted ? ehChrome.accentG : 1.0;
-        const double tintB = tinted ? ehChrome.accentB : 1.0;
-
-        // Layer 0 — frosted glass body (uniform translucent base wrapping all sides/corners)
+        // Milky lift — faint white wash so the fill reads frosted, not dark.
         {
-          cairo_set_source_rgba(cr, tintR, tintG, tintB, 0.10);
-          cairo_set_line_width(cr, rimW);
+          cairo_save(cr);
           rounded_rect(cr, x, y, boxW, boxH, radius);
-          cairo_stroke(cr);
+          cairo_clip(cr);
+          cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.07 * bgAlpha);
+          cairo_rectangle(cr, x, y, boxW, boxH);
+          cairo_fill(cr);
+          cairo_restore(cr);
         }
 
-        // Layer 1 — broad top-to-bottom glass shading (light from above)
+        // Edge light — inner 1px stroke, soft on top, bright along the bottom.
         {
-          cairo_pattern_t* glassShade = cairo_pattern_create_linear(0, y, 0, y + boxH);
-          cairo_pattern_add_color_stop_rgba(glassShade, 0.00, tintR, tintG, tintB, 0.20);
-          cairo_pattern_add_color_stop_rgba(glassShade, 0.08, tintR, tintG, tintB, 0.12);
-          cairo_pattern_add_color_stop_rgba(glassShade, 0.25, tintR, tintG, tintB, 0.02);
-          cairo_pattern_add_color_stop_rgba(glassShade, 0.50, tintR, tintG, tintB, 0.00);
-          cairo_pattern_add_color_stop_rgba(glassShade, 0.75, tintR, tintG, tintB, 0.02);
-          cairo_pattern_add_color_stop_rgba(glassShade, 0.92, tintR, tintG, tintB, 0.12);
-          cairo_pattern_add_color_stop_rgba(glassShade, 1.00, tintR, tintG, tintB, 0.18);
-          cairo_set_source(cr, glassShade);
-          cairo_set_line_width(cr, rimW);
-          rounded_rect(cr, x, y, boxW, boxH, radius);
+          cairo_pattern_t* rim = cairo_pattern_create_linear(0, y, 0, y + boxH);
+          cairo_pattern_add_color_stop_rgba(rim, 0.0, 1.0, 1.0, 1.0, 0.12 * bgAlpha);
+          cairo_pattern_add_color_stop_rgba(rim, 0.5, 1.0, 1.0, 1.0, 0.05 * bgAlpha);
+          cairo_pattern_add_color_stop_rgba(rim, 1.0, 1.0, 1.0, 1.0, 0.42 * bgAlpha);
+          cairo_set_source(cr, rim);
+          cairo_set_line_width(cr, 1.0);
+          rounded_rect(cr, x + 1.0, y + 1.0, std::max(1.0, boxW - 2.0), std::max(1.0, boxH - 2.0),
+                       std::max(0.0, radius - 1.0));
           cairo_stroke(cr);
-          cairo_pattern_destroy(glassShade);
+          cairo_pattern_destroy(rim);
         }
 
-        // Layer 2 — sharp specular highlight on the very top edge (always white)
+        // Faint outer glow so the edge lifts off the wallpaper.
         {
-          cairo_pattern_t* specTop = cairo_pattern_create_linear(0, y, 0, y + rimW * 2.5);
-          cairo_pattern_add_color_stop_rgba(specTop, 0.00, 1.0, 1.0, 1.0, 0.55);
-          cairo_pattern_add_color_stop_rgba(specTop, 0.30, 1.0, 1.0, 1.0, 0.12);
-          cairo_pattern_add_color_stop_rgba(specTop, 1.00, 1.0, 1.0, 1.0, 0.00);
-          cairo_set_source(cr, specTop);
-          cairo_set_line_width(cr, rimW * 0.6);
-          rounded_rect(cr, x, y, boxW, boxH, radius);
+          cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08 * bgAlpha);
+          cairo_set_line_width(cr, 1.0);
+          rounded_rect(cr, x + 0.5, y + 0.5, std::max(1.0, boxW - 1.0), std::max(1.0, boxH - 1.0), radius);
           cairo_stroke(cr);
-          cairo_pattern_destroy(specTop);
-        }
-
-        // Layer 3 — thin inner bevel shadow just below the top highlight
-        {
-          cairo_pattern_t* bevelShadow = cairo_pattern_create_linear(0, y + rimW, 0, y + rimW * 3.0);
-          cairo_pattern_add_color_stop_rgba(bevelShadow, 0.0, 0.0, 0.0, 0.0, 0.18);
-          cairo_pattern_add_color_stop_rgba(bevelShadow, 1.0, 0.0, 0.0, 0.0, 0.00);
-          cairo_set_source(cr, bevelShadow);
-          cairo_set_line_width(cr, rimW * 0.35);
-          rounded_rect(cr, x + rimW * 0.3, y + rimW * 0.3,
-                       std::max(1.0, boxW - rimW * 0.6), std::max(1.0, boxH - rimW * 0.6),
-                       std::max(0.0, radius - rimW * 0.3));
-          cairo_stroke(cr);
-          cairo_pattern_destroy(bevelShadow);
-        }
-
-        // Layer 4 — side edge highlights (left/right catch ambient light)
-        {
-          cairo_pattern_t* sideHL = cairo_pattern_create_linear(x, 0, x + boxW, 0);
-          cairo_pattern_add_color_stop_rgba(sideHL, 0.00, tintR, tintG, tintB, 0.22);
-          cairo_pattern_add_color_stop_rgba(sideHL, 0.04, tintR, tintG, tintB, 0.06);
-          cairo_pattern_add_color_stop_rgba(sideHL, 0.30, tintR, tintG, tintB, 0.00);
-          cairo_pattern_add_color_stop_rgba(sideHL, 0.70, tintR, tintG, tintB, 0.00);
-          cairo_pattern_add_color_stop_rgba(sideHL, 0.96, tintR, tintG, tintB, 0.06);
-          cairo_pattern_add_color_stop_rgba(sideHL, 1.00, tintR, tintG, tintB, 0.18);
-          cairo_set_source(cr, sideHL);
-          cairo_set_line_width(cr, rimW);
-          rounded_rect(cr, x, y, boxW, boxH, radius);
-          cairo_stroke(cr);
-          cairo_pattern_destroy(sideHL);
-        }
-
-        // Layer 5 — bright bottom lip (tinted)
-        {
-          cairo_pattern_t* botLip = cairo_pattern_create_linear(0, y + boxH - rimW * 2, 0, y + boxH);
-          cairo_pattern_add_color_stop_rgba(botLip, 0.00, tintR, tintG, tintB, 0.00);
-          cairo_pattern_add_color_stop_rgba(botLip, 0.50, tintR, tintG, tintB, 0.08);
-          cairo_pattern_add_color_stop_rgba(botLip, 1.00, tintR, tintG, tintB, 0.30);
-          cairo_set_source(cr, botLip);
-          cairo_set_line_width(cr, rimW * 0.7);
-          rounded_rect(cr, x, y, boxW, boxH, radius);
-          cairo_stroke(cr);
-          cairo_pattern_destroy(botLip);
-        }
-
-        // Layer 6 — faint outer glow (wider, more transparent, adds glass halo)
-        {
-          cairo_pattern_t* glow = cairo_pattern_create_linear(0, y, 0, y + boxH);
-          cairo_pattern_add_color_stop_rgba(glow, 0.00, tintR, tintG, tintB, 0.08);
-          cairo_pattern_add_color_stop_rgba(glow, 0.10, tintR, tintG, tintB, 0.03);
-          cairo_pattern_add_color_stop_rgba(glow, 0.50, tintR, tintG, tintB, 0.00);
-          cairo_pattern_add_color_stop_rgba(glow, 0.90, tintR, tintG, tintB, 0.03);
-          cairo_pattern_add_color_stop_rgba(glow, 1.00, tintR, tintG, tintB, 0.06);
-          cairo_set_source(cr, glow);
-          cairo_set_line_width(cr, rimW * 3.0);
-          rounded_rect(cr, x, y, boxW, boxH, radius);
-          cairo_stroke(cr);
-          cairo_pattern_destroy(glow);
         }
       }
 
@@ -1625,11 +1626,21 @@ void dock_draw(DockApp& app, bool* committed) {
       if (layer_media_progress) media_progress_tick = true;
 
       cur_media_rects.reserve(paint_hits.size());
+      app.dockRetainedHits.clear();
+      app.dockRetainedHits.reserve(paint_hits.size());
       for (const auto& h : paint_hits) {
         if (eh::config::widget_implementation_type(h.widgetId) == "media") {
           cur_media_rects.push_back({static_cast<int32_t>(std::lround(h.x)), static_cast<int32_t>(std::lround(h.y)),
                                      static_cast<int32_t>(std::lround(h.w)), static_cast<int32_t>(std::lround(h.h))});
         }
+        // Retain every paint hit rect for pointer resolution (single source
+        // of truth; see Docs/hit-testing.md). paint_hits is scratch storage.
+        DockApp::DockRetainedHit rh;
+        rh.key = h.widgetId;
+        rh.x = h.x; rh.y = h.y; rh.w = h.w; rh.h = h.h;
+        rh.chosenSerial = h.chosenSerial;
+        rh.isPinned = h.isPinned;
+        app.dockRetainedHits.push_back(std::move(rh));
       }
 
       if (app.autoHide && !app.reveal) {
@@ -1928,6 +1939,7 @@ static void frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms)
   app.externalFrameRequest = false;
 
   dock_draw(app);
+  eh::shell::dashboard::dashboard_frame_draw(app);
 
   static const bool dmg_stats = eh::debug_profile::env_int("EH_DOCK_DAMAGE_STATS", 0) != 0;
   if (dmg_stats) {
@@ -1938,7 +1950,8 @@ static void frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms)
     }
   }
 
-  if (app.shellAnim.has_active() || app.mediaMarqueeWantsFrame || app.wsStripAnim.active || app.pendingRedraw) {
+  if (app.shellAnim.has_active() || app.mediaMarqueeWantsFrame || app.wsStripAnim.active || app.pendingRedraw ||
+      app.dash.needsDraw) {
     bool doSchedule = true;
     if (app.mediaMarqueeWantsFrame && !app.shellAnim.has_active() && !app.wsStripAnim.active) {
       static uint64_t lastMarqueeMs = 0;
@@ -2258,6 +2271,7 @@ static bool dock_create_main_layer_surfaces(DockApp& app) {
     return false;
   }
   app.dockLayerOutput = targets[0];
+  eh::shell::dock::dock_boot_step("create main dock layer surfaces outputs=%zu", targets.size());
   EH_ST_TRACE(std::cerr << "dock dock_create_main_layer_surfaces: primary output → " << static_cast<void*>(app.dockLayerOutput));
 
 
@@ -2291,6 +2305,9 @@ static bool dock_create_main_layer_surfaces(DockApp& app) {
       }
       return false;
     }
+    eh::shell::dock::dock_boot_surface(
+        "bar", cfg.nameSpace, cfg.anchor, cfg.width, cfg.height, cfg.exclusiveZone, cfg.marginTop,
+        cfg.marginRight, cfg.marginBottom, cfg.marginLeft, outName.empty() ? "<unnamed>" : outName.c_str());
     dock_attach_output_layer_fractional_scale(app, *L);
 
     if (app.bgEffectMgr && L->surface) {
@@ -2391,6 +2408,7 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
     std::cerr << "[dock-bench] ─── dock_init_on_display begin ───\n";
   }
   app.display = display;
+  eh::shell::dock::dock_boot_step("init: registry + wait for globals");
   app.registry = wl_display_get_registry(app.display);
   if (!app.registry) return false;
   wl_registry_add_listener(app.registry, &g_registry_listener, &app);
@@ -2412,6 +2430,7 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
   app.xkbCtx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 
   // Bind all deferred globals now — compositor only processed 4 binds during roundtrip.
+  eh::shell::dock::dock_boot_step("init: bind deferred globals");
   dock_bind_deferred_globals(app);
   dock_bind_xdg_all_slots(app);
   dock_foreign_toplevel_bind_manager_and_hooks(app);
@@ -2423,6 +2442,7 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
   if (eh_dock_bench()) std::cerr << "[dock-bench] after flush_dispatch cumulative=" << shell_bench_ms_since(bench_t0) << "ms\n";
 
   app.compositorKind = detect_compositor_kind();
+  eh::shell::dock::dock_boot_step("init: compositor detected kind=%s", compositor_kind_cstr(app.compositorKind));
   EH_ST_TRACE(std::cerr << "dock_init: compositorKind=" << compositor_kind_cstr(app.compositorKind));
   if (eh_dock_toplevel_debug()) {
     std::cout << "[dock] compositor=" << compositor_kind_cstr(app.compositorKind) << "\n";
@@ -2434,6 +2454,7 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
   }
 
   if (!dock_create_main_layer_surfaces(app)) return false;
+  eh::shell::dock::dock_boot_step("init: main layer surfaces created configured=%d", app.configured ? 1 : 0);
   if (eh_dock_bench()) std::cerr << "[dock-bench] after dock_create_main_layer_surfaces cumulative=" << shell_bench_ms_since(bench_t0) << "ms\n";
 
   if (eh_verbose_enabled()) {
@@ -2443,6 +2464,7 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
   EH_VERBOSE_LOG(std::cerr << "[dock] MPRIS/media + tray D-Bus + bufferless-draw hints on stderr (grep: [mpris][dbus] [dock][mpris] [dock] [dbus][tray]).\n");
 
   EH_ST_TRACE(std::cerr << "dock_init: maybe_reload_settings(startup)");
+  eh::shell::dock::dock_boot_step("init: reload settings (startup)");
   dock_maybe_reload_settings(app, "startup");
   // Pre-warm icon theme search dirs now so they're ready by the time
   // dock_warm_startup_caches() runs on the first idle tick.
@@ -2468,12 +2490,14 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
   }
 
   EH_ST_TRACE(std::cerr << "dock_init_on_display: end configured=" << (app.configured ? 1 : 0) << " sizeDirty=" << (app.sizeDirty ? 1 : 0));
+  eh::shell::dock::dock_boot_step("init: dock_init_on_display complete");
   return true;
 }
 
 // Called by the weather async engine when a forecast update completes.
 static void dock_cc_weather_redraw(void* ctx) {
   auto& app = *static_cast<DockApp*>(ctx);
+  eh::shell::dashboard::dashboard_weather_redraw(app);
   if (app.popupOpen && app.popupKind == DockApp::PopupKind::ControlCenter && app.popupSurface) {
     std::cerr << "[dock-popup] weather_redraw hook → popup_draw_surface\n";
     popup_draw_surface(app);
@@ -2487,6 +2511,7 @@ void dock_init_deferred_startup(DockApp& app) {
     bench_t0 = ShellBenchClock::now();
     std::cerr << "[dock-bench] ─── dock_init_deferred_startup begin ───\n";
   }
+  eh::shell::dock::dock_boot_step("deferred: mpris");
   try {
     app.mpris = std::make_unique<eh::mpris::DockMpris>();
   } catch (const std::exception& e) {
@@ -2514,7 +2539,11 @@ void dock_init_deferred_startup(DockApp& app) {
   eh::shell::dock_slot_hooks::control_center_weather_startup_dock(&app, dock_cc_weather_redraw);
   eh::shell::dock_slot_hooks::battery_widget_init();
   eh::shell::dock_slot_hooks::bluetooth_widget_init();
+  eh::shell::dock::dock_boot_step("deferred: dashboard ensure (top panel)");
+  eh::shell::dashboard::dashboard_ensure_trigger(app);
+  eh::shell::dock::dock_boot_step("deferred: warm startup caches");
   dock_warm_startup_caches(app);
+  eh::shell::dock::dock_boot_step("deferred startup complete");
   if (eh_dock_bench()) {
     std::cerr << "[dock-bench] deferred startup total=" << shell_bench_ms_since(bench_t0) << "ms\n";
   }
@@ -2582,7 +2611,8 @@ void dock_handle_timer(DockApp& app) {
       drew = true;
     }
   }
-  if (!dock_first_media_widget_id(app.settings).empty() && app.mpris) {
+  if (app.mpris &&
+      (!dock_first_media_widget_id(app.settings).empty() || eh::shell::dashboard::dashboard_has_card(app, "media"))) {
     bool mpris_changed = false;
     try {
       mpris_changed = app.mpris->poll_refresh();
@@ -2620,6 +2650,7 @@ void dock_handle_timer(DockApp& app) {
     }
   }
   dock_tooltip_tick(app);
+  eh::shell::dashboard::dashboard_timer_tick(app);
 
   if (drewDock) dock_draw(app);
   if (drew && app.popupOpen && app.popupSurface) {
@@ -2688,9 +2719,17 @@ void dock_cleanup(DockApp& app, bool disconnect_display) {
   MANGOWM_FN();
   MANGOWM_INFO("dock_cleanup app=%p disconnect=%d", (void*)&app, (int)disconnect_display);
 
+  // Tear down the dashboard layer surface while the display is still known
+  // to be healthy (the error branch below nulls app.display first).
+  eh::shell::dashboard::dashboard_shutdown(app);
+
   // If display is in a fatal error state, any Wayland proxy operation will
   // segfault. Skip all Wayland destroy calls — the OS will free resources.
   if (app.display && wl_display_get_error(app.display)) {
+    // Self-guarding: with an errored display ExtForeignToplevels::shutdown
+    // only drops its references, so the handles/list are released here too.
+    app.extToplevels.shutdown();
+    app.extToplevelList = nullptr;
     app.display = nullptr;
     // Still clean up non-Wayland resources (threads, timers, etc.).
     eh::shell::osd::osd_audio_shutdown();
@@ -2768,6 +2807,12 @@ void dock_cleanup(DockApp& app, bool disconnect_display) {
   app.deferredVkDrop.reset();
   app.popupVkLayer.reset();
   app.toplevels.shutdown();
+  // Release the ext foreign-toplevel list while the display is still alive:
+  // ~WaylandState destroys this member after the disconnect below, and
+  // marshalling a destroy against an already-freed proxy SIGSEGVs — which is
+  // what every clean dock exit was doing (dock.pid unlinked, then core).
+  app.extToplevels.shutdown();
+  app.extToplevelList = nullptr;
   app.toplevelManager = nullptr;
   if (app.keyboard) wl_keyboard_destroy(app.keyboard);
   if (app.xkbState) xkb_state_unref(app.xkbState);

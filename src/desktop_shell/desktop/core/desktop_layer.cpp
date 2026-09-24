@@ -209,19 +209,39 @@ static void paint_widget_layer(DesktopApp& app, DesktopLayer& L) {
 
 static void paint_menu_layer(DesktopApp& app, DesktopLayer& L) {
     
-  if (!L.menuSurface || !L.menuLayer || !L.menuConfigured) return;
-  if (L.menuConfiguredWidth <= 0 || L.menuConfiguredHeight <= 0) return;
-  if (!app.desktopMenuOpen && !app.iconCtxMenuOpen && !app.mountDialogOpen &&
-      !app.worldClockSettingsOpen) {
+  if (!L.menuSurface || !L.menuLayer) return;
+  const bool wantMenu = app.desktopMenuOpen || app.iconCtxMenuOpen || app.mountDialogOpen ||
+                        app.worldClockSettingsOpen;
+  if (!wantMenu) {
     if (L.menuSurfaceHidden) return;
     if (L.menuShmBuf.busy()) return;
     // Hide by detaching rather than painting a cleared full-screen buffer:
     // this avoids allocating the menu buffer at all until a menu is first
     // opened, and frees it again after every close.
+    const bool wasMapped = L.menuMapped;
     wl_surface_attach(L.menuSurface, nullptr, 0, 0);
     wl_surface_commit(L.menuSurface);
     L.menuShmBuf.destroy();
     L.menuSurfaceHidden = true;
+    L.menuMapped = false;
+    if (wasMapped) {
+      // Detaching unmaps the layer surface, which returns it to the
+      // unconfigured state: attaching a buffer again before the compositor
+      // re-configures it is a protocol error (Hyprland kills us with
+      // "layerSurface was not configured, but a buffer was attached").
+      L.menuConfigured = false;
+    }
+    return;
+  }
+  if (!L.menuConfigured || L.menuConfiguredWidth <= 0 || L.menuConfiguredHeight <= 0) {
+    // Unmapped (or never configured): solicit a configure with an empty
+    // commit. desktop_menu_layer_configure repaints with the menu buffer once
+    // the compositor answers, so wait here instead of attaching a buffer into
+    // the unconfigured state.
+    wl_surface_attach(L.menuSurface, nullptr, 0, 0);
+    wl_surface_commit(L.menuSurface);
+    L.menuSurfaceHidden = false;
+    if (app.display) wl_display_flush(app.display);
     return;
   }
   L.menuSurfaceHidden = false;
@@ -266,6 +286,7 @@ static void paint_menu_layer(DesktopApp& app, DesktopLayer& L) {
   wl_surface_attach(L.menuSurface, L.menuShmBuf.wl(), 0, 0);
   wl_surface_damage_buffer(L.menuSurface, 0, 0, w, h);
   L.menuShmBuf.mark_busy();
+  L.menuMapped = true;
   wl_surface_commit(L.menuSurface);
 }
 

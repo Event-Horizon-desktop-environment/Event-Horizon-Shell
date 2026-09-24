@@ -102,20 +102,33 @@ std::vector<std::string> mixer_theme_hint_keys(const StreamIconIds& s) {
 }  // namespace
 
 const eh::icons::IconEntry* resolve_mixer_stream_theme_icon(eh::icons::IconCache& icons, const StreamIconIds& s) {
+  std::string ignored;
+  return resolve_mixer_stream_theme_icon(icons, s, &ignored);
+}
+
+const eh::icons::IconEntry* resolve_mixer_stream_theme_icon(eh::icons::IconCache& icons, const StreamIconIds& s,
+                                                            std::string* outWinningKey) {
    
   const eh::icons::IconEntry* icon = nullptr;
+  if (outWinningKey) outWinningKey->clear();
 
   auto try_tray = [&](const std::string& k) {
     if (icon && icon->surface) return;
     if (k.empty()) return;
     const eh::icons::IconEntry* e = icons.tray_icon(k);
-    if (e && e->surface) icon = e;
+    if (e && e->surface) {
+      icon = e;
+      if (outWinningKey && outWinningKey->empty()) *outWinningKey = "t:" + k;
+    }
   };
   auto try_app = [&](const std::string& k) {
     if (icon && icon->surface) return;
     if (k.empty()) return;
     const eh::icons::IconEntry* e = icons.app_icon(k);
-    if (e && e->surface) icon = e;
+    if (e && e->surface) {
+      icon = e;
+      if (outWinningKey && outWinningKey->empty()) *outWinningKey = "a:" + k;
+    }
   };
 
   if (!s.icon_name.empty()) {
@@ -180,9 +193,15 @@ const eh::icons::IconEntry* resolve_mixer_stream_theme_icon(eh::icons::IconCache
     // unguarded — hints should override fallback icons from earlier steps
     if (!h.empty()) {
       const eh::icons::IconEntry* e = icons.app_icon(h);
-      if (e && e->surface) icon = e;
+      if (e && e->surface) {
+        icon = e;
+        if (outWinningKey) *outWinningKey = "a:" + h;
+      }
       e = icons.tray_icon(h);
-      if (e && e->surface) icon = e;
+      if (e && e->surface) {
+        icon = e;
+        if (outWinningKey) *outWinningKey = "t:" + h;
+      }
     }
   }
 
@@ -206,9 +225,23 @@ const eh::icons::IconEntry* resolve_mixer_stream_theme_icon(eh::icons::IconCache
     ids.node_description = {};
     auto dei = resolve_desktop_entry_for_stream(ids);
     if (dei && !dei->icon.empty()) {
-      try_app(dei->icon);
-      try_tray(dei->icon);
-      try_tray(lower_copy(dei->icon));
+      const eh::icons::IconEntry* e = icons.app_icon(dei->icon);
+      if (e && e->surface) {
+        icon = e;
+        if (outWinningKey) *outWinningKey = "a:" + dei->icon;
+      } else {
+        e = icons.tray_icon(dei->icon);
+        if (e && e->surface) {
+          icon = e;
+          if (outWinningKey) *outWinningKey = "t:" + dei->icon;
+        } else {
+          e = icons.tray_icon(lower_copy(dei->icon));
+          if (e && e->surface) {
+            icon = e;
+            if (outWinningKey) *outWinningKey = "t:" + lower_copy(dei->icon);
+          }
+        }
+      }
     }
   }
 

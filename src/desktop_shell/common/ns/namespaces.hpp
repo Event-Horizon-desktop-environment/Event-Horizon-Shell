@@ -4,15 +4,17 @@ namespace eh::shell {
 
 constexpr const char* kDockNamespace = "event-horizon-dock";
 
+// Top-edge dashboard (modular widget panel), separate layer surface so it
+// can reveal independently of the dock.
+constexpr const char* kDashboardNamespace = "event-horizon-dashboard";
+
 constexpr const char* kOsdNamespace = "event-horizon-osd";
 
 constexpr const char* kDesktopShellNamespace = "event-horizon-desktop-shell";
 constexpr const char* kPanelNamespace = "event-horizon-panel";
 
 constexpr const char* kAppDrawerNamespace = "event-horizon-appdrawer";
-constexpr const char* kLaunchpadNamespace = "event-horizon-launchpad";
 
-constexpr const char* kLaunchpadBackdropNamespace = "event-horizon-launchpad-backdrop";
 constexpr const char* kSpotlightNamespace = "event-horizon-spotlight";
 constexpr const char* kControlCenterNamespace = "event-horizon-controlcenter";
 

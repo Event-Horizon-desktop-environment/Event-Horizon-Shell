@@ -14,7 +14,6 @@
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
 #include "desktop_shell/widgets/shared/slot_pill_style.hpp"
 #include "desktop_shell/widgets/shared/shared_slot_paint.hpp"
-#include "desktop_shell/launchpad/host/launchpad_host.hpp"
 #include "services/tray/filter/tray_env_filter.hpp"
 #include "desktop_shell/common/ns/namespaces.hpp"
 #include "desktop_shell/common/glyph/material_glyph.hpp"
@@ -205,11 +204,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       sm.kind = Slot::Kind::Smenu;
       sm.key = wid;
       out.push_back(std::move(sm));
-    } else if (wid == "launchpad" || eh::config::widget_implementation_type(wid) == "launchpad") {
-      Slot lp;
-      lp.kind = Slot::Kind::Launchpad;
-      lp.key = wid;
-      out.push_back(std::move(lp));
     } else if (eh::config::widget_implementation_type(wid) == "clock") {
       Slot cs;
       cs.kind = Slot::Kind::Clock;
@@ -323,6 +317,9 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
     if (app.settings.dockPinnedAppsTrayPill && all[idx].kind == Slot::Kind::App && all[idx].isPinned &&
         all[idx + 1].kind == Slot::Kind::App && all[idx + 1].isPinned)
       return 0.0;
+    if (app.settings.dockRunningAppsTrayPill && all[idx].kind == Slot::Kind::App && !all[idx].isPinned &&
+        all[idx + 1].kind == Slot::Kind::App && !all[idx + 1].isPinned)
+      return 0.0;
     if (all[idx].kind == Slot::Kind::App && all[idx].isPinned && all[idx + 1].kind == Slot::Kind::App &&
         !all[idx + 1].isPinned)
       return std::round(gap * 1.5);
@@ -334,6 +331,9 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
     if (slots[idx].kind == Slot::Kind::Tray && slots[idx + 1].kind == Slot::Kind::Tray) return 0.0;
     if (app.settings.dockPinnedAppsTrayPill && slots[idx].kind == Slot::Kind::App && slots[idx].isPinned &&
         slots[idx + 1].kind == Slot::Kind::App && slots[idx + 1].isPinned)
+      return 0.0;
+    if (app.settings.dockRunningAppsTrayPill && slots[idx].kind == Slot::Kind::App && !slots[idx].isPinned &&
+        slots[idx + 1].kind == Slot::Kind::App && !slots[idx + 1].isPinned)
       return 0.0;
     if (slots[idx].kind == Slot::Kind::App && slots[idx].isPinned && slots[idx + 1].kind == Slot::Kind::App &&
         !slots[idx + 1].isPinned)
@@ -349,7 +349,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
     return tw;
   };
 
-  const double stripInner = 12.0 * dock_ui_scale(app.settings);
+  const double stripInner = eh::shell::dock::dock_strip_inner_margin(app.settings);
   const double secGapPaint = std::round(gap * 1.5);
   const double lwPaint = section_width(left);
   const double cwPaint = section_width(center);
@@ -405,7 +405,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         case Slot::Kind::Spotlight: r.kind = "spotlight"; break;
         case Slot::Kind::AppMenu: r.kind = "app_menu"; break;
         case Slot::Kind::Smenu: r.kind = "smenu"; break;
-        case Slot::Kind::Launchpad: r.kind = "launchpad"; break;
         case Slot::Kind::AppDrawer: r.kind = "app_drawer"; break;
         case Slot::Kind::Clock: r.kind = "clock"; break;
         case Slot::Kind::Weather: r.kind = "weather"; break;
@@ -493,17 +492,27 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
   bool media_marquee_accum = false;
   bool media_progress_tick_accum = false;
 
-  auto render_section = [&](const std::vector<Slot>& slots, double x0, int slot_index_base) {
-    bool haveFloatingPin = false;
-    std::string floatingPinLookup{};
-    bool floatingPinRunning = false;
-    bool floatingPinActivated = false;
+  // Set by render_section when it meets the dragged pin's ghost cell; the
+  // floating icon itself is drawn after the strip transform (surface space).
+  bool haveFloatingPin = false;
+  std::string floatingPinLookup{};
+  bool floatingPinRunning = false;
+  bool floatingPinActivated = false;
 
+  // Surface-space transform of the strip. Hoisted so the floating pin can be
+  // drawn after it, where pointer coordinates and pill bounds are valid.
+  const double stripMidX = x + boxW * 0.5;
+  const double stripHScale = widget_strip_h_scale(boxW, totalW, stripInner);
+
+  auto render_section = [&](const std::vector<Slot>& slots, double x0, int slot_index_base) {
     auto gap_after_local = [&](size_t idx) -> double {
       if (idx + 1 >= slots.size()) return 0.0;
       if (slots[idx].kind == Slot::Kind::Tray && slots[idx + 1].kind == Slot::Kind::Tray) return 0.0;
       if (app.settings.dockPinnedAppsTrayPill && slots[idx].kind == Slot::Kind::App && slots[idx].isPinned &&
           slots[idx + 1].kind == Slot::Kind::App && slots[idx + 1].isPinned)
+        return 0.0;
+      if (app.settings.dockRunningAppsTrayPill && slots[idx].kind == Slot::Kind::App && !slots[idx].isPinned &&
+          slots[idx + 1].kind == Slot::Kind::App && !slots[idx + 1].isPinned)
         return 0.0;
       if (slots[idx].kind == Slot::Kind::App && slots[idx].isPinned && slots[idx + 1].kind == Slot::Kind::App &&
           !slots[idx + 1].isPinned)
@@ -528,18 +537,16 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       return 0.0;
     };
 
-    std::vector<double> pinnedXs;
-    pinnedXs.reserve(64);
-    {
-      double tx = x0;
-      for (size_t i = 0; i < slots.size(); i++) {
-        const auto& s = slots[i];
-        const double slotW = paint_slot_w(s);
-        const double ix = tx;
-        tx += slotW + gap_after_local(i);
-        if (s.kind == Slot::Kind::App && s.isPinned) {
-          if (!app.pinDragKey.empty() && s.key == app.pinDragKey) continue;
-          pinnedXs.push_back(ix);
+    // Layout pitch of the pinned run (icon + the gap after a pinned slot —
+    // 0 under dockPinnedAppsTrayPill). The glide shifts neighbours by
+    // fractional multiples of this while the insert index re-flips.
+    double glideStride = 0.0;
+    if (app.pinDragging) {
+      for (size_t p = 0; p + 1 < slots.size(); ++p) {
+        if (slots[p].kind == Slot::Kind::App && slots[p].isPinned && slots[p + 1].kind == Slot::Kind::App &&
+            slots[p + 1].isPinned) {
+          glideStride = paint_slot_w(slots[p]) + gap_after_local(p);
+          break;
         }
       }
     }
@@ -548,9 +555,19 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
     for (size_t i = 0; i < slots.size(); i++) {
       const auto& s = slots[i];
       const double slotW = paint_slot_w(s);
-      const double ix = curX;
+      // tx = target-layout x (stable); ix = visual x, offset by the in-flight
+      // glide so shuffled pins slide instead of teleporting.
+      const double tx = curX;
+      double ix = tx;
+      if (glideStride > 0.0 && s.kind == Slot::Kind::App && s.isPinned && app.pinDragShiftT < 1.0 &&
+          !app.pinDragShiftFrom.empty()) {
+        if (const auto it = app.pinDragShiftFrom.find(s.key); it != app.pinDragShiftFrom.end())
+          ix = tx + it->second * (1.0 - app.pinDragShiftT) * glideStride;
+      }
       if (out_hits) {
-        out_hits->push_back({s.key, ix, iconY, slotW, icon, s.chosenSerial, s.isPinned, static_cast<int>(s.kind)});
+        // Hit rects follow the target layout, not the in-flight glide: they
+        // stay stable mid-animation and equal the paint once it settles.
+        out_hits->push_back({s.key, tx, iconY, slotW, icon, s.chosenSerial, s.isPinned, static_cast<int>(s.kind)});
       }
       curX += slotW + gap_after_local(i);
 
@@ -564,7 +581,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           s.kind != Slot::Kind::Bluetooth &&          s.kind != Slot::Kind::Settings &&
           s.kind != Slot::Kind::Spotlight && s.kind != Slot::Kind::AppDrawer &&
           s.kind != Slot::Kind::Smenu &&
-          s.kind != Slot::Kind::Launchpad && s.kind != Slot::Kind::Trash &&
+          s.kind != Slot::Kind::Trash &&
           s.kind != Slot::Kind::AppMenu && s.kind != Slot::Kind::Tray &&
           effective_press_match(globalIdx);
       double liftY = (app.pinDragging && isDraggedPin) ? -4.0 : 0.0;
@@ -574,7 +591,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           s.kind != Slot::Kind::Bluetooth &&          s.kind != Slot::Kind::ControlCenter &&
           s.kind != Slot::Kind::Settings && s.kind != Slot::Kind::Spotlight &&
           s.kind != Slot::Kind::AppDrawer && s.kind != Slot::Kind::Smenu &&
-          s.kind != Slot::Kind::Launchpad &&
           s.kind != Slot::Kind::Trash && s.kind != Slot::Kind::AppMenu &&
           s.kind != Slot::Kind::Tray)
         liftY -= effective_hover_lift(globalIdx);
@@ -666,32 +682,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
                                                  mcDockBar.accentR, mcDockBar.accentG, mcDockBar.accentB);
           drew = true;
         }
-      } else if (s.kind == Slot::Kind::Launchpad) {
-        if (app.settings.dockPinnedAppsTrayPill && i + 1 < slots.size() && slots[i + 1].kind == Slot::Kind::App && slots[i + 1].isPinned) {
-          size_t re = i + 1;
-          while (re + 1 < slots.size() && slots[re + 1].kind == Slot::Kind::App && slots[re + 1].isPinned)
-            re++;
-          double pw = static_cast<double>(re - i + 1) * icon;
-          for (size_t j = i; j < re; ++j)
-            pw += gap_after_local(j);
-          if (re + 1 < slots.size() && slots[re + 1].kind == Slot::Kind::Trash) {
-            pw += gap_after_local(re) + icon;
-          }
-          eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY, pw, icon);
-        }
-        if (cellHovered) hover_overlay();
-        if (app.launchpad) {
-          app.launchpad->paint_dock_button(cr, ix, iconY + liftY, icon, false);
-          drew = true;
-        } else if (!drew) {
-          const double gx = ix + icon * 0.5;
-          const double gy = iconY + liftY + icon * 0.5;
-          const double gr = dockBarMatugen ? mcDockBar.accentR : 0.88;
-          const double gg = dockBarMatugen ? mcDockBar.accentG : 0.93;
-          const double gb = dockBarMatugen ? mcDockBar.accentB : 0.94;
-          eh::shell::draw_material_glyph(cr, gx, gy, icon * 0.52, "view_quilt", gr, gg, gb, 1.0);
-          drew = true;
-        }
       } else if (s.kind == Slot::Kind::Trash) {
         if (cellHovered) hover_overlay();
         app.trashFull = eh::shell::fs::trash_has_files();
@@ -730,8 +720,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 1.0);
         for (int ry = -1; ry <= 1; ++ry) {
           for (int sx = -1; sx <= 1; ++sx) {
-            cairo_arc(cr, gx + static_cast<double>(sx) * pitch, gy + static_cast<double>(ry) * pitch, rDot, 0,
-                      2 * M_PI);
+            cairo_arc(cr, gx + static_cast<double>(sx) * pitch, gy + static_cast<double>(ry) * pitch, rDot, 0, 2 * M_PI);
             cairo_fill(cr);
           }
         }
@@ -754,7 +743,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           drew = true;
         }
       } else if (s.kind == Slot::Kind::Tray) {
-
         const DockApp::TrayItem* ti = nullptr;
         if (s.key.rfind(eh::shell::kSlotKeyTray, 0) == 0) {
           const std::string want = s.key.substr(std::string(eh::shell::kSlotKeyTray).size());
@@ -773,7 +761,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           const double runW = static_cast<double>(nRun) * icon;
           eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY, runW, icon);
         }
-        const bool cellHovered = effective_hover_match(static_cast<int>(i) + slot_index_base);
         if (cellHovered) hover_overlay();
         if (ti) {
           const double maxSide = std::min(icon * 0.6, icon - 8.0);
@@ -853,7 +840,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         const bool wh = effective_hover_match(static_cast<int>(i) + slot_index_base);
         const bool wp = effective_press_match(static_cast<int>(i) + slot_index_base);
         if (eh::shell::dock_slot_hooks::paint_workspaces_slot(cr, scPaint, s.key, ix, iconY + liftY, slotW, icon, icon, app.workspaceStrip,
-                                                wh, wp, &app.icons, &app.wsStripAnim)) {
+                                                              wh, wp, &app.icons, &app.wsStripAnim)) {
           app.pendingRedraw = true;
         }
         if (wh) hover_overlay();
@@ -865,9 +852,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         if (ch) hover_overlay();
         drew = true;
       } else if (s.kind == Slot::Kind::VolumeMixer) {
-        {
-          eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY + liftY, slotW, icon);
-        }
+        eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY + liftY, slotW, icon);
         const bool ch = effective_hover_match(static_cast<int>(i) + slot_index_base);
         if (ch) hover_overlay();
         const double gx = ix + icon * 0.5;
@@ -878,9 +863,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           eh::shell::draw_material_glyph(cr, gx, gy, icon * 0.52, "volume_up", 1.0, 1.0, 1.0, 1.0);
         drew = true;
       } else if (s.kind == Slot::Kind::Vpn) {
-        {
-          eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY + liftY, slotW, icon);
-        }
+        eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY + liftY, slotW, icon);
         const bool ch = effective_hover_match(static_cast<int>(i) + slot_index_base);
         if (ch) hover_overlay();
         const double gx = ix + icon * 0.5;
@@ -899,15 +882,16 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         drew = true;
       } else if (s.kind == Slot::Kind::App) {
         if (app.settings.dockPinnedAppsTrayPill && s.isPinned) {
-          const bool prevIsLaunchpad = i > 0 && slots[i - 1].kind == Slot::Kind::Launchpad;
           const bool firstPinnedInRun =
               (i == 0 || slots[i - 1].kind != Slot::Kind::App || !slots[i - 1].isPinned);
-          if (firstPinnedInRun && !prevIsLaunchpad) {
+          if (firstPinnedInRun) {
             size_t runEnd = i;
             while (runEnd + 1 < slots.size() && slots[runEnd + 1].kind == Slot::Kind::App && slots[runEnd + 1].isPinned)
               runEnd++;
             const bool appendRightTrash = runEnd + 1 < slots.size() && slots[runEnd + 1].kind == Slot::Kind::Trash;
-            double pillX = ix;
+            // Anchored to the target layout so the pill stays put while the
+            // cells glide across it.
+            double pillX = tx;
             double runW = static_cast<double>(runEnd - i + 1) * icon;
             if (appendRightTrash) {
               const double g = gap_after_local(runEnd);
@@ -981,48 +965,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         cairo_fill(cr);
       }
     }
-
-    const bool pinFloatThisLayer =
-        app.dockLayers.size() <= 1 || paint_layer_idx == app.pointerDockLayerIdx;
-    if (!isPanel && app.pinDragging && haveFloatingPin && !floatingPinLookup.empty() && pinFloatThisLayer) {
-
-      const double fx = std::max(x + 8.0, std::min(x + boxW - icon - 8.0, app.pointerX - icon / 2.0));
-      const double fy = iconY - 6.0;
-      rounded_rect(fx - 2.0, fy - 2.0, icon + 4.0, icon + 4.0, 14.0);
-      cairo_set_source_rgba(cr, 1.00, 1.00, 1.00, 0.12);
-      cairo_fill_preserve(cr);
-      cairo_set_source_rgba(cr, 0.55, 0.80, 1.00, 0.65);
-      cairo_set_line_width(cr, 1.0);
-      cairo_stroke(cr);
-      if (const auto* ic = paint_cached_app_icon(app, floatingPinLookup)) {
-        if (ic->surface) {
-          const double pad2 = 6.0;
-          const double avail = icon - pad2 * 2.0;
-          const double sx = avail / std::max(1, ic->width);
-          const double sy = avail / std::max(1, ic->height);
-          const double sc = std::min(sx, sy);
-          const double dw = ic->width * sc;
-          const double dh = ic->height * sc;
-          const double dx = fx + (icon - dw) / 2.0;
-          const double dy = fy + (icon - dh) / 2.0;
-          cairo_save(cr);
-          cairo_translate(cr, dx, dy);
-          cairo_scale(cr, sc, sc);
-          cairo_set_source_surface(cr, ic->surface, 0, 0);
-          cairo_paint(cr);
-          cairo_restore(cr);
-        }
-      }
-      if (floatingPinRunning) {
-        const double fBottom = fy + icon;
-        const double fDotR = 3.0;
-        const double fDotCy = fBottom + kDockRunIndicatorGapPx + fDotR;
-        cairo_arc(cr, fx + icon / 2.0, fDotCy, fDotR, 0, 2 * M_PI);
-        if (floatingPinActivated) cairo_set_source_rgba(cr, 0.4, 0.7, 1.0, 0.95);
-        else cairo_set_source_rgba(cr, 1, 1, 1, 0.35);
-        cairo_fill(cr);
-      }
-    }
   };
 
   if (use_panel_paint) {
@@ -1030,13 +972,11 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
     render_section(center, panelCenterX, static_cast<int>(left.size()));
     render_section(right, panelRightX, static_cast<int>(left.size() + center.size()));
   } else {
-    const double midX = x + boxW * 0.5;
-    const double hScale = widget_strip_h_scale(boxW, totalW, stripInner);
-    if (hScale < 1.0 - 1e-9) {
+    if (stripHScale < 1.0 - 1e-9) {
       cairo_save(cr);
-      cairo_translate(cr, midX, 0.0);
-      cairo_scale(cr, hScale, 1.0);
-      cairo_translate(cr, -midX, 0.0);
+      cairo_translate(cr, stripMidX, 0.0);
+      cairo_scale(cr, stripHScale, 1.0);
+      cairo_translate(cr, -stripMidX, 0.0);
       if (use_lr_paint) {
         render_section(left, lrPaint.x_left, 0);
         render_section(right, lrPaint.x_right, static_cast<int>(left.size()));
@@ -1046,9 +986,9 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       cairo_restore(cr);
       if (out_hits) {
         for (auto& hh : *out_hits) {
-          hh.x = midX + (hh.x - midX) * hScale;
-          hh.w = hh.w * hScale;
-          hh.h = hh.h * hScale;
+          hh.x = stripMidX + (hh.x - stripMidX) * stripHScale;
+          hh.w = hh.w * stripHScale;
+          hh.h = hh.h * stripHScale;
         }
       }
     } else {
@@ -1058,6 +998,50 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       } else {
         render_section(all, startX, 0);
       }
+    }
+  }
+
+  // Floating (dragged) pin — drawn after the strip transform so it tracks the
+  // pointer in surface coordinates. Inside the transform its surface-space
+  // pointer x landed at midX + (pointerX - midX) * hScale, i.e. the icon
+  // lagged the cursor by (pointerX - midX) * (1 - hScale).
+  if (!isPanel && app.pinDragging && haveFloatingPin && !floatingPinLookup.empty() &&
+      (app.dockLayers.size() <= 1 || paint_layer_idx == app.pointerDockLayerIdx)) {
+    const double fx = std::max(x + 8.0, std::min(x + boxW - icon - 8.0, app.pointerX - icon / 2.0));
+    const double fy = iconY - 6.0;
+    rounded_rect(fx - 2.0, fy - 2.0, icon + 4.0, icon + 4.0, 14.0);
+    cairo_set_source_rgba(cr, 1.00, 1.00, 1.00, 0.12);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 0.55, 0.80, 1.00, 0.65);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+    if (const auto* fic = paint_cached_app_icon(app, floatingPinLookup)) {
+      if (fic->surface) {
+        const double pad2 = 6.0;
+        const double avail = icon - pad2 * 2.0;
+        const double sx = avail / std::max(1, fic->width);
+        const double sy = avail / std::max(1, fic->height);
+        const double sc = std::min(sx, sy);
+        const double dw = fic->width * sc;
+        const double dh = fic->height * sc;
+        const double dx = fx + (icon - dw) / 2.0;
+        const double dy = fy + (icon - dh) / 2.0;
+        cairo_save(cr);
+        cairo_translate(cr, dx, dy);
+        cairo_scale(cr, sc, sc);
+        cairo_set_source_surface(cr, fic->surface, 0, 0);
+        cairo_paint(cr);
+        cairo_restore(cr);
+      }
+    }
+    if (floatingPinRunning) {
+      const double fBottom = fy + icon;
+      const double fDotR = 3.0;
+      const double fDotCy = fBottom + kDockRunIndicatorGapPx + fDotR;
+      cairo_arc(cr, fx + icon / 2.0, fDotCy, fDotR, 0, 2 * M_PI);
+      if (floatingPinActivated) cairo_set_source_rgba(cr, 0.4, 0.7, 1.0, 0.95);
+      else cairo_set_source_rgba(cr, 1, 1, 1, 0.35);
+      cairo_fill(cr);
     }
   }
 

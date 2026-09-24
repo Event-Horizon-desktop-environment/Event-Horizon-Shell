@@ -33,6 +33,7 @@ struct ControlCenterWifiAp {
 [[nodiscard]] std::vector<ControlCenterWifiAp> control_center_wifi_scan(bool rescan);
 bool control_center_wifi_connect(const std::string& ssid, const std::string& password, std::string* out_error);
 void paint_control_center_network_card(cairo_t* cr, double x, double y, double w, double h,
-                                       const ControlCenterNetworkState& ns, double inner_glass_scale);
+                                       const ControlCenterNetworkState& ns, double inner_glass_scale,
+                                       double corner_radius = -1.0);  // <0 = auto radius
 
 } // namespace eh::shell::dock::control_center

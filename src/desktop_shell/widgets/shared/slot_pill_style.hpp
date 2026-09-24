@@ -46,75 +46,44 @@ inline void stroke_pill_after_fill_preserve(cairo_t* cr, bool hovered, bool pres
   cairo_stroke(cr);
 }
 
-// Paint the semi-glassy inner design (rim + highlights) around/inside a rounded pill shape.
-// Call this after you have filled the base shape (e.g. for the main dock bar itself).
-// The effect is the same "glass thingy" as used on the location bar and widget pills.
-// opacity controls the strength of the glass highlights (typically the fill alpha).
+// Flat frosted treatment (no glossy wash): milky lift + bottom-biased edge light.
+// Call this after you have filled the base shape.
+// opacity controls the strength of the highlights (typically the fill alpha).
 inline void paint_glass_layers(cairo_t* cr, double x, double y, double w, double h, double opacity = 1.0, double outer_radius = -1.0) {
   double rad = (outer_radius > 0 ? outer_radius : corner_radius(h, w));
   const double op = g_opacityScale * opacity;
 
-  // Scale insets proportionally so the glass effect looks good on different pill sizes.
-  const double refH = 36.0;
-  const double s = std::max(0.6, std::min(1.6, h / refH));
-
-  // Very subtle outer separation only (inner glass effect)
+  // Milky lift — faint white wash so the fill reads frosted, not dark.
   {
-    cairo_set_source_rgba(cr, 0, 0, 0, 0.12 * op);
-    cairo_set_line_width(cr, 1.0);
-    eh::shell::shared::path_rounded_rect(cr, x + 0.5, y + 0.5, w - 1.0, h - 1.0, rad);
-    cairo_stroke(cr);
+    cairo_save(cr);
+    eh::shell::shared::path_rounded_rect(cr, x, y, w, h, rad);
+    cairo_clip(cr);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.07 * op);
+    cairo_rectangle(cr, x, y, w, h);
+    cairo_fill(cr);
+    cairo_restore(cr);
   }
 
-  // Inner semi-glassy bright rim — clean inner glassy frame (no bevel)
-  // Stronger top highlight + matching (softer) bottom to close the inner frame.
+  // Edge light — inner 1px stroke, soft on top, bright along the bottom.
   {
     cairo_pattern_t* rim = cairo_pattern_create_linear(0, y, 0, y + h);
-    cairo_pattern_add_color_stop_rgba(rim, 0.00, 1.0, 1.0, 1.0, 0.28 * op);
-    cairo_pattern_add_color_stop_rgba(rim, 0.18, 1.0, 1.0, 1.0, 0.14 * op);
-    cairo_pattern_add_color_stop_rgba(rim, 0.42, 1.0, 1.0, 1.0, 0.03 * op);
-    cairo_pattern_add_color_stop_rgba(rim, 1.00, 1.0, 1.0, 1.0, 0.09 * op);
+    cairo_pattern_add_color_stop_rgba(rim, 0.0, 1.0, 1.0, 1.0, 0.12 * op);
+    cairo_pattern_add_color_stop_rgba(rim, 0.5, 1.0, 1.0, 1.0, 0.05 * op);
+    cairo_pattern_add_color_stop_rgba(rim, 1.0, 1.0, 1.0, 1.0, 0.42 * op);
     cairo_set_source(cr, rim);
-    cairo_set_line_width(cr, 1.35);
-    double inner_inset = 2.8 * s;
-    eh::shell::shared::path_rounded_rect(cr,
-      x + inner_inset, y + inner_inset,
-      w - inner_inset * 2, h - inner_inset * 2,
-      rad - inner_inset + 0.5);
+    cairo_set_line_width(cr, 1.0);
+    eh::shell::shared::path_rounded_rect(cr, x + 1.0, y + 1.0, w - 2.0, h - 2.0,
+                                         std::max(0.0, rad - 1.0));
     cairo_stroke(cr);
     cairo_pattern_destroy(rim);
   }
 
-  // Extra top-inner highlight band (pure glass catch)
+  // Faint outer glow so the edge lifts off the wallpaper.
   {
-    cairo_pattern_t* top_hl = cairo_pattern_create_linear(0, y + 2, 0, y + h * 0.4);
-    cairo_pattern_add_color_stop_rgba(top_hl, 0.0, 1.0, 1.0, 1.0, 0.09 * op);
-    cairo_pattern_add_color_stop_rgba(top_hl, 1.0, 1.0, 1.0, 1.0, 0.0);
-    cairo_set_source(cr, top_hl);
-    cairo_set_line_width(cr, 0.7);
-    double hl_inset = 3.8 * s;
-    eh::shell::shared::path_rounded_rect(cr,
-      x + hl_inset, y + hl_inset,
-      w - hl_inset * 2, h - hl_inset * 2,
-      rad - hl_inset + 1);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08 * op);
+    cairo_set_line_width(cr, 1.0);
+    eh::shell::shared::path_rounded_rect(cr, x + 0.5, y + 0.5, w - 1.0, h - 1.0, rad);
     cairo_stroke(cr);
-    cairo_pattern_destroy(top_hl);
-  }
-
-  // Bottom-inner highlight band (symmetric to top, softer) to complete the inner glassy frame
-  {
-    cairo_pattern_t* bottom_hl = cairo_pattern_create_linear(0, y + h * 0.55, 0, y + h - 2);
-    cairo_pattern_add_color_stop_rgba(bottom_hl, 0.0, 1.0, 1.0, 1.0, 0.0);
-    cairo_pattern_add_color_stop_rgba(bottom_hl, 1.0, 1.0, 1.0, 1.0, 0.07 * op);
-    cairo_set_source(cr, bottom_hl);
-    cairo_set_line_width(cr, 0.7);
-    double hl_inset = 3.8 * s;
-    eh::shell::shared::path_rounded_rect(cr,
-      x + hl_inset, y + hl_inset,
-      w - hl_inset * 2, h - hl_inset * 2,
-      rad - hl_inset + 1);
-    cairo_stroke(cr);
-    cairo_pattern_destroy(bottom_hl);
   }
 }
 

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "m3/core/primitives/box.hpp"
+#include "m3/core/label.hpp"
 #include "m3/controls/containers/button.hpp"
 #include "ux/settings/common/settings_common.hpp"
 #include "ux/settings/settings_tab_sound/settings_tab_sound.hpp"
@@ -30,7 +31,6 @@ extern void settings_close_non_default_app_dropdowns(App& app);
 
 // Monitors constants (copied from settings_monitors_ui.inl)
 static constexpr int kMonFormRowPitch = 56;
-static constexpr int kMonHeaderCardH = 52;
 static constexpr int kMonSecGap = 32;
 static constexpr int kMonSecTitlePadTop = 20;
 static constexpr int kMonSecTitleLineH = 22;
@@ -46,13 +46,40 @@ static constexpr int kSndSliderIconW = 30;
 static constexpr int kSndAppIconSize = 36;
 static constexpr int kSndAppIconRad = 10;
 
+// Sound > Monitor was removed: the live `pw-top` node readout is no longer part
+// of the audio center.
+
 // File-static monitors helpers (copied from settings_monitors_ui.inl)
 static int monitors_section_card_height_rows(int n_rows) {
   return kMonSecTitlePadTop + kMonSecTitleLineH + kMonSecAfterTitle + n_rows * kMonFormRowPitch + kMonSecBottomPad;
 }
 
+// Restart action row inside the engine card.
+static constexpr int kSndRestartBtnH = 36;
+static constexpr int kSndRestartBtnW = 140;
+static constexpr int kSndRestartGap = 14;
+static constexpr int kSndRestartRowH = 52;
+// Arm-to-confirm window and post-restart confirmation window.
+static constexpr std::uint64_t kSndRestartArmMs = 3500;
+static constexpr std::uint64_t kSndRestartDoneMs = 2600;
+// Local warning tint (the settings theme has no semantic warning role).
+static constexpr double kSndWarnR = 0.980;
+static constexpr double kSndWarnG = 0.720;
+static constexpr double kSndWarnB = 0.260;
+
 static int snd_engine_card_height() {
-  return kMonSecTitlePadTop + kMonSecTitleLineH + kMonSecAfterTitle + 2 * kSndGridRowH + kMonSecBottomPad;
+  // Title block + 3 grid rows (rate/force-rate, allowed-rates/PCM, quantum/force-quantum)
+  // + a restart action row (label + description on the left, button on the right).
+  return kMonSecTitlePadTop + kMonSecTitleLineH + kMonSecAfterTitle + 3 * kSndGridRowH + kSndRestartGap +
+         kSndRestartRowH + kMonSecBottomPad;
+}
+
+static void snd_engine_restart_geom(const SoundSectionGeom& sec, int* row_y, int* bx, int* by, int* bw, int* bh) {
+  *row_y = sec.content_y0 + 3 * kSndGridRowH + kSndRestartGap;
+  *bw = kSndRestartBtnW;
+  *bh = kSndRestartBtnH;
+  *bx = sec.x + sec.w - kCardPad - kSndRestartBtnW;
+  *by = *row_y + (kSndRestartRowH - kSndRestartBtnH) / 2;
 }
 
 static int monitors_section_content_y0(int card_y) {
@@ -183,10 +210,69 @@ static void settings_draw_text_line_fit_width(cairo_t* cr, const std::string& te
   settings_show_text(cr, x, baselineY, kEll, 12, 400, Theme::TextR, Theme::TextG, Theme::TextB, fadeAlpha);
 }
 
+// One cell of a Sound 2-column grid card (label above, select-style value box).
+// ddId < 0 renders an informational cell (no chevron, no hover).
+static void paint_snd_grid_cell(App& app, cairo_t* cr, const SoundSectionGeom& sec, int colIx, int rowIx,
+                                const char* label, const std::string& value, int ddId, int activeDd,
+                                double glassOv, double pyH) {
+  int colW = 0;
+  int col1X = 0;
+  int col2X = 0;
+  snd_engine_grid_geom(sec, &colW, &col1X, &col2X);
+  const int colX = (colIx == 0) ? col1X : col2X;
+  const int labY = snd_engine_label_y(sec, rowIx);
+  const int selY = labY + kSndGridLabelH + kSndGridLabelGap;
+  settings_show_text(cr, static_cast<double>(colX), static_cast<double>(labY), label, 12, 400, Theme::TextR,
+                     Theme::TextG, Theme::TextB, 0.70 * glassOv);
+  const int sx = colX;
+  const int sy = selY;
+  const int sw = colW;
+  const int sh = kSettingsComboH;
+  const bool interactive = ddId >= 0;
+  const bool expanded = interactive && activeDd == ddId;
+  const bool hovered = interactive && app.pointerX >= sx && pyH >= sy && app.pointerX < sx + sw && pyH < sy + sh;
+  {
+    m3::Box box;
+    float r, g, b;
+    if (app.drawChromeMatugen) {
+      r = app.drawChrome.panelFillR;
+      g = app.drawChrome.panelFillG;
+      b = app.drawChrome.panelFillB;
+    } else {
+      r = static_cast<float>(Theme::BgR);
+      g = static_cast<float>(Theme::BgG);
+      b = static_cast<float>(Theme::BgB);
+    }
+    box.setColor(r, g, b, static_cast<float>((hovered ? 0.94 : 0.88) * glassOv));
+    box.setRadius(9.0f);
+    box.setGeometry(static_cast<float>(sx), static_cast<float>(sy), static_cast<float>(sw),
+                    static_cast<float>(sh));
+    box.setGlassy(true);
+    box.paint(cr);
+  }
+  cairo_round_rect(cr, sx, sy, sw, sh, 9.0);
+  paint_src_glass_hi(app, cr, 0.11 * glassOv);
+  cairo_set_line_width(cr, 1.0);
+  cairo_stroke(cr);
+  settings_draw_text_line_fit_width(cr, value, sx + 12.0, sy + 19.0, sw - (interactive ? 40 : 24), 1.0);
+  if (interactive) {
+    const double chevCy = static_cast<double>(sy) + static_cast<double>(sh) * 0.52;
+    const double chevAlpha = (hovered ? 0.95 : 0.55) * glassOv;
+    material_symbols_draw_glyph(cr, static_cast<double>(sx + sw) - 14.0, chevCy, 18.0,
+                                expanded ? "expand_less" : "expand_more", Theme::TextR, Theme::TextG,
+                                Theme::TextB, chevAlpha);
+  }
+}
+
 // Sound helpers (from settings_sound_ui.inl)
-int sound_tab_bt_count_clamped(App& app) {
-  const auto& v = settings_sound_bt_cards_cached(app);
-  return static_cast<int>(std::min(v.size(), static_cast<size_t>(kSoundMaxBtCards)));
+const std::vector<eh::audio::AudioCardProfiles>& sound_tab_cards_cached(App& app) {
+  if (app.soundChildTab == kSoundChildDevices) return settings_sound_nonbt_cards_cached(app);
+  return settings_sound_cards_cached(app);
+}
+
+int sound_tab_card_count_clamped(App& app) {
+  const auto& v = sound_tab_cards_cached(app);
+  return static_cast<int>(std::min(v.size(), static_cast<size_t>(kSoundMaxCards)));
 }
 
 static std::string sound_engine_hz_display(int hz) {
@@ -244,66 +330,139 @@ static int sound_compat_pcm_dropdown_sel_ix(const eh::audio::CompatDefaultSinkFo
   return -1;
 }
 
-SoundTabGeom sound_compute_tab_geom(int content_x, int content_w, int content_top, int /*viewport_h*/,
-                                           int n_play, int n_rec, int n_bt_cards) {
+SoundTabGeom sound_compute_child_geom(int content_x, int content_w, int content_top, int child,
+                                      int n_play, int n_rec, int n_cards) {
    
   SoundTabGeom g{};
   const int w = eh::settings_monitors_tab::monitors_main_column_width_px(content_w);
   const int x = eh::settings_monitors_tab::monitors_main_column_left_px(content_x, content_w, w);
   int y = content_top + 8;
 
-  g.header.x = x;
-  g.header.y = y;
-  g.header.w = w;
-  g.header.h = 72;
-  g.header.content_y0 = y + 18;
-  y += kMonHeaderCardH + kMonSecGap;
+  g.header = {x, y, w, 72, y + 18};
+  y += 72 + kMonSecGap;
 
-  const int dh = monitors_section_card_height_rows(4);
-  g.devices = {x, y, w, dh, monitors_section_content_y0(y)};
-  y += dh + kMonSecGap;
+  g.n_cards = std::clamp(n_cards, 0, kSoundMaxCards);
 
-  g.n_bt_cards = std::clamp(n_bt_cards, 0, kSoundMaxBtCards);
-  if (g.n_bt_cards > 0) {
-    const int bh = monitors_section_card_height_rows(g.n_bt_cards);
-    g.bluetooth = {x, y, w, bh, monitors_section_content_y0(y)};
-    y += bh + kMonSecGap;
-  } else {
-    g.bluetooth = {x, y, w, 0, monitors_section_content_y0(y)};
+  switch (child) {
+    case kSoundChildDevices: {
+      const int dh = monitors_section_card_height_rows(4);
+      g.devices = {x, y, w, dh, monitors_section_content_y0(y)};
+      y += dh + kMonSecGap;
+      const int rows = std::max(1, g.n_cards);
+      const int cards_h = monitors_section_card_height_rows(rows);
+      g.cards = {x, y, w, cards_h, monitors_section_content_y0(y)};
+      y += cards_h;
+      break;
+    }
+    case kSoundChildBluetooth: {
+      const int rows = std::max(1, g.n_cards);
+      const int bh = monitors_section_card_height_rows(rows);
+      g.cards = {x, y, w, bh, monitors_section_content_y0(y)};
+      y += bh;
+      break;
+    }
+    case kSoundChildApps: {
+      const int pb_rows = (n_play <= 0) ? 1 : (n_play * 2);
+      const int pbh = monitors_section_card_height_rows(pb_rows);
+      g.playback = {x, y, w, pbh, monitors_section_content_y0(y)};
+      y += pbh + kMonSecGap;
+      const int rec_rows = (n_rec <= 0) ? 1 : (n_rec * 2);
+      const int rech = monitors_section_card_height_rows(rec_rows);
+      g.recording = {x, y, w, rech, monitors_section_content_y0(y)};
+      y += rech;
+      break;
+    }
+    case kSoundChildEngine: {
+      const int eh = snd_engine_card_height();
+      g.engine = {x, y, w, eh, monitors_section_content_y0(y)};
+      y += eh;
+      break;
+    }
+    default:
+      break;
   }
-
-  const int eh = snd_engine_card_height();
-  g.engine = {x, y, w, eh, monitors_section_content_y0(y)};
-  y += eh + kMonSecGap;
-
-  const int pb_rows = (n_play <= 0) ? 1 : (n_play * 2);
-  const int pbh = monitors_section_card_height_rows(pb_rows);
-  g.playback = {x, y, w, pbh, monitors_section_content_y0(y)};
-  y += pbh + kMonSecGap;
-
-  const int rec_rows = (n_rec <= 0) ? 1 : (n_rec * 2);
-  const int rech = monitors_section_card_height_rows(rec_rows);
-  g.recording = {x, y, w, rech, monitors_section_content_y0(y)};
-  y += rech;
 
   g.bottom_y = y + 24;
   return g;
 }
 
-static int settings_sound_scroll_max_px(App& app, int n_play, int n_rec, int n_bt_cards) {
+static int settings_sound_scroll_max_px(App& app, int n_play, int n_rec, int n_cards) {
    
   int tcx = 0;
   int tcw = 0;
   settings_content_column_geom(app, &tcx, &tcw);
   const SoundTabGeom g =
-      sound_compute_tab_geom(tcx, tcw, kContentTop, settings_content_viewport_h(app), n_play, n_rec, n_bt_cards);
-  const int view_h = app.height - kContentTop - kSpacingL;
-  return std::max(0, g.bottom_y - kContentTop - view_h);
+      sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab, n_play, n_rec, n_cards);
+  const int view_h = app.height - kSoundChildContentTop - kSpacingL;
+  return std::max(0, g.bottom_y - kSoundChildContentTop - view_h);
 }
 
-void settings_clamp_sound_scroll_px(App& app, int n_play, int n_rec, int n_bt_cards) {
+void settings_clamp_sound_scroll_px(App& app, int n_play, int n_rec, int n_cards) {
   app.settingsSoundScrollPx =
-      std::clamp(app.settingsSoundScrollPx, 0, settings_sound_scroll_max_px(app, n_play, n_rec, n_bt_cards));
+      std::clamp(app.settingsSoundScrollPx, 0, settings_sound_scroll_max_px(app, n_play, n_rec, n_cards));
+}
+
+// Sound "Audio Center" child-tab bar (Devices | Bluetooth | Apps | Engine).
+static constexpr const char* kSoundChildLabels[kSoundChildCount] = {"Devices", "Bluetooth", "Apps", "Engine"};
+static constexpr int kSoundChildTabW = 130;
+static constexpr int kSoundChildTabGap = 4;
+
+static void paint_sound_child_tab_bar(cairo_t* cr, int contentX, int contentW, float textR, float textG, float textB,
+                                      int activeTab) {
+  const int barX = contentX + 8;
+  const int barY = kContentTop;
+  const int barW = contentW - 16;
+
+  m3::Box bg;
+  bg.setColor(textR, textG, textB, 0.04f);
+  bg.setRadius(8.0f);
+  bg.setGeometry(static_cast<float>(barX), static_cast<float>(barY), static_cast<float>(barW),
+                 static_cast<float>(kDockChildTabH + 6));
+  bg.paint(cr);
+
+  const int tabY = barY + 3;
+  const int tabH = kDockChildTabH;
+  const int tabsW = kSoundChildCount * kSoundChildTabW + (kSoundChildCount - 1) * kSoundChildTabGap;
+  const int startX = barX + 4 + (tabsW < barW - 8 ? (barW - 8 - tabsW) / 2 : 0);
+
+  for (int i = 0; i < kSoundChildCount; ++i) {
+    const int tx = startX + i * (kSoundChildTabW + kSoundChildTabGap);
+    const bool sel = (i == activeTab);
+
+    if (sel) {
+      m3::Box selBg;
+      selBg.setColor(textR, textG, textB, 0.10f);
+      selBg.setRadius(6.0f);
+      selBg.setGeometry(static_cast<float>(tx), static_cast<float>(tabY), static_cast<float>(kSoundChildTabW),
+                        static_cast<float>(tabH));
+      selBg.paint(cr);
+    }
+
+    m3::Label lbl;
+    lbl.setText(kSoundChildLabels[i]);
+    lbl.setFontSize(13.0f);
+    lbl.setFontWeight(sel ? 600 : 400);
+    lbl.setColor(textR, textG, textB, sel ? 0.90f : 0.55f);
+    float lw, lh;
+    lbl.measureExtents(lw, lh);
+    lbl.paintAt(cr, static_cast<float>(tx) + (static_cast<float>(kSoundChildTabW) - lw) * 0.5f,
+                static_cast<float>(tabY) + (static_cast<float>(tabH) - lh) * 0.5f);
+  }
+}
+
+static int sound_hit_child_tab(float px, float py, int contentX, int contentW) {
+  const int barX = contentX + 8;
+  const int barY = kContentTop + 3;
+  const int tabH = kDockChildTabH;
+  const int barW = contentW - 16;
+  const int tabsW = kSoundChildCount * kSoundChildTabW + (kSoundChildCount - 1) * kSoundChildTabGap;
+  const int startX = barX + 4 + (tabsW < barW - 8 ? (barW - 8 - tabsW) / 2 : 0);
+
+  for (int i = 0; i < kSoundChildCount; ++i) {
+    const int tx = startX + i * (kSoundChildTabW + kSoundChildTabGap);
+    if (px >= tx && px < tx + kSoundChildTabW && py >= barY && py < barY + tabH) return i;
+  }
+  return -1;
 }
 
 int sound_dd_popup_list_doc_top_y(int combo_doc_y, int combo_h, int nrows, int scroll_px, int window_h) {
@@ -330,10 +489,10 @@ bool sound_dd_combo_geom(const SoundTabGeom& g, int sound_active_dd, int n_play,
     monitors_combo_geom_at_content_row(g.devices.content_y0, g.devices.x, g.devices.w, 2, cx, cy, cw, ch);
     return true;
   }
-  if (sound_active_dd >= kSoundBtDdBase && sound_active_dd < kSoundBtDdBase + kSoundMaxBtCards) {
-    const int bi = sound_active_dd - kSoundBtDdBase;
-    if (bi < 0 || bi >= g.n_bt_cards) return false;
-    monitors_combo_geom_at_content_row(g.bluetooth.content_y0, g.bluetooth.x, g.bluetooth.w, bi, cx, cy, cw, ch);
+  if (sound_active_dd >= kSoundCardDdBase && sound_active_dd < kSoundCardDdBase + kSoundMaxCards) {
+    const int bi = sound_active_dd - kSoundCardDdBase;
+    if (bi < 0 || bi >= g.n_cards) return false;
+    monitors_combo_geom_at_content_row(g.cards.content_y0, g.cards.x, g.cards.w, bi, cx, cy, cw, ch);
     return true;
   }
   if (sound_active_dd == 2) {
@@ -350,6 +509,14 @@ bool sound_dd_combo_geom(const SoundTabGeom& g, int sound_active_dd, int n_play,
   }
   if (sound_active_dd == 5) {
     snd_engine_select_geom(g.engine, 1, 1, cx, cy, cw, ch);
+    return true;
+  }
+  if (sound_active_dd == 6) {
+    snd_engine_select_geom(g.engine, 0, 2, cx, cy, cw, ch);
+    return true;
+  }
+  if (sound_active_dd == 7) {
+    snd_engine_select_geom(g.engine, 1, 2, cx, cy, cw, ch);
     return true;
   }
   if (sound_active_dd >= 100 && sound_active_dd < 1000) {
@@ -447,6 +614,16 @@ static void sound_settings_slider(App& app, cairo_t* cr, int trX, int trY, int t
 static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /*contentX*/, int /*contentW*/,
                                                      double glassOv, const eh::audio::Snapshot& snap);
 
+static const char* sound_child_header_subtitle(int child) {
+  switch (child) {
+    case kSoundChildDevices:   return "Default output, input and audio card profiles.";
+    case kSoundChildBluetooth: return "Bluetooth audio profiles and codecs.";
+    case kSoundChildApps:      return "Per-application volume, mute and routing.";
+    case kSoundChildEngine:    return "Sample rate, buffer quantum and PCM format.";
+    default:                   return "Default devices and per-application mixer (PipeWire).";
+  }
+}
+
 // paint_sound_tab function (content of settings_sound_tab_body.inl)
 void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double glassOv, double paintPointerYOffset) {
    
@@ -468,6 +645,8 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
         d.engine_clock_rate_hz = app.settings.audioEngineClockRateHz;
         d.engine_force_rate_hz = app.settings.audioEngineForceRateHz;
         d.engine_allowed_rates_hz = app.settings.audioEngineAllowedRatesHz;
+        d.engine_quantum = app.settings.audioEngineQuantum;
+        d.engine_force_quantum = app.settings.audioEngineForceQuantum;
         d.compat_pcm_format = app.settings.audioCompatPcmFormat;
         eh::audio::PipeWireService::instance().apply_saved_defaults(d);
       }
@@ -482,18 +661,24 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
     }
     const int n_play = static_cast<int>(snap.output_streams.size());
     const int n_rec = static_cast<int>(snap.input_streams.size());
-    const auto& bt_cards_full = settings_sound_bt_cards_cached(app);
-    const int n_bt =
-        static_cast<int>(std::min(bt_cards_full.size(), static_cast<size_t>(kSoundMaxBtCards)));
-    settings_clamp_sound_scroll_px(app, n_play, n_rec, n_bt);
+    const auto& audio_cards = sound_tab_cards_cached(app);
+    const int n_cards =
+        static_cast<int>(std::min(audio_cards.size(), static_cast<size_t>(kSoundMaxCards)));
+    settings_clamp_sound_scroll_px(app, n_play, n_rec, n_cards);
 
     std::string pw_link_list_blob;
     if (n_play > 0 || n_rec > 0) (void)eh::audio::pw_link_list_capture_stdout(&pw_link_list_blob);
 
+    float a_r, a_g, a_b, t_r, t_g, t_b, s_r, s_g, s_b, o_r, o_g, o_b;
+    settings_resolve_colors(app, a_r, a_g, a_b, t_r, t_g, t_b, s_r, s_g, s_b, o_r, o_g, o_b);
+
+    // Child-tab bar is fixed; the scrollable page starts below it.
+    paint_sound_child_tab_bar(cr, contentX, contentW, t_r, t_g, t_b, app.soundChildTab);
+
     cairo_save(cr);
-    cairo_rectangle(cr, static_cast<double>(contentX), static_cast<double>(kContentTop),
+    cairo_rectangle(cr, static_cast<double>(contentX), static_cast<double>(kSoundChildContentTop),
                     static_cast<double>(contentW),
-                    static_cast<double>(app.height - kContentTop - kSpacingL));
+                    static_cast<double>(app.height - kSoundChildContentTop - kSpacingL));
     cairo_clip(cr);
     cairo_translate(cr, 0.0, -paintPointerYOffset);
     const double pyH = app.pointerY + paintPointerYOffset;
@@ -502,7 +687,7 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
     int tcw = 0;
     settings_content_column_geom(app, &tcx, &tcw);
     const SoundTabGeom sg =
-        sound_compute_tab_geom(tcx, tcw, kContentTop, settings_content_viewport_h(app), n_play, n_rec, n_bt);
+        sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab, n_play, n_rec, n_cards);
 
     auto fill_snd_card = [&](const SoundSectionGeom& sec) {
       {
@@ -575,7 +760,7 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
       settings_show_text(cr, titleX, textY, "Sound", 15, 700,
                          Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
       const double subY = textY + static_cast<double>(descPh);
-      settings_show_text(cr, titleX, subY, "Default devices and per-application mixer (PipeWire).", 11, 400,
+      settings_show_text(cr, titleX, subY, sound_child_header_subtitle(app.soundChildTab), 11, 400,
                          Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
     }
 
@@ -651,12 +836,38 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
       }
     };
 
-    float a_r, a_g, a_b, t_r, t_g, t_b, s_r, s_g, s_b, o_r, o_g, o_b;
-    settings_resolve_colors(app, a_r, a_g, a_b, t_r, t_g, t_b, s_r, s_g, s_b, o_r, o_g, o_b);
+    // Card profile list, shown on both the Devices page (non-Bluetooth cards)
+    // and the Bluetooth page (Bluetooth cards).
+    auto paint_cards_section = [&](const SoundSectionGeom& sec, const char* title, const char* icon,
+                                   const char* empty_text,
+                                   const std::vector<eh::audio::AudioCardProfiles>& cards) {
+      fill_snd_card(sec);
+      paint_snd_heading(sec, title, icon);
+      if (cards.empty()) {
+        settings_show_text(cr, sec.x + kCardPad, sec.content_y0 + 6, empty_text, 12, 400, Theme::TextR,
+                           Theme::TextG, Theme::TextB, 0.70 * glassOv);
+        return;
+      }
+      const int n = std::min(static_cast<int>(cards.size()), kSoundMaxCards);
+      for (int i = 0; i < n; ++i) {
+        const auto& bc = cards[static_cast<size_t>(i)];
+        std::string disp = bc.active_profile_key;
+        for (const auto& p : bc.profiles) {
+          if (p.key == bc.active_profile_key) {
+            disp = p.description.empty() ? p.key : p.description;
+            break;
+          }
+        }
+        paint_snd_combo_row(sec, i, bc.card_name.c_str(), disp.c_str(),
+                            app.soundActiveDd == (kSoundCardDdBase + i));
+      }
+    };
 
-    fill_snd_card(sg.devices);
-    paint_snd_heading(sg.devices, "Devices", "devices");
-    {
+    switch (app.soundChildTab) {
+      case kSoundChildDevices: {
+        fill_snd_card(sg.devices);
+        paint_snd_heading(sg.devices, "Devices", "devices");
+        {
       // Default output.
       const eh::audio::Device* def_sink = nullptr;
       for (const auto& d : snap.sinks) {
@@ -791,27 +1002,19 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
                         (app.soundVolDragCode == 2001) ? app.settingsSliderDragNormT : -1.0);
       }
     }
-
-    if (sg.n_bt_cards > 0 && sg.bluetooth.h > 0) {
-      fill_snd_card(sg.bluetooth);
-      paint_snd_heading(sg.bluetooth, "Bluetooth", "bluetooth");
-      for (int bi = 0; bi < sg.n_bt_cards; ++bi) {
-        const auto& bc = bt_cards_full[static_cast<size_t>(bi)];
-        std::string bt_disp = bc.active_profile_key;
-        for (const auto& p : bc.profiles) {
-          if (p.key == bc.active_profile_key) {
-            bt_disp = p.description.empty() ? p.key : p.description;
-            break;
-          }
-        }
-        paint_snd_combo_row(sg.bluetooth, bi, bc.card_name.c_str(), bt_disp.c_str(),
-                            app.soundActiveDd == (kSoundBtDdBase + bi));
+        paint_cards_section(sg.cards, "Card profiles", "tune",
+                            "No configurable audio cards found.", audio_cards);
+        break;
       }
-    }
-
-    fill_snd_card(sg.engine);
-    paint_snd_heading(sg.engine, "Graph & default output", "graphic_eq");
-    {
+      case kSoundChildBluetooth: {
+        paint_cards_section(sg.cards, "Bluetooth Audio", "bluetooth",
+                            "No Bluetooth audio devices connected.", audio_cards);
+        break;
+      }
+      case kSoundChildEngine: {
+        fill_snd_card(sg.engine);
+        paint_snd_heading(sg.engine, "Engine & default output", "graphic_eq");
+        {
       eh::audio::EngineSettings es{};
       eh::audio::CompatDefaultSinkFormat cf{};
       settings_sound_engine_paint_cache_read(app, &es, &cf);
@@ -823,62 +1026,91 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
       const std::string disp_allow =
           es.available ? sound_engine_allowed_combo_display(es) : std::string("\xe2\x80\x94");
       const std::string disp_pcm = sound_compat_pcm_combo_display(cf);
+      const std::string disp_quantum =
+          !es.available ? std::string("\xe2\x80\x94")
+                        : (es.clock_quantum == 0 ? std::string("Auto") : std::to_string(es.clock_quantum));
+      const std::string disp_force_q =
+          !es.available ? std::string("\xe2\x80\x94")
+                        : (es.clock_force_quantum == 0 ? std::string("Auto") : std::to_string(es.clock_force_quantum));
 
-      const struct { const char* label; int ddId; const std::string* value; } kEngRows[4] = {
+      const struct { const char* label; int ddId; const std::string* value; } kEngRows[6] = {
         {"Default rate",          2, &disp_rate},
         {"Force graph rate",      3, &disp_force},
         {"Allowed rates preset",  4, &disp_allow},
         {"Default PCM format",    5, &disp_pcm},
+        {"Default quantum",       6, &disp_quantum},
+        {"Force quantum",         7, &disp_force_q},
       };
 
-      int colW, col1X, col2X;
-      snd_engine_grid_geom(sg.engine, &colW, &col1X, &col2X);
+      paint_snd_grid_cell(app, cr, sg.engine, 0, 0, kEngRows[0].label, *kEngRows[0].value, kEngRows[0].ddId,
+                          app.soundActiveDd, glassOv, pyH);
+      paint_snd_grid_cell(app, cr, sg.engine, 1, 0, kEngRows[1].label, *kEngRows[1].value, kEngRows[1].ddId,
+                          app.soundActiveDd, glassOv, pyH);
+      paint_snd_grid_cell(app, cr, sg.engine, 0, 1, kEngRows[2].label, *kEngRows[2].value, kEngRows[2].ddId,
+                          app.soundActiveDd, glassOv, pyH);
+      paint_snd_grid_cell(app, cr, sg.engine, 1, 1, kEngRows[3].label, *kEngRows[3].value, kEngRows[3].ddId,
+                          app.soundActiveDd, glassOv, pyH);
+      paint_snd_grid_cell(app, cr, sg.engine, 0, 2, kEngRows[4].label, *kEngRows[4].value, kEngRows[4].ddId,
+                          app.soundActiveDd, glassOv, pyH);
+      paint_snd_grid_cell(app, cr, sg.engine, 1, 2, kEngRows[5].label, *kEngRows[5].value, kEngRows[5].ddId,
+                          app.soundActiveDd, glassOv, pyH);
 
-      auto paint_engine_cell = [&](int colIx, int rowIx, const char* label, const std::string& value, int ddId) {
-        const int colX = (colIx == 0) ? col1X : col2X;
-        const int labY = snd_engine_label_y(sg.engine, rowIx);
-        const int selY = labY + kSndGridLabelH + kSndGridLabelGap;
-        settings_show_text(cr, static_cast<double>(colX), static_cast<double>(labY),
-                      label, 12, 400, Theme::TextR, Theme::TextG, Theme::TextB, 0.70 * glassOv);
-        int sx = colX, sy = selY, sw = colW, sh = kSettingsComboH;
-        const bool expanded = (app.soundActiveDd == ddId);
-        const bool hovered = app.pointerX >= sx && pyH >= sy && app.pointerX < sx + sw && pyH < sy + sh;
-        {
-          m3::Box box;
-          float r, g, b;
-          if (app.drawChromeMatugen) {
-            r = app.drawChrome.panelFillR;
-            g = app.drawChrome.panelFillG;
-            b = app.drawChrome.panelFillB;
-          } else {
-            r = static_cast<float>(Theme::BgR);
-            g = static_cast<float>(Theme::BgG);
-            b = static_cast<float>(Theme::BgB);
-          }
-          box.setColor(r, g, b, static_cast<float>((hovered ? 0.94 : 0.88) * glassOv));
-          box.setRadius(9.0f);
-          box.setGeometry(static_cast<float>(sx), static_cast<float>(sy), static_cast<float>(sw), static_cast<float>(sh));
-          box.setGlassy(true);
-          box.paint(cr);
+      // Restart audio services: compact right-aligned action with arm-to-confirm.
+      {
+        int rowY = 0, bx = 0, by = 0, bw = 0, bh = 0;
+        snd_engine_restart_geom(sg.engine, &rowY, &bx, &by, &bw, &bh);
+        const std::uint64_t now_ms = eh::shell::now_mono_ms();
+        const bool done = app.soundRestartDoneMonoMs >= 0 &&
+                          now_ms - static_cast<std::uint64_t>(app.soundRestartDoneMonoMs) < kSndRestartDoneMs;
+        const bool armed = !done && app.soundRestartArmMonoMs >= 0 &&
+                           now_ms - static_cast<std::uint64_t>(app.soundRestartArmMonoMs) < kSndRestartArmMs;
+        // Keep redrawing so armed/done states auto-expire without pointer input.
+        if (armed || done) {
+          app.pendingRedraw = true;
+          schedule_settings_surface_frame(app);
         }
-        cairo_round_rect(cr, sx, sy, sw, sh, 9.0);
-        paint_src_glass_hi(app, cr, 0.11 * glassOv);
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
-        settings_draw_text_line_fit_width(cr, value, sx + 12.0, sy + 19.0, sw - 40, 1.0);
-        {
-          const double chevCy = static_cast<double>(sy) + static_cast<double>(sh) * 0.52;
-          const double chevAlpha = (hovered ? 0.95 : 0.55) * glassOv;
-          material_symbols_draw_glyph(cr, static_cast<double>(sx + sw) - 14.0, chevCy, 18.0,
-                                      expanded ? "expand_less" : "expand_more", Theme::TextR, Theme::TextG, Theme::TextB, chevAlpha);
-        }
-      };
+        const bool hot = app.pointerX >= bx && pyH >= by && app.pointerX < bx + bw && pyH < by + bh;
 
-      paint_engine_cell(0, 0, kEngRows[0].label, *kEngRows[0].value, kEngRows[0].ddId);
-      paint_engine_cell(1, 0, kEngRows[1].label, *kEngRows[1].value, kEngRows[1].ddId);
-      paint_engine_cell(0, 1, kEngRows[2].label, *kEngRows[2].value, kEngRows[2].ddId);
-      paint_engine_cell(1, 1, kEngRows[3].label, *kEngRows[3].value, kEngRows[3].ddId);
-    }
+        const double tintR = armed ? kSndWarnR : static_cast<double>(a_r);
+        const double tintG = armed ? kSndWarnG : static_cast<double>(a_g);
+        const double tintB = armed ? kSndWarnB : static_cast<double>(a_b);
+        const double outlineR = armed ? kSndWarnR : static_cast<double>(o_r);
+        const double outlineG = armed ? kSndWarnG : static_cast<double>(o_g);
+        const double outlineB = armed ? kSndWarnB : static_cast<double>(o_b);
+
+        m3::Button btn;
+        btn.setMinSize(0, 0);
+        btn.setLabel(done ? "Restarted" : (armed ? "Confirm" : "Restart"));
+        btn.setGlyph(done ? "check_circle" : (armed ? "warning" : "restart_alt"));
+        btn.setGeometry(static_cast<float>(bx), static_cast<float>(by), static_cast<float>(bw),
+                        static_cast<float>(bh));
+        btn.setStyle(m3::Button::Style::Outlined);
+        btn.setSize(m3::Button::Size::S);
+        btn.setAccentColor(static_cast<float>(tintR), static_cast<float>(tintG), static_cast<float>(tintB));
+        btn.setOutlineColor(static_cast<float>(outlineR), static_cast<float>(outlineG),
+                            static_cast<float>(outlineB));
+        btn.setHovered(hot);
+        btn.paint(cr);
+
+        // Explanation sits beside the button, not underneath it.
+        const double titleX = static_cast<double>(sg.engine.x + kCardPad);
+        const double titleY = static_cast<double>(rowY + namePh + 8);
+        settings_show_text(cr, titleX, titleY, "Restart audio services", 13, 600, Theme::TextR, Theme::TextG,
+                           Theme::TextB, 0.92 * glassOv);
+        const char* desc =
+            done ? "Audio services are back up."
+                 : (armed ? "This briefly interrupts all audio. Click Confirm to proceed."
+                          : "Stops and restarts PipeWire, PipeWire-Pulse and WirePlumber.");
+        settings_show_text(cr, titleX, titleY + static_cast<double>(descPh) + 1.0, desc, 11, 400,
+                           armed ? static_cast<float>(kSndWarnR) : static_cast<float>(Theme::TextR),
+                           armed ? static_cast<float>(kSndWarnG) : static_cast<float>(Theme::TextG),
+                           armed ? static_cast<float>(kSndWarnB) : static_cast<float>(Theme::TextB),
+                           (armed ? 0.85 : 0.55) * glassOv);
+      }
+        }
+        break;
+      }
+      case kSoundChildApps: {
 
     auto enrich = [](const std::string& icon_name, const std::string& app_id,
                       const std::string& process_binary, const std::string& app_name,
@@ -1198,6 +1430,12 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
       }
     }
 
+      break;
+      }
+      default:
+        break;
+    }
+
     cairo_restore(cr);
     settings_paint_sound_dropdown_unclipped(app, cr, contentX, contentW, glassOv, snap);
 }
@@ -1212,9 +1450,9 @@ static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /
   settings_content_column_geom(app, &tcx, &tcw);
   const int n_play = static_cast<int>(snap.output_streams.size());
   const int n_rec = static_cast<int>(snap.input_streams.size());
-  const int n_bt = sound_tab_bt_count_clamped(app);
+  const int n_cards = sound_tab_card_count_clamped(app);
   const SoundTabGeom sg =
-      sound_compute_tab_geom(tcx, tcw, kContentTop, settings_content_viewport_h(app), n_play, n_rec, n_bt);
+      sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab, n_play, n_rec, n_cards);
 
   int dcx = 0;
   int dcy = 0;
@@ -1277,11 +1515,35 @@ static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /
     const eh::audio::CompatDefaultSinkFormat cf_dd = pw.query_compat_default_sink_format();
     for (int j = 0; j < nrows; ++j) soundDdStore.emplace_back(kSoundCompatPcmLabels[j]);
     sel_ix = sound_compat_pcm_dropdown_sel_ix(cf_dd);
-  } else if (app.soundActiveDd >= kSoundBtDdBase && app.soundActiveDd < kSoundBtDdBase + kSoundMaxBtCards) {
-    const int bi = app.soundActiveDd - kSoundBtDdBase;
-    const auto& btc = settings_sound_bt_cards_cached(app);
-    if (bi < 0 || bi >= static_cast<int>(btc.size())) return;
-    const auto& bc = btc[static_cast<size_t>(bi)];
+  } else if (app.soundActiveDd == 6) {
+    nrows = 1 + kSoundEngineQuantumCount;
+    soundDdStore.emplace_back("Auto");
+    for (int j = 0; j < kSoundEngineQuantumCount; ++j)
+      soundDdStore.push_back(std::to_string(kSoundEngineQuantums[j]));
+    sel_ix = 0;
+    if (es_dd.clock_quantum != 0) {
+      sel_ix = -1;
+      for (int j = 0; j < kSoundEngineQuantumCount; ++j) {
+        if (kSoundEngineQuantums[j] == es_dd.clock_quantum) sel_ix = 1 + j;
+      }
+    }
+  } else if (app.soundActiveDd == 7) {
+    nrows = 1 + kSoundEngineQuantumCount;
+    soundDdStore.emplace_back("Auto");
+    for (int j = 0; j < kSoundEngineQuantumCount; ++j)
+      soundDdStore.push_back(std::to_string(kSoundEngineQuantums[j]));
+    sel_ix = 0;
+    if (es_dd.clock_force_quantum != 0) {
+      sel_ix = -1;
+      for (int j = 0; j < kSoundEngineQuantumCount; ++j) {
+        if (kSoundEngineQuantums[j] == es_dd.clock_force_quantum) sel_ix = 1 + j;
+      }
+    }
+  } else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
+    const int bi = app.soundActiveDd - kSoundCardDdBase;
+    const auto& cards = sound_tab_cards_cached(app);
+    if (bi < 0 || bi >= static_cast<int>(cards.size())) return;
+    const auto& bc = cards[static_cast<size_t>(bi)];
     nrows = static_cast<int>(bc.profiles.size());
     for (const auto& p : bc.profiles) {
       soundDdStore.push_back(p.description.empty() ? p.key : (p.description + " (" + p.key + ")"));
@@ -1340,23 +1602,40 @@ static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /
 // settings_sound_consume_pointer_down (from settings_sound_ui.inl)
 bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
     
-  (void)contentX;
-  (void)contentW;
+  // Child-tab bar clicks switch pages (closing any open dropdown and resetting scroll).
+  {
+    const int tabHit = sound_hit_child_tab(static_cast<float>(app.pointerX), static_cast<float>(app.pointerY),
+                                           contentX, contentW);
+    if (tabHit >= 0) {
+      if (tabHit != app.soundChildTab) {
+        app.soundChildTab = tabHit;
+        app.soundActiveDd = -1;
+        app.soundDdHoverRow = -1;
+        app.settingsSoundScrollPx = 0;
+        // Leaving the Engine page cancels any pending restart confirmation.
+        app.soundRestartArmMonoMs = -1;
+        app.soundRestartDoneMonoMs = -1;
+        draw(app);
+      }
+      return true;
+    }
+  }
+
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
 
   const eh::audio::Snapshot snap = pw.snapshot();
   const int n_play = static_cast<int>(snap.output_streams.size());
   const int n_rec = static_cast<int>(snap.input_streams.size());
-  const int n_bt = sound_tab_bt_count_clamped(app);
-  settings_clamp_sound_scroll_px(app, n_play, n_rec, n_bt);
+  const int n_cards = sound_tab_card_count_clamped(app);
+  settings_clamp_sound_scroll_px(app, n_play, n_rec, n_cards);
   const double pyLogical = app.pointerY + settings_scroll_px(app);
 
   int tcx = 0;
   int tcw = 0;
   settings_content_column_geom(app, &tcx, &tcw);
   const SoundTabGeom sg =
-      sound_compute_tab_geom(tcx, tcw, kContentTop, settings_content_viewport_h(app), n_play, n_rec, n_bt);
+      sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab, n_play, n_rec, n_cards);
 
   if (app.soundActiveDd >= 0) {
     int cx = 0;
@@ -1381,15 +1660,17 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       nrows = 4;
     else if (app.soundActiveDd == 5)
       nrows = kSoundCompatPcmChoiceCount;
+    else if (app.soundActiveDd == 6 || app.soundActiveDd == 7)
+      nrows = 1 + kSoundEngineQuantumCount;
     else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000)
       nrows = static_cast<int>(snap.sinks.size());
     else if (app.soundActiveDd >= 1000)
       nrows = static_cast<int>(snap.sources.size());
-    else if (app.soundActiveDd >= kSoundBtDdBase && app.soundActiveDd < kSoundBtDdBase + kSoundMaxBtCards) {
-      const int bi = app.soundActiveDd - kSoundBtDdBase;
-      const auto& btc = settings_sound_bt_cards_cached(app);
-      if (bi >= 0 && bi < static_cast<int>(btc.size()))
-        nrows = static_cast<int>(btc[static_cast<size_t>(bi)].profiles.size());
+    else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
+      const int bi = app.soundActiveDd - kSoundCardDdBase;
+      const auto& cards = sound_tab_cards_cached(app);
+      if (bi >= 0 && bi < static_cast<int>(cards.size()))
+        nrows = static_cast<int>(cards[static_cast<size_t>(bi)].profiles.size());
     }
 
     std::vector<std::string> dd_labels;
@@ -1411,17 +1692,21 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
     } else if (app.soundActiveDd == 5) {
       for (int j = 0; j < kSoundCompatPcmChoiceCount; ++j)
         dd_labels.emplace_back(kSoundCompatPcmLabels[j]);
+    } else if (app.soundActiveDd == 6 || app.soundActiveDd == 7) {
+      dd_labels.emplace_back("Auto");
+      for (int j = 0; j < kSoundEngineQuantumCount; ++j)
+        dd_labels.push_back(std::to_string(kSoundEngineQuantums[j]));
     } else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000) {
       for (const auto& d : snap.sinks)
         dd_labels.push_back(d.display_name.empty() ? d.name : d.display_name);
     } else if (app.soundActiveDd >= 1000) {
       for (const auto& d : snap.sources)
         dd_labels.push_back(d.display_name.empty() ? d.name : d.display_name);
-    } else if (app.soundActiveDd >= kSoundBtDdBase && app.soundActiveDd < kSoundBtDdBase + kSoundMaxBtCards) {
-      const int bi = app.soundActiveDd - kSoundBtDdBase;
-      const auto& btc = settings_sound_bt_cards_cached(app);
-      if (bi >= 0 && bi < static_cast<int>(btc.size())) {
-        for (const auto& p : btc[static_cast<size_t>(bi)].profiles)
+    } else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
+      const int bi = app.soundActiveDd - kSoundCardDdBase;
+      const auto& cards = sound_tab_cards_cached(app);
+      if (bi >= 0 && bi < static_cast<int>(cards.size())) {
+        for (const auto& p : cards[static_cast<size_t>(bi)].profiles)
           dd_labels.push_back(p.description.empty() ? p.key : (p.description + " (" + p.key + ")"));
       }
     }
@@ -1492,14 +1777,28 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
           settings_sound_engine_paint_cache_invalidate();
           app.settings.audioCompatPcmFormat = rr;
           save_settings(app.settings);
-        } else if (app.soundActiveDd >= kSoundBtDdBase && app.soundActiveDd < kSoundBtDdBase + kSoundMaxBtCards) {
-          const int bi = app.soundActiveDd - kSoundBtDdBase;
-          const auto& btc = settings_sound_bt_cards_cached(app);
-          if (bi >= 0 && bi < static_cast<int>(btc.size()) && rr >= 0 &&
-              rr < static_cast<int>(btc[static_cast<size_t>(bi)].profiles.size())) {
-            pw.apply_bluetooth_card_profile(btc[static_cast<size_t>(bi)].card_index,
-                                            btc[static_cast<size_t>(bi)].profiles[static_cast<size_t>(rr)].key);
-            settings_sound_bt_invalidate_cache();
+        } else if (app.soundActiveDd == 6 && rr >= 0) {
+          const int q = (rr == 0) ? 0 : kSoundEngineQuantums[rr - 1];
+          pw.apply_engine_quantum(q);
+          settings_sound_engine_paint_cache_invalidate();
+          app.settings.audioEngineQuantum = q;
+          save_settings(app.settings);
+        } else if (app.soundActiveDd == 7 && rr >= 0) {
+          const int q = (rr == 0) ? 0 : kSoundEngineQuantums[rr - 1];
+          pw.apply_engine_force_quantum(q);
+          settings_sound_engine_paint_cache_invalidate();
+          app.settings.audioEngineForceQuantum = q;
+          save_settings(app.settings);
+        } else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
+          const int bi = app.soundActiveDd - kSoundCardDdBase;
+          const auto& cards = sound_tab_cards_cached(app);
+          if (bi >= 0 && bi < static_cast<int>(cards.size()) && rr >= 0 &&
+              rr < static_cast<int>(cards[static_cast<size_t>(bi)].profiles.size())) {
+            pw.apply_card_profile(cards[static_cast<size_t>(bi)].card_index,
+                                  cards[static_cast<size_t>(bi)].card_key,
+                                  cards[static_cast<size_t>(bi)].profiles[static_cast<size_t>(rr)].key,
+                                  cards[static_cast<size_t>(bi)].profiles[static_cast<size_t>(rr)].description);
+            settings_sound_cards_invalidate_cache();
             save_settings(app.settings);
           }
         } else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000) {
@@ -1525,6 +1824,8 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
   int cy = 0;
   int cw = 0;
   int ch = 0;
+
+  if (app.soundChildTab == kSoundChildDevices) {
   {
     const eh::audio::Device* snd_def_sink = nullptr;
     for (const auto& d : snap.sinks) {
@@ -1615,28 +1916,32 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       }
     }
   }
+  }
 
-  for (int bi = 0; bi < sg.n_bt_cards; ++bi) {
+  if (app.soundChildTab == kSoundChildBluetooth || app.soundChildTab == kSoundChildDevices) {
+  for (int bi = 0; bi < sg.n_cards; ++bi) {
     {
-      const auto& btcc = settings_sound_bt_cards_cached(app);
-      const auto& btcrd = btcc[static_cast<size_t>(bi)];
-      std::string bt_disp = btcrd.active_profile_key;
+      const auto& cards_bg = sound_tab_cards_cached(app);
+      const auto& btcrd = cards_bg[static_cast<size_t>(bi)];
+      std::string card_disp = btcrd.active_profile_key;
       for (const auto& p : btcrd.profiles) {
         if (p.key == btcrd.active_profile_key) {
-          bt_disp = p.description.empty() ? p.key : p.description;
+          card_disp = p.description.empty() ? p.key : p.description;
           break;
         }
       }
-      snd_combo_text_geom(sg.bluetooth.content_y0, sg.bluetooth.x, sg.bluetooth.w, bi, bt_disp.c_str(), &cx, &cy, &cw, &ch);
+      snd_combo_text_geom(sg.cards.content_y0, sg.cards.x, sg.cards.w, bi, card_disp.c_str(), &cx, &cy, &cw, &ch);
     }
     if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
       settings_close_non_default_app_dropdowns(app);
-      app.soundActiveDd = kSoundBtDdBase + bi;
+      app.soundActiveDd = kSoundCardDdBase + bi;
       draw(app);
       return true;
     }
   }
+  }
 
+  if (app.soundChildTab == kSoundChildEngine) {
   const eh::audio::EngineSettings es_nav = pw.query_engine_settings();
   const eh::audio::CompatDefaultSinkFormat cf_nav = pw.query_compat_default_sink_format();
   if (es_nav.available) {
@@ -1667,6 +1972,24 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
         return true;
       }
     }
+    {
+      snd_engine_select_geom(sg.engine, 0, 2, &cx, &cy, &cw, &ch);
+      if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
+        settings_close_non_default_app_dropdowns(app);
+        app.soundActiveDd = 6;
+        draw(app);
+        return true;
+      }
+    }
+    {
+      snd_engine_select_geom(sg.engine, 1, 2, &cx, &cy, &cw, &ch);
+      if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
+        settings_close_non_default_app_dropdowns(app);
+        app.soundActiveDd = 7;
+        draw(app);
+        return true;
+      }
+    }
   }
   if (cf_nav.available) {
     snd_engine_select_geom(sg.engine, 1, 1, &cx, &cy, &cw, &ch);
@@ -1677,7 +2000,31 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       return true;
     }
   }
+  {
+    int rowY = 0, bx = 0, by = 0, bw = 0, bh = 0;
+    snd_engine_restart_geom(sg.engine, &rowY, &bx, &by, &bw, &bh);
+    if (point_in_rect(app.pointerX, pyLogical, bx, by, bw, bh)) {
+      settings_close_non_default_app_dropdowns(app);
+      const std::uint64_t now_ms = eh::shell::now_mono_ms();
+      const bool armed =
+          app.soundRestartArmMonoMs >= 0 &&
+          now_ms - static_cast<std::uint64_t>(app.soundRestartArmMonoMs) < kSndRestartArmMs;
+      if (armed) {
+        app.soundRestartArmMonoMs = -1;
+        settings_sound_engine_paint_cache_invalidate();
+        (void)pw.restart_services();
+        app.soundRestartDoneMonoMs = static_cast<std::int64_t>(eh::shell::now_mono_ms());
+      } else {
+        app.soundRestartDoneMonoMs = -1;
+        app.soundRestartArmMonoMs = static_cast<std::int64_t>(now_ms);
+      }
+      draw(app);
+      return true;
+    }
+  }
+  }
 
+  if (app.soundChildTab == kSoundChildApps) {
   for (int i = 0; i < n_play; ++i) {
     monitors_combo_geom_at_content_row(sg.playback.content_y0, sg.playback.x, sg.playback.w, i * 2, &cx, &cy, &cw,
                                        &ch);
@@ -1740,6 +2087,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       draw(app);
       return true;
     }
+  }
   }
 
   return false;

@@ -344,9 +344,7 @@ void settings_close_non_default_app_dropdowns(App& app) {
   app.wallpaperModeDropdownOpen = false;
   app.matugenSchemeDd.close();
   app.matugenModeDd.close();
-  app.launcherViewModeDropdownOpen = false;
   app.wallpaperModeDropdownHoverRow = -1;
-  app.launcherViewModeDropdownHoverRow = -1;
   app.qtColorSchemeDropdownOpen = false;
   app.qtColorSchemeDropdownHoverRow = -1;
   app.monitorsActiveDd = -1;
@@ -607,11 +605,11 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
     int tcx = 0;
     int tcw = 0;
     settings_content_column_geom(app, &tcx, &tcw);
-    const int n_bt_mv = sound_tab_bt_count_clamped(app);
+    const int n_cards_mv = sound_tab_card_count_clamped(app);
     const SoundTabGeom sg =
-        sound_compute_tab_geom(tcx, tcw, kContentTop, settings_content_viewport_h(app),
-                               static_cast<int>(snap.output_streams.size()),
-                               static_cast<int>(snap.input_streams.size()), n_bt_mv);
+        sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab,
+                                 static_cast<int>(snap.output_streams.size()),
+                                 static_cast<int>(snap.input_streams.size()), n_cards_mv);
     if (app.soundVolDragCode >= 2000 && app.soundVolDragCode < 3000) {
       const int dev = app.soundVolDragCode - 2000;
       int trx = 0;
@@ -913,19 +911,6 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
         }
       }
     }
-    if (app.activeTab == 9 && app.launcherViewModeDropdownOpen) {
-      int vcx, vcy, vcw, vch;
-      launcher_view_mode_combo_geom(tcx, tcw, &vcx, &vcy, &vcw, &vch);
-      const int ly = vcy + vch + 2;
-      const int nr = settings_mode_dd_pointer_row(app.pointerX, app.pointerY, vcx, ly, vcw, kSettingsDdRowH, kViewModeCount);
-      if (nr != app.launcherViewModeDropdownHoverRow) {
-        app.launcherViewModeDropdownHoverRow = nr;
-        needDdDraw = true;
-      }
-    } else if (app.launcherViewModeDropdownHoverRow != -1) {
-      app.launcherViewModeDropdownHoverRow = -1;
-      needDdDraw = true;
-    }
     if (app.activeTab == 10 && app.defaultAppPickerOpen) {
       int plx = 0;
       int ply = 0;
@@ -1015,16 +1000,16 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       const eh::audio::Snapshot snap = eh::audio::PipeWireService::instance().snapshot();
       const int n_play = static_cast<int>(snap.output_streams.size());
       const int n_rec = static_cast<int>(snap.input_streams.size());
-      const int n_bt_dd = sound_tab_bt_count_clamped(app);
+      const int n_cards_dd = sound_tab_card_count_clamped(app);
       const SoundTabGeom sg =
-          sound_compute_tab_geom(tcx, tcw, kContentTop, settings_content_viewport_h(app), n_play, n_rec, n_bt_dd);
+          sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab, n_play, n_rec, n_cards_dd);
       int dcx = 0;
       int dcy = 0;
       int dcw = 0;
       int dch = 0;
       if (sound_dd_combo_geom(sg, app.soundActiveDd, n_play, n_rec, &dcx, &dcy, &dcw, &dch)) {
         int nrows = 0;
-        std::vector<std::string> sound_bt_dd_labels;
+        std::vector<std::string> sound_card_dd_labels;
         if (app.soundActiveDd == 0)
           nrows = static_cast<int>(snap.sinks.size());
         else if (app.soundActiveDd == 1)
@@ -1037,12 +1022,14 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
           nrows = 4;
         else if (app.soundActiveDd == 5)
           nrows = kSoundCompatPcmChoiceCount;
-        else if (app.soundActiveDd >= kSoundBtDdBase && app.soundActiveDd < kSoundBtDdBase + kSoundMaxBtCards) {
-          const int bi = app.soundActiveDd - kSoundBtDdBase;
-          const auto& btc = settings_sound_bt_cards_cached(app);
-          if (bi >= 0 && bi < static_cast<int>(btc.size())) {
-            nrows = static_cast<int>(btc[static_cast<size_t>(bi)].profiles.size());
-            sound_bt_dd_labels = sound_bt_profile_row_labels(btc[static_cast<size_t>(bi)]);
+        else if (app.soundActiveDd == 6 || app.soundActiveDd == 7)
+          nrows = 1 + kSoundEngineQuantumCount;
+        else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
+          const int bi = app.soundActiveDd - kSoundCardDdBase;
+          const auto& cards = sound_tab_cards_cached(app);
+          if (bi >= 0 && bi < static_cast<int>(cards.size())) {
+            nrows = static_cast<int>(cards[static_cast<size_t>(bi)].profiles.size());
+            sound_card_dd_labels = sound_card_profile_row_labels(cards[static_cast<size_t>(bi)]);
           }
         } else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000)
           nrows = static_cast<int>(snap.sinks.size());
@@ -1050,8 +1037,8 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
           nrows = static_cast<int>(snap.sources.size());
         int popup_list_x = dcx;
         int popup_list_w = dcw;
-        if (!sound_bt_dd_labels.empty()) {
-          const SoundBtPopupGeom pg = sound_bt_dropdown_popup_geom(app, tcx, tcw, dcx, dcw, sound_bt_dd_labels);
+        if (!sound_card_dd_labels.empty()) {
+          const SoundBtPopupGeom pg = sound_bt_dropdown_popup_geom(app, tcx, tcw, dcx, dcw, sound_card_dd_labels);
           popup_list_x = pg.x;
           popup_list_w = pg.w;
         }
@@ -1270,33 +1257,9 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
 
   // Real-time hover for Bluetooth device list
   if (!app.pointerLeftDown && app.activeTab == 47) {
-    auto& bt = eh::bt::BluezService::instance();
-    bt.start();
-    const auto state = bt.full_state();
-    const auto& devs = state.devices;
-    const int contentX = 16 + 240 + 16;
+    const int contentX = 16 + kSidebarW + 16;
     const int contentW = app.width - contentX - 16;
-    const int cardX = contentX + 8;
-    const int kScanCardTop = kContentTop + 52 + kSliderRowH + kSpacingXL + kCardGap;
-    constexpr int kBTBtnRowH = 36;
-    const int devCardTop = kScanCardTop + 52 + kBTBtnRowH + kSpacingXL + kCardGap;
-    const int listTop = devCardTop + 52;
-    const int baseY = listTop;
-    constexpr int kDevRowH = 56;
-    const double pyL = app.pointerY + settings_scroll_px(app);
-    int newHover = -1;
-    for (size_t i = 0; i < devs.size(); ++i) {
-      const int rowY = baseY + static_cast<int>(i) * kDevRowH;
-      if (point_in_rect(app.pointerX, pyL, cardX + kCardPad, rowY,
-                        contentW - 4 * kCardPad, kDevRowH)) {
-        newHover = static_cast<int>(i);
-        break;
-      }
-    }
-    if (newHover != app.settingsBluetoothHoverRow) {
-      app.settingsBluetoothHoverRow = newHover;
-      draw(app);
-    }
+    settings_bluetooth_consume_pointer_move(app, contentX, contentW);
   }
 
   // Real-time hover for autostart rows
@@ -1318,7 +1281,8 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
     const int contentX = kSpacingL + kSidebarW + kSpacingL;
     const int contentW = app.width - contentX - kSpacingL;
     const int cardInsetX = contentX + 8;
-    const WallpaperVerticalMetrics wm = wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW));
+    const WallpaperVerticalMetrics wm = wallpaper_vertical_metrics(static_cast<double>(contentX), static_cast<double>(contentW),
+                                                           app.wallpaperViewOptionsOpen);
     const WallpaperTabLayout wl = wallpaper_tab_layout(app, cardInsetX, contentW, wm.galleryGridTop);
     const double gx0 = static_cast<double>(cardInsetX + kCardPad);
     const int rowStride = wl.thumbH + kWpThumbLabelH + 6;
@@ -2074,30 +2038,6 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
       return;
     }
     settings_close_mode_dropdowns(app);
-    draw(app);
-    return;
-  }
-
-  if (app.launcherViewModeDropdownOpen && app.activeTab == 9) {
-    int vcx, vcy, vcw, vch;
-    launcher_view_mode_combo_geom(contentX, contentW, &vcx, &vcy, &vcw, &vch);
-    const int ly = vcy + vch + 2;
-    if (point_in_rect(static_cast<int>(app.pointerX), static_cast<int>(app.pointerY), vcx, ly, vcw,
-                      kViewModeCount * kSettingsDdRowH)) {
-      const int rr =
-          settings_mode_dd_pointer_row(app.pointerX, app.pointerY, vcx, ly, vcw, kSettingsDdRowH, kViewModeCount);
-      if (rr >= 0 && rr < kViewModeCount) app.settings.launchpadViewMode = rr;
-      save_settings(app.settings);
-      settings_close_non_default_app_dropdowns(app);
-      draw(app);
-      return;
-    }
-    if (point_in_rect(static_cast<int>(app.pointerX), static_cast<int>(app.pointerY), vcx, vcy, vcw, vch)) {
-      settings_close_non_default_app_dropdowns(app);
-      draw(app);
-      return;
-    }
-    settings_close_non_default_app_dropdowns(app);
     draw(app);
     return;
   }

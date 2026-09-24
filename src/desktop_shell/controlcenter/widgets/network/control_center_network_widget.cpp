@@ -115,10 +115,11 @@ bool control_center_wifi_connect(const std::string& ssid, const std::string& pas
 }
 
 void paint_control_center_network_card(cairo_t* cr, double x, double y, double w, double h,
-                                       const ControlCenterNetworkState& ns, double inner_glass_scale) {
+                                       const ControlCenterNetworkState& ns, double inner_glass_scale,
+                                       double corner_radius) {
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   const double s = std::clamp(inner_glass_scale, 0.0, 1.0);
-  const double r = std::max(14.0, std::min(w, h) * 0.16);
+  const double r = corner_radius >= 0.0 ? corner_radius : std::max(14.0, std::min(w, h) * 0.16);
   cc_paint_glass_card_mc(cr, x, y, w, h, r, s, mc);
 
   const double icx = x + 24.0;

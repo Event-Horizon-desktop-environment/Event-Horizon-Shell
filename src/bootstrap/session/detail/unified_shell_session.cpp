@@ -723,16 +723,26 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
       return "ok";
     });
 
-    ipc_service_->register_handler("notify", [this](const std::vector<std::string>& args) -> std::string {
-      if (args.size() < 2) return "error usage: notify <title> <body>";
-      eh::notify::push_internal("IPC Command", args[0], args[1], 1);
+    ipc_service_->register_handler("dashboard-toggle", [this](const auto&) -> std::string {
+      // The dashboard lives in the split-out horizon-dock child with the dock;
+      // forward the toggle onto the IPC bus so it can own it directly.
+      if (ipc_service_) ipc_service_->publish("command.request", "dashboard.toggle");
       return "ok";
     });
 
-    ipc_service_->register_handler("launchpad", [this](const auto&) -> std::string {
-      // Launchpad surfaces live in the split-out horizon-dock child; forward the
-      // toggle onto the IPC bus (the child owns them).
-      if (ipc_service_) ipc_service_->publish("command.request", "launchpad.toggle");
+    ipc_service_->register_handler("dashboard-open", [this](const auto&) -> std::string {
+      if (ipc_service_) ipc_service_->publish("command.request", "dashboard.open");
+      return "ok";
+    });
+
+    ipc_service_->register_handler("dashboard-close", [this](const auto&) -> std::string {
+      if (ipc_service_) ipc_service_->publish("command.request", "dashboard.close");
+      return "ok";
+    });
+
+    ipc_service_->register_handler("notify", [this](const std::vector<std::string>& args) -> std::string {
+      if (args.size() < 2) return "error usage: notify <title> <body>";
+      eh::notify::push_internal("IPC Command", args[0], args[1], 1);
       return "ok";
     });
 
@@ -1074,8 +1084,8 @@ void UnifiedShellSession::sync_widget_registry() {
       const std::string type = eh::config::widget_implementation_type(token);
 
       // Activatable widget types map to actions forwarded to the dock child,
-      // which owns the launchpad + start-menu surfaces.
-      if (type == "launchpad" || type == "app_drawer" || type == "smenu") {
+      // which owns the start-menu surfaces.
+      if (type == "app_drawer" || type == "smenu") {
         widget_registry_.add(type,
             [this]() {
               if (ipc_service_) ipc_service_->publish("command.request", "launchpad.toggle");

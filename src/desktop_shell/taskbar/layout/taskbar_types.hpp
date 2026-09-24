@@ -27,6 +27,7 @@ enum class TaskbarPopupKind : uint8_t {
   MediaPlayer = 10,
   PowerConfirm = 11,
   Bluetooth = 12,
+  Spotlight = 13,
 };
 
 struct TaskbarPopupItem {

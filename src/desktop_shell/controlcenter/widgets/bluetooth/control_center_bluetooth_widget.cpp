@@ -24,6 +24,7 @@ ControlCenterBluetoothState control_center_bluetooth_state() {
   out.powered = bs.powered;
   out.connected = bs.connected;
   out.paired_count = bs.paired_count;
+  out.battery_pct = bs.battery_pct;
   if (!bs.available) out.status_text = "Unavailable";
   else if (!out.powered) out.status_text = "Disabled";
   else if (bs.connected_count > 0) out.status_text = "Connected";
@@ -32,10 +33,11 @@ ControlCenterBluetoothState control_center_bluetooth_state() {
 }
 
 void paint_control_center_bluetooth_card(cairo_t* cr, double x, double y, double w, double h,
-                                         const ControlCenterBluetoothState& bs, double inner_glass_scale) {
+                                         const ControlCenterBluetoothState& bs, double inner_glass_scale,
+                                         double corner_radius) {
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   const double s = std::clamp(inner_glass_scale, 0.0, 1.0);
-  const double r = std::max(14.0, std::min(w, h) * 0.16);
+  const double r = corner_radius >= 0.0 ? corner_radius : std::max(14.0, std::min(w, h) * 0.16);
   cc_paint_glass_card_mc(cr, x, y, w, h, r, s, mc);
 
   const double icx = x + 24.0;
@@ -60,7 +62,11 @@ void paint_control_center_bluetooth_card(cairo_t* cr, double x, double y, double
   cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.90);
   cairo_move_to(cr, x + 48.0, y + 50.0);
   char line[64];
-  std::snprintf(line, sizeof(line), "%d paired device%s", bs.paired_count, bs.paired_count == 1 ? "" : "s");
+  if (bs.connected && bs.battery_pct >= 0) {
+    std::snprintf(line, sizeof(line), "Connected \u00b7 %d%%", bs.battery_pct);
+  } else {
+    std::snprintf(line, sizeof(line), "%d paired device%s", bs.paired_count, bs.paired_count == 1 ? "" : "s");
+  }
   cairo_show_text(cr, line);
 
   cc_draw_status_pill(cr, x + w - 112.0, y + 18.0, bs.powered ? "On" : "Off", bs.powered, s, mc);

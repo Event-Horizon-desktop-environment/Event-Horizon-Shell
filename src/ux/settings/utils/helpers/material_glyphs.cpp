@@ -19,7 +19,6 @@ const char* dock_widget_material_ligature(const std::string& id) {
   if (id == "app_menu") return "apps";
   if (id == "app_drawer") return "widgets";
   if (eh::config::widget_implementation_type(id) == "smenu") return "menu";
-  if (id == "launchpad") return "view_quilt";
   if (id == "clock") return "schedule";
   if (id == "weather") return "partly_cloudy_day";
   if (id == "weather_fancy") return "cloud";

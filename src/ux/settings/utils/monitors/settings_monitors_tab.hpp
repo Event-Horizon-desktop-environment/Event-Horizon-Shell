@@ -7,7 +7,35 @@
 #include <unordered_map>
 #include <vector>
 
+#include <cairo/cairo.h>
+#include <pango/pangocairo.h>
+
 namespace eh::settings_monitors_tab {
+
+// Width a plain toolbar button needs for `label` (Inter 12px / 400, plus the
+// 2x10px horizontal padding m3::Button adds). m3::Button auto-expands its
+// geometry — and recentres by shifting left — when the requested width is
+// smaller than this, so callers must size the slot from this value to keep
+// painted and hit-tested rects identical.
+[[nodiscard]] inline int monitors_toolbar_btn_label_width_px(const char* label) {
+  if (!label || !label[0]) return 0;
+  cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+  cairo_t* cr = cairo_create(surface);
+  PangoLayout* layout = pango_cairo_create_layout(cr);
+  PangoFontDescription* desc = pango_font_description_new();
+  pango_font_description_set_family(desc, "Inter");
+  pango_font_description_set_size(desc, static_cast<int>(12.0f * PANGO_SCALE));
+  pango_font_description_set_weight(desc, static_cast<PangoWeight>(400));
+  pango_layout_set_font_description(layout, desc);
+  pango_layout_set_text(layout, label, -1);
+  int pw = 0, ph = 0;
+  pango_layout_get_pixel_size(layout, &pw, &ph);
+  pango_font_description_free(desc);
+  g_object_unref(layout);
+  cairo_destroy(cr);
+  cairo_surface_destroy(surface);
+  return pw + 20;
+}
 
 [[nodiscard]] inline int monitors_main_column_width_px(int content_w) {
   return std::max(100, (content_w * 68) / 100);
@@ -47,6 +75,8 @@ void align_all_tops(std::vector<eh::settings_monitors::MonitorRow>& outputs,
 
 struct MonitorsTabLayout {
   int toolbar_refresh_x = 0;
+  int toolbar_portals_x = 0;
+  int toolbar_portals_w = 0;
   int toolbar_apply_x = 0;
   int toolbar_revert_x = 0;
   int toolbar_y = 0;

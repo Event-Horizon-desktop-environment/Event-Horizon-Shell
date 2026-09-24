@@ -1,5 +1,6 @@
 #include "services/bluetooth/bluez_service.hpp"
 
+#include "configuration/shell_config.hpp"
 #include "platform/rfkill_helper.h"
 
 #include <sdbus-c++/Error.h>
@@ -8,10 +9,14 @@
 #include <sdbus-c++/Types.h>
 
 #include <algorithm>
+#include <condition_variable>
 #include <exception>
 #include <iostream>
 #include <map>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -112,7 +117,14 @@ BluezService& BluezService::instance() {
 }
 
 BluezService::BluezService() = default;
-BluezService::~BluezService() = default;
+BluezService::~BluezService() {
+  {
+    std::lock_guard<std::mutex> lock(worker_mtx_);
+    stopWorker_ = true;
+  }
+  worker_cv_.notify_all();
+  if (worker_.joinable()) worker_.join();
+}
 
 void BluezService::start() {
    
@@ -123,10 +135,17 @@ void BluezService::start() {
   bus_ = sdbus::createSystemBusConnection();
   objmgr_ = sdbus::createProxy(*bus_, kBluez, kBluezRoot);
 
+  // Seed the auto-reconnect preference from persisted config; the Settings UI
+  // overrides it live via set_auto_reconnect().
+  autoReconnect_.store(eh::config::shell_config_snapshot().bluetooth.autoReconnect,
+                       std::memory_order_relaxed);
+
   bind_signals_locked();
   refresh_locked();
 
   bus_->enterEventLoopAsync();
+
+  worker_ = std::thread([this]() { auto_reconnect_worker(); });
 }
 
 void BluezService::start_discovery() {
@@ -224,6 +243,7 @@ void BluezService::bind_signals_locked() {
         d.has_battery = true;
         d.battery_percent = get_or<uint8_t>(batIt->second, "Percentage", 0);
       }
+      if (d.connected) mark_connected_locked(d.address);
       bool found = false;
       for (auto& existing : devices_) {
         if (existing.path == d.path) {
@@ -284,7 +304,7 @@ void BluezService::bind_signals_locked() {
       [this, debounce_ms](const std::string& iface,
                           const std::map<std::string, sdbus::Variant>& props,
                           const std::vector<std::string>& ) {
-    if (iface != kAdapter && iface != kDevice) return;
+    if (iface != kAdapter && iface != kDevice && iface != kBattery) return;
     std::lock_guard<std::mutex> lock(mtx_);
     if (iface == kAdapter) {
       auto pit = props.find("Powered");
@@ -305,6 +325,7 @@ void BluezService::bind_signals_locked() {
           if (dev.path == path) {
             auto it = props.find("Connected");
             if (it != props.end()) dev.connected = it->second.get<bool>();
+            if (dev.connected) mark_connected_locked(dev.address);
             it = props.find("Paired");
             if (it != props.end()) dev.paired = it->second.get<bool>();
             it = props.find("Trusted");
@@ -348,6 +369,35 @@ void BluezService::bind_signals_locked() {
       } catch (const std::exception&) {
       }
       // Device not found in list or failed to read message path — full refresh
+      auto now = std::chrono::steady_clock::now();
+      if (now - lastRefreshDebounce_ >= debounce_ms()) {
+        lastRefreshDebounce_ = now;
+        refresh_locked();
+      }
+    } else if (iface == kBattery) {
+      // Live battery updates (org.bluez.Battery1) — headphones, HID devices,
+      // GATT Battery Service etc. report here and we must forward them so the
+      // dock label and popup stay current without a full re-enumeration.
+      try {
+        auto msg = objmgr_->getCurrentlyProcessedMessage();
+        std::string path = msg.getPath();
+        for (auto& dev : devices_) {
+          if (dev.path == path) {
+            auto pit = props.find("Percentage");
+            if (pit != props.end()) {
+              try {
+                dev.battery_percent = pit->second.get<uint8_t>();
+                dev.has_battery = true;
+              } catch (...) {}
+            }
+            if (on_change_) on_change_();
+            return;
+          }
+        }
+      } catch (const sdbus::Error&) {
+      } catch (const std::exception&) {
+      }
+      // Device not in the cached list — full refresh picks it up.
       auto now = std::chrono::steady_clock::now();
       if (now - lastRefreshDebounce_ >= debounce_ms()) {
         lastRefreshDebounce_ = now;
@@ -466,7 +516,10 @@ void BluezService::refresh_locked() {
       }
 
       if (d.paired) paired++;
-      if (d.connected) connected++;
+      if (d.connected) {
+        connected++;
+        mark_connected_locked(d.address);
+      }
       newDevices.push_back(std::move(d));
     }
   } catch (const std::exception&) {
@@ -495,6 +548,14 @@ void BluezService::disconnect_device(const std::string& path) {
    
   std::lock_guard<std::mutex> lock(mtx_);
   if (!started_) return;
+  // Honour explicit disconnects: keep auto-reconnect away from this device for
+  // a few minutes instead of immediately bringing it back.
+  for (const auto& d : devices_) {
+    if (d.path == path) {
+      settle_on_disconnected(d.address);
+      break;
+    }
+  }
   try {
     auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
     dev->callMethod("Disconnect").onInterface(kDevice);
@@ -535,6 +596,80 @@ void BluezService::set_device_trust(const std::string& path, bool trusted) {
     auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
     dev->setProperty("Trusted").onInterface(kDevice).toValue(trusted);
   } catch (const sdbus::Error&) {
+  }
+}
+
+void BluezService::set_auto_reconnect(bool enabled) {
+  autoReconnect_.store(enabled, std::memory_order_relaxed);
+}
+
+bool BluezService::auto_reconnect() const noexcept {
+  return autoReconnect_.load(std::memory_order_relaxed);
+}
+
+// Caller must hold mtx_.
+void BluezService::mark_connected_locked(const std::string& address) {
+  if (address.empty()) return;
+  everConnected_.insert(address);
+  // A freshly connected device is no longer in a cooldown; a later drop can be
+  // retried promptly.
+  reconnectCooldown_.erase(address);
+}
+
+// Caller must hold mtx_. Pushes the next auto-reconnect attempt for this device
+// well into the future so an explicit disconnect sticks.
+void BluezService::settle_on_disconnected(const std::string& address) {
+  if (address.empty()) return;
+  reconnectCooldown_[address] = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+}
+
+void BluezService::auto_reconnect_worker() {
+  std::unique_lock<std::mutex> lock(worker_mtx_);
+  while (!stopWorker_) {
+    worker_cv_.wait_for(lock, std::chrono::seconds(5), [this]() { return stopWorker_; });
+    if (stopWorker_) break;
+    lock.unlock();
+    attempt_auto_reconnects();
+    lock.lock();
+  }
+}
+
+void BluezService::attempt_auto_reconnects() {
+  if (!autoReconnect_.load(std::memory_order_relaxed)) return;
+
+  struct Candidate {
+    std::string path;
+    std::string address;
+  };
+  std::vector<Candidate> candidates;
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!started_ || !bus_ || !snap_.available || !snap_.powered || snap_.scanning) return;
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& d : devices_) {
+      if (!d.paired || d.connected || d.address.empty()) continue;
+      // Only nudge devices that are currently visible (RSSI present) or have
+      // been connected during this process lifetime. This avoids paging
+      // paired-but-never-used devices forever.
+      if (!d.has_rssi && everConnected_.count(d.address) == 0) continue;
+      auto it = reconnectCooldown_.find(d.address);
+      if (it != reconnectCooldown_.end() && now < it->second) continue;
+      candidates.push_back({d.path, d.address});
+    }
+  }
+
+  for (const auto& c : candidates) {
+    try {
+      auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{c.path});
+      dev->callMethod("Connect").onInterface(kDevice);
+    } catch (const sdbus::Error&) {
+    } catch (const std::exception&) {
+    }
+    // One attempt per minute per device keeps the radio quiet while a device
+    // is out of range, but reconnects promptly once it comes back.
+    const auto after = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(mtx_);
+    reconnectCooldown_[c.address] = after + std::chrono::seconds(60);
   }
 }
 

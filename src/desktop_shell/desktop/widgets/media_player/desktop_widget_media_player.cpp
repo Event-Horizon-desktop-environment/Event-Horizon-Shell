@@ -185,6 +185,38 @@ Layout compute_layout(int titleH, int artistH, int albumH,
   return L;
 }
 
+// Static card metrics (pure function of ui scale). Shared by paint,
+// on_click and hit_test_hover so the three can never drift (see
+// Docs/hit-testing.md).
+struct CardMetrics {
+  double kW = 0, kOuterMargin = 0, kCloseBtnSize = 0, kCloseBtnMarg = 0;
+  double kInnerX = 0, kInnerY = 0, kInnerW = 0;
+  double kCloseBtnCx = 0, kCloseBtnCy = 0;
+  double kBtnSmall = 0, kBtnPlay = 0, kBtnGap = 0;
+  double kColW = 0, kColPadX = 0, kColX = 0, kSeekAreaH = 0;
+};
+
+inline CardMetrics card_metrics(double us) {
+  CardMetrics m;
+  m.kW = 340.0 * us;
+  m.kOuterMargin = 14.0 * us;
+  m.kCloseBtnSize = 32.0 * us;
+  m.kCloseBtnMarg = 8.0 * us;
+  m.kInnerX = m.kOuterMargin;
+  m.kInnerY = m.kOuterMargin;
+  m.kInnerW = m.kW - 2.0 * m.kOuterMargin;
+  m.kCloseBtnCx = m.kInnerX + m.kInnerW - m.kCloseBtnMarg - m.kCloseBtnSize / 2.0;
+  m.kCloseBtnCy = m.kInnerY + m.kCloseBtnMarg + m.kCloseBtnSize / 2.0;
+  m.kBtnSmall = 42.0 * kBoost * us;
+  m.kBtnPlay = 52.0 * kBoost * us;
+  m.kBtnGap = 14.0 * kBoost * us;
+  m.kColW = m.kInnerW - 28.0 * us;
+  m.kColPadX = 14.0 * us;
+  m.kColX = m.kInnerX + m.kColPadX;
+  m.kSeekAreaH = 22.0 * us;
+  return m;
+}
+
 bool hit_circle(double px, double py, double cx, double cy, double r) {
    
   const double dx = px - cx, dy = py - cy;
@@ -241,25 +273,20 @@ bool DesktopMediaPlayerWidget::on_click(double x, double y) {
    
   const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
 
-  const double kW = 340.0 * us;
-  const double kOuterMargin = 14.0 * us;
-  const double kCloseBtnSize = 32.0 * us;
-  const double kCloseBtnMarg = 8.0 * us;
-  const double kInnerX = kOuterMargin;
-  const double kInnerY = kOuterMargin;
-  const double kInnerW = kW - 2.0 * kOuterMargin;
-  const double kCloseBtnCx = kInnerX + kInnerW - kCloseBtnMarg - kCloseBtnSize / 2.0;
-  const double kCloseBtnCy = kInnerY + kCloseBtnMarg + kCloseBtnSize / 2.0;
+  const CardMetrics M = card_metrics(us);
+  const double kW = M.kW;
+  const double kCloseBtnSize = M.kCloseBtnSize;
+  const double kCloseBtnCx = M.kCloseBtnCx;
+  const double kCloseBtnCy = M.kCloseBtnCy;
 
-  const double kColW = kInnerW - 28.0 * us;
-  const double kColPadX = 14.0 * us;
-  const double kColX = kInnerX + kColPadX;
+  const double kColW = M.kColW;
+  const double kColX = M.kColX;
 
-  const double kBtnSmall = 42.0 * kBoost * us;
-  const double kBtnPlay  = 52.0 * kBoost * us;
-  const double kBtnGap   = 14.0 * kBoost * us;
+  const double kBtnSmall = M.kBtnSmall;
+  const double kBtnPlay  = M.kBtnPlay;
+  const double kBtnGap   = M.kBtnGap;
 
-  const double kSeekAreaH = 22.0 * us;
+  const double kSeekAreaH = M.kSeekAreaH;
 
   // Font strings
   char titleFont[64], artistFont[64], albumFont[64];
@@ -318,24 +345,19 @@ DesktopMediaPlayerWidget::hit_test_hover(double x, double y) const {
    
   const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
 
-  const double kW = 340.0 * us;
-  const double kOuterMargin = 14.0 * us;
-  const double kCloseBtnSize = 32.0 * us;
-  const double kCloseBtnMarg = 8.0 * us;
-  const double kInnerX = kOuterMargin;
-  const double kInnerY = kOuterMargin;
-  const double kInnerW = kW - 2.0 * kOuterMargin;
-  const double kCloseBtnCx = kInnerX + kInnerW - kCloseBtnMarg - kCloseBtnSize / 2.0;
-  const double kCloseBtnCy = kInnerY + kCloseBtnMarg + kCloseBtnSize / 2.0;
+  const CardMetrics M = card_metrics(us);
+  const double kW = M.kW;
+  const double kCloseBtnSize = M.kCloseBtnSize;
+  const double kCloseBtnCx = M.kCloseBtnCx;
+  const double kCloseBtnCy = M.kCloseBtnCy;
 
-  const double kBtnSmall = 42.0 * kBoost * us;
-  const double kBtnPlay  = 52.0 * kBoost * us;
-  const double kBtnGap   = 14.0 * kBoost * us;
+  const double kBtnSmall = M.kBtnSmall;
+  const double kBtnPlay  = M.kBtnPlay;
+  const double kBtnGap   = M.kBtnGap;
 
-  const double kColW = kInnerW - 28.0 * us;
-  const double kColPadX = 14.0 * us;
-  const double kColX = kInnerX + kColPadX;
-  const double kSeekAreaH = 22.0 * us;
+  const double kColW = M.kColW;
+  const double kColX = M.kColX;
+  const double kSeekAreaH = M.kSeekAreaH;
 
   if (hit_circle(x, y, kCloseBtnCx, kCloseBtnCy, kCloseBtnSize / 2.0))
     return HoverClose;
@@ -373,24 +395,23 @@ void DesktopMediaPlayerWidget::paint(cairo_t* cr, const eh::config::ShellConfig&
   const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
   const auto& mc = eh::config::derived_chrome_colors(sc.appearance);
 
-  const double kW = 340.0 * us;
+  const CardMetrics M = card_metrics(us);
+  const double kW = M.kW;
   const double kH = 420.0 * us;
   const double kOuterR = 22.0 * us;
-  const double kOuterMargin = 14.0 * us;
-  const double kInnerX = kOuterMargin;
-  const double kInnerY = kOuterMargin;
-  const double kInnerW = kW - 2.0 * kOuterMargin;
+  const double kOuterMargin = M.kOuterMargin;
+  const double kInnerX = M.kInnerX;
+  const double kInnerY = M.kInnerY;
+  const double kInnerW = M.kInnerW;
   const double kInnerH = kH - 2.0 * kOuterMargin;
   const double kInnerR = 18.0 * us;
-  const double kColW = kInnerW - 28.0 * us;
-  const double kColPadX = 14.0 * us;
-  const double kColX = kInnerX + kColPadX;
+  const double kColW = M.kColW;
+  const double kColX = M.kColX;
   const double kContentTopPad = 8.0 * us;
-  const double kCloseBtnSize = 32.0 * us;
+  const double kCloseBtnSize = M.kCloseBtnSize;
   const double kCloseBtnIcon = 18.0 * us;
-  const double kCloseBtnMarg = 8.0 * us;
-  const double kCloseBtnCx = kInnerX + kInnerW - kCloseBtnMarg - kCloseBtnSize / 2.0;
-  const double kCloseBtnCy = kInnerY + kCloseBtnMarg + kCloseBtnSize / 2.0;
+  const double kCloseBtnCx = M.kCloseBtnCx;
+  const double kCloseBtnCy = M.kCloseBtnCy;
   const double kArtSize = std::clamp(kColW * 0.52, 80.0 * us, 220.0 * us);
   const double kArtR = kArtSize / 2.0;
   const double kArtTop = kInnerY + kContentTopPad;

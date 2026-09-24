@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <iomanip>
+#include <iostream>
 #include <poll.h>
 #include <csignal>
 #include <signal.h>
@@ -51,9 +52,11 @@ static bool prepare_slot(PollSlot& slot) {
   return ok;
 }
 
-// Returns false when the display has hit a fatal error.
-static bool finish_slot(PollSlot& slot, short revents) {
-   
+// Returns false when the display has hit a fatal error (or on_dispatch asked
+// to stop). `why` names the branch so the one-line loop-exit log below is
+// actionable when a child shell dies for no visible reason.
+static bool finish_slot(PollSlot& slot, short revents, const char** why = nullptr) {
+  auto say = [why](const char* s) { if (why) *why = s; };
   slot.revents = revents;
   if (!slot.display || !slot.state.read_armed) return true;
   bool did_read = false;
@@ -61,11 +64,13 @@ static bool finish_slot(PollSlot& slot, short revents) {
   slot.did_read = did_read;
   if (!ok) {
     slot.ok = false;
+    say("after_ppoll: display read error");
     if (slot.on_error) slot.on_error();
   }
   if (ok && did_read && slot.on_dispatch) {
     if (!slot.on_dispatch()) {
       slot.ok = false;
+      say("on_dispatch returned false");
     }
   }
   return slot.ok;
@@ -95,6 +100,11 @@ int PollMuxLoop::run(bool* running) const {
 
   // The slot set is fixed for the loop's lifetime (primary display + extras), so
   // build it once and just reset per-iteration state.
+  // One line on loop exit: which condition stopped it. A child that "just
+  // dies" almost always ends here, and without this the reason is invisible
+  // (stdout is buffered and the teardown that follows can crash).
+  const char* exitReason = "loop condition";
+
   const std::size_t n_extra = extra_displays.size();
   std::vector<PollSlot> slots;
   slots.reserve(1 + n_extra);
@@ -107,7 +117,10 @@ int PollMuxLoop::run(bool* running) const {
     if (on_display) {
       ps.on_dispatch = [this] { return on_display(); };
     }
-    ps.on_error = [running] { *running = false; };
+    ps.on_error = [running, &exitReason] {
+      *running = false;
+      exitReason = "primary display error (prepare/poll)";
+    };
     slots.push_back(std::move(ps));
   }
 
@@ -149,6 +162,7 @@ int PollMuxLoop::run(bool* running) const {
         if (!prepare_slot(slot)) {
           if (slot.fd == display_fd) {
             *running = false;
+            exitReason = "primary display error (before_ppoll)";
             break;
           }
           // A dead extra display keeps a pending error and would fail before_ppoll on
@@ -221,7 +235,11 @@ int PollMuxLoop::run(bool* running) const {
     sigdelset(&ppoll_mask, SIGTERM);
     sigdelset(&ppoll_mask, SIGINT);
     const int r = ppoll(fds.data(), static_cast<nfds_t>(fds.size()), &timeout, &ppoll_mask);
-    if (r < 0 || g_poll_mux_signal) break;
+    if (r < 0) {
+      exitReason = "ppoll failed";
+      break;
+    }
+    if (g_poll_mux_signal) break;
     const long ms_ppoll = ms_between(t_ppoll, steady_clock::now());
     wl_loop_diag::log_ppoll_wait("poll_mux", r, ms_ppoll);
 
@@ -247,8 +265,10 @@ int PollMuxLoop::run(bool* running) const {
       if (n_slots > 0) {
         const int fd_idx = slot_fds_idx[0];
         const short rev = (fd_idx >= 0 && fd_idx < static_cast<int>(fds.size())) ? fds[fd_idx].revents : 0;
-        if (!finish_slot(slots[0], rev)) {
+        const char* slotWhy = nullptr;
+        if (!finish_slot(slots[0], rev, &slotWhy)) {
           *running = false;
+          if (slotWhy) exitReason = slotWhy;
         }
         if (slots[0].did_read) any_did_read = true;
       }
@@ -262,6 +282,7 @@ int PollMuxLoop::run(bool* running) const {
       const int fd_idx = slot_fds_idx[0];
       if (fd_idx >= 0 && fd_idx < static_cast<int>(fds.size()) && fds[fd_idx].revents & (POLLERR | POLLHUP)) {
         *running = false;
+        exitReason = "display fd POLLERR/POLLHUP (displayless path)";
         break;
       }
     }
@@ -306,6 +327,10 @@ int PollMuxLoop::run(bool* running) const {
       wl_loop_diag::log_stall_if_slow("poll_mux", "on_idle_flush_total", ms_between(tidle, steady_clock::now()));
     }
   }
+
+  if (g_poll_mux_signal) exitReason = "signal (SIGTERM/SIGINT)";
+  std::cerr << "[poll_mux] exit reason=" << exitReason << " running=" << (*running ? 1 : 0)
+            << " signal=" << g_poll_mux_signal << "\n";
 
   (void)sigprocmask(SIG_SETMASK, &old_mask, nullptr);
   return 0;

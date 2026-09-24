@@ -17,4 +17,11 @@ struct StreamIconIds {
 [[nodiscard]] const eh::icons::IconEntry* resolve_mixer_stream_theme_icon(eh::icons::IconCache& icons,
                                                                           const StreamIconIds& s);
 
+// Winning-key variant: records which single lookup reproduces the result as
+// "a:<key>" / "t:<key>" (empty when nothing resolved), so paint can memoize
+// one cheap call per stream instead of the full ~20-attempt cascade.
+[[nodiscard]] const eh::icons::IconEntry* resolve_mixer_stream_theme_icon(eh::icons::IconCache& icons,
+                                                                          const StreamIconIds& s,
+                                                                          std::string* outWinningKey);
+
 }

@@ -1561,14 +1561,6 @@ void draw(App& app) {
 
   settings_paint_mode_dropdown_popups(app, cr, contentX, contentW, glassOv);
 
-  if (app.activeTab == 9 && app.launcherViewModeDropdownOpen) {
-    int vcx, vcy, vcw, vch;
-    launcher_view_mode_combo_geom(contentX, contentW, &vcx, &vcy, &vcw, &vch);
-    const int ly = vcy + vch + 2;
-    settings_paint_combo_list_popup(app, cr, vcx, ly, vcw, kSettingsDdRowH, kViewModeCount, kViewModeLabels,
-                                    app.settings.launchpadViewMode, app.launcherViewModeDropdownHoverRow, glassOv);
-  }
-
   if (needEmbedGroup) {
     debug_log("settings", "draw: embed group pop+translate %.3f embedPresentT=%.3f",
               (1.0 - static_cast<double>(app.embedPresentT)) * kEmbedSlidePx, app.embedPresentT);

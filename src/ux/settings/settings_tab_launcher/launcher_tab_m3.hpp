@@ -98,7 +98,7 @@ inline void launcher_paint_child_tab_bar(cairo_t* cr, int contentX, int contentW
 
 // Launcher M3 state.
 struct LauncherTabM3State {
-  Slider laSlider[9];
+  Slider laSlider[11];
   Slider wsSlider[2];
   Slider ovSlider[5];
   Toggle wsShowApps;
@@ -106,7 +106,6 @@ struct LauncherTabM3State {
   Toggle ovMultiMonitor;
 
   // Segmented-option chip rects from the last paint (x, y, w, h).
-  float viewChipRect[2][4]{};
   float axisChipRect[2][4]{};
   float captureChipRect[2][4]{};
 
@@ -137,7 +136,7 @@ struct LauncherTabM3State {
       w.setSurfaceColor(surfaceR_, surfaceG_, surfaceB_);
       w.setTextColor(textR_, textG_, textB_);
     };
-    for (int i = 0; i < 9; ++i) apply(laSlider[i]);
+    for (int i = 0; i < 11; ++i) apply(laSlider[i]);
     for (int i = 0; i < 2; ++i) apply(wsSlider[i]);
     for (int i = 0; i < 5; ++i) apply(ovSlider[i]);
     apply(wsShowApps);
@@ -158,7 +157,7 @@ struct LauncherTabM3State {
     const float px = lx(app);
     const float py = ly(app);
     auto setH = [&](auto& w) { w.setHovered(w.containsPoint(px, py)); };
-    for (int i = 0; i < 9; ++i) setH(laSlider[i]);
+    for (int i = 0; i < 11; ++i) setH(laSlider[i]);
     for (int i = 0; i < 2; ++i) setH(wsSlider[i]);
     for (int i = 0; i < 5; ++i) setH(ovSlider[i]);
     setH(wsShowApps);
@@ -179,7 +178,8 @@ struct LauncherTabM3State {
         case 6: return s.launchpadGridRows;
         case 7: return s.slotPillOpacity;
         case 8: return s.launchpadDpiScalePct;
-        default: return 0;
+        case 9: return s.launchpadFolderColumns;
+        default: return s.launchpadFolderRows;
       }
     }
     if (child == 1) return (idx == 0) ? s.workspacesMaxSlots : s.workspacesMaxIcons;
@@ -205,6 +205,8 @@ struct LauncherTabM3State {
         case 6: s.launchpadGridRows = v; break;
         case 7: s.slotPillOpacity = v; s.taskbarSlotPillOpacity = v; break;
         case 8: s.launchpadDpiScalePct = v; break;
+        case 9: s.launchpadFolderColumns = v; break;
+        default: s.launchpadFolderRows = v; break;
       }
       return;
     }
@@ -317,13 +319,15 @@ struct LauncherTabM3State {
     };
 
     if (app.launcherChildTab == 0) {
-      lay.beginGroup(app, cr, glassOv, "Layout", "Scale and spacing for the launcher grid", 0, 5,
+      lay.beginGroup(app, cr, glassOv, "Layout", "Scale and spacing for the launcher grid", 0, 7,
                      textR_, textG_, textB_);
       paintSliderCard(laSlider[0], 0, 0, 70, 150, "Layout scale", "%d %%");
       paintSliderCard(laSlider[1], 0, 1, 30, 95, "Icon size", "%d %%");
       paintSliderCard(laSlider[2], 0, 2, 0, 24, "Icon spacing", "%d px");
       paintSliderCard(laSlider[3], 0, 3, 50, 200, "Folder size", "%d %%");
       paintSliderCard(laSlider[4], 0, 4, 4, 48, "Folder spacing", "%d px");
+      paintSliderCard(laSlider[9], 0, 9, 2, 8, "Folder columns", "%d");
+      paintSliderCard(laSlider[10], 0, 10, 1, 6, "Folder rows", "%d");
       lay.endGroup();
 
       lay.beginGroup(app, cr, glassOv, "Grid", "Columns, rows, and DPI scaling", 0, 3,
@@ -333,11 +337,8 @@ struct LauncherTabM3State {
       paintSliderCard(laSlider[8], 0, 8, 50, 300, "DPI scale", "%d %%");
       lay.endGroup();
 
-      lay.beginGroup(app, cr, glassOv, "Appearance", "Opacity and default view mode", 1, 1,
+      lay.beginGroup(app, cr, glassOv, "Appearance", "Widget opacity", 1, 1,
                      textR_, textG_, textB_);
-      static const char* const kViewModeLabels[] = {"Grid", "List"};
-      paintOptionRow(cr, app, lay, "View mode", 2, kViewModeLabels, app.settings.launchpadViewMode,
-                     viewChipRect);
       paintSliderCard(laSlider[7], 0, 7, 0, 100, "Widget opacity", "%d %%");
       lay.endGroup();
     } else if (app.launcherChildTab == 1) {
@@ -380,7 +381,7 @@ struct LauncherTabM3State {
   }
 
   Slider* sliderFor(int child, int idx) {
-    if (child == 0) return (idx >= 0 && idx < 9) ? &laSlider[idx] : nullptr;
+    if (child == 0) return (idx >= 0 && idx < 11) ? &laSlider[idx] : nullptr;
     if (child == 1) return (idx >= 0 && idx < 2) ? &wsSlider[idx] : nullptr;
     return (idx >= 0 && idx < 5) ? &ovSlider[idx] : nullptr;
   }
@@ -390,15 +391,7 @@ struct LauncherTabM3State {
     const int child = app.launcherChildTab;
 
     if (child == 0) {
-      const int chip = hitChip(viewChipRect, 2, px, py);
-      if (chip >= 0) {
-        if (chip != app.settings.launchpadViewMode) {
-          app.settings.launchpadViewMode = chip;
-          dirty_ = true;
-        }
-        return true;
-      }
-      for (int i = 0; i < 9; ++i) {
+      for (int i = 0; i < 11; ++i) {
         if (laSlider[i].containsPoint(px, py)) {
           laSlider[i].handlePointerDown(px, py);
           activeChild_ = 0;
@@ -500,7 +493,7 @@ struct LauncherTabM3State {
     activeSlider_ = -1;
     dirty_ = false;
     auto reset = [&](auto& w) { w.handlePointerLeave(); };
-    for (int i = 0; i < 9; ++i) reset(laSlider[i]);
+    for (int i = 0; i < 11; ++i) reset(laSlider[i]);
     for (int i = 0; i < 2; ++i) reset(wsSlider[i]);
     for (int i = 0; i < 5; ++i) reset(ovSlider[i]);
     reset(wsShowApps);

@@ -42,8 +42,30 @@ static bool dock_pick_adjacent_pinned_to_running_app(const PickSlot& a, const Pi
   return a.kind == PickSlot::Kind::App && a.isPinned && b.kind == PickSlot::Kind::App && !b.isPinned;
 }
 
+// Retained paint rects first: paint and input share one geometry (see
+// Docs/hit-testing.md). Returns true when the pick was resolved through
+// retained rects (hit or definitive row miss handled by caller fallback).
+// Any staleness (size/key mismatch) falls back to computed layout.
+static bool dock_pick_retained(DockApp& app, DockPickResult& r, double px, double py) {
+  const auto& retained = app.dockRetainedHits;
+  if (retained.empty() || retained.size() != r.all.size()) return false;
+  for (size_t i = 0; i < r.all.size(); ++i) {
+    if (retained[i].key != r.all[i].key) return false;
+  }
+  const double rowPad = 8.0 * dock_ui_scale(app.settings);
+  const auto& first = retained.front();
+  if (py < first.y - rowPad || py > first.y + first.h + rowPad) return false;
+  for (size_t i = 0; i < r.all.size(); ++i) {
+    const auto& h = retained[i];
+    if (px >= h.x && px < h.x + h.w) {
+      r.idx = static_cast<int>(i);
+      return true;
+    }
+  }
+  return false;
+}
+
 double dock_gap_after_pick(const DockSettings& st, const std::vector<PickSlot>& v, size_t idx, double defGap) {
-   
   if (idx + 1 >= v.size()) return 0.0;
   if (dock_pick_adjacent_tray(v[idx], v[idx + 1])) return 0.0;
   if (dock_pick_adjacent_pinned_tray_pill(st, v[idx], v[idx + 1])) return 0.0;
@@ -58,7 +80,7 @@ double dock_gap_after_pick(const DockSettings& st, const std::vector<PickSlot>& 
   if (widgetToken == "pinned_apps" || widgetToken == "running_apps") return false;
   if (eh::config::widget_token_is_system_tray(widgetToken)) return false;
   if (widgetToken == "settings_button" || widgetToken == "distro_spotlight" || widgetToken == "app_menu" ||
-      widgetToken == "launchpad" || widgetToken == "trash")
+      widgetToken == "trash")
     return false;
   const std::string impl = eh::config::widget_implementation_type(widgetToken);
   return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" || impl == "control_center" ||
@@ -159,11 +181,6 @@ void dock_fill_pick_result_slots(DockApp& app, const eh::shell::shared::RunningS
       sm.kind = PickSlot::Kind::Smenu;
       sm.key = eh::shell::kSlotKeySmenu;
       out.push_back(std::move(sm));
-    } else if (w == "launchpad" || eh::config::widget_implementation_type(w) == "launchpad") {
-      PickSlot lp;
-      lp.kind = PickSlot::Kind::Launchpad;
-      lp.key = w;
-      out.push_back(std::move(lp));
     } else if (eh::config::widget_implementation_type(w) == "clock") {
       PickSlot cs;
       cs.kind = PickSlot::Kind::Clock;
@@ -290,33 +307,11 @@ double dock_pick_layout_total_width(const DockApp& app, const std::vector<PickSl
   return total;
 }
 
-namespace {
-
-struct PickStripGeom {
-  double icon = 0;
-  double gap = 0;
-  double stripInner = 0;
-  double midX = 0;
-  std::vector<double> w;
-  double concatTotal = 0;
-  double startX = 0;
-  double lw = 0;
-  double rw = 0;
-  double centerSectionW = 0;
-  double secGap = 0;
-  bool use_lr = false;
-  double xl = 0;
-  double xr = 0;
-  double total_for_scale = 0;
-  double hScale = 1;
-};
-
-PickStripGeom compute_pick_strip_geom(const DockApp& app, const DockPickResult& pr, double pill_x, double box_w) {
-   
-  PickStripGeom g;
+DockStripGeom dock_compute_strip_geom(const DockApp& app, const DockPickResult& pr, double pill_x, double box_w) {
+  DockStripGeom g;
   g.icon = static_cast<double>(dock_effective_icon_px(app.settings));
   g.gap = static_cast<double>(dock_effective_gap_px(app.settings));
-  g.stripInner = 8.0 * dock_ui_scale(app.settings);
+  g.stripInner = eh::shell::dock::dock_strip_inner_margin(app.settings);
   g.midX = pill_x + box_w * 0.5;
   const auto& scPick = eh::config::shell_config_snapshot();
   auto pick_slot_w = [&](const PickSlot& s) -> double {
@@ -392,7 +387,7 @@ PickStripGeom compute_pick_strip_geom(const DockApp& app, const DockPickResult& 
   return g;
 }
 
-double pick_slot_left_layout(const DockApp& app, const DockPickResult& pr, const PickStripGeom& g, int idx) {
+double dock_slot_layout_x(const DockApp& app, const DockPickResult& pr, const DockStripGeom& g, int idx) {
    
   if (idx < 0 || static_cast<size_t>(idx) >= pr.all.size()) return 0.0;
   const size_t u = static_cast<size_t>(idx);
@@ -423,8 +418,6 @@ double pick_slot_left_layout(const DockApp& app, const DockPickResult& pr, const
   return c;
 }
 
-}
-
 DockPickResult dock_pick_at(DockApp& app, double px, double py) {
    
   DockPickResult r;
@@ -435,12 +428,17 @@ DockPickResult dock_pick_at(DockApp& app, double px, double py) {
   dock_fill_pick_result_slots(app, hitSnap, app.settings.leftWidgets, app.settings.centerWidgets, app.settings.rightWidgets,
                                r);
 
+  // Retained paint rects first (single source of truth). Falls through to
+  // computed layout only when paint hasn't run yet or the slot set changed
+  // without a repaint.
+  if (dock_pick_retained(app, r, px, py)) return r;
+
   double x{};
   double y{};
   double boxW{};
   double boxH{};
   dock_pill_geometry(app, x, y, boxW, boxH);
-  const PickStripGeom g = compute_pick_strip_geom(app, r, x, boxW);
+  const DockStripGeom g = dock_compute_strip_geom(app, r, x, boxW);
   const double iconY = y + (boxH - g.icon) / 2.0;
   const double pxL = strip_surface_x_to_layout(px, g.midX, g.hScale);
   const double rowPad = 8.0 * dock_ui_scale(app.settings);
@@ -452,7 +450,7 @@ DockPickResult dock_pick_at(DockApp& app, double px, double py) {
   if (pxL < stripLeftL || pxL > stripLeftL + stripW) return r;
 
   for (size_t i = 0; i < r.all.size(); i++) {
-    const double leftL = pick_slot_left_layout(app, r, g, static_cast<int>(i));
+    const double leftL = dock_slot_layout_x(app, r, g, static_cast<int>(i));
     const double sw = g.w[i];
     if (pxL >= leftL && pxL < leftL + sw) {
       r.idx = static_cast<int>(i);
@@ -471,8 +469,8 @@ double dock_strip_slot_center_x(const DockApp& app, const DockPickResult& pr, in
   }
   double px{}, py{}, boxW{}, boxH{};
   dock_pill_geometry(app, px, py, boxW, boxH);
-  const PickStripGeom g = compute_pick_strip_geom(app, pr, px, boxW);
-  const double leftL = pick_slot_left_layout(app, pr, g, idx);
+  const DockStripGeom g = dock_compute_strip_geom(app, pr, px, boxW);
+  const double leftL = dock_slot_layout_x(app, pr, g, idx);
   const double cxLayout = leftL + g.w[static_cast<size_t>(idx)] * 0.5;
   return strip_layout_x_to_surface(cxLayout, g.midX, g.hScale);
 }
@@ -482,8 +480,8 @@ std::pair<double, double> dock_strip_slot_xw(const DockApp& app, const DockPickR
   if (idx < 0 || static_cast<size_t>(idx) >= pr.all.size()) return {0.0, 0.0};
   double px{}, py{}, boxW{}, boxH{};
   dock_pill_geometry(app, px, py, boxW, boxH);
-  const PickStripGeom g = compute_pick_strip_geom(app, pr, px, boxW);
-  const double leftL = pick_slot_left_layout(app, pr, g, idx);
+  const DockStripGeom g = dock_compute_strip_geom(app, pr, px, boxW);
+  const double leftL = dock_slot_layout_x(app, pr, g, idx);
   const double surfL = strip_layout_x_to_surface(leftL, g.midX, g.hScale);
   return {surfL, g.w[static_cast<size_t>(idx)] * g.hScale};
 }
@@ -493,8 +491,8 @@ int dock_pick_workspace_index(const DockApp& app, const DockPickResult& pr, int 
   if (idx < 0 || static_cast<size_t>(idx) >= pr.all.size()) return -1;
   double px{}, py{}, boxW{}, boxH{};
   dock_pill_geometry(app, px, py, boxW, boxH);
-  const PickStripGeom g = compute_pick_strip_geom(app, pr, px, boxW);
-  const double slotL = pick_slot_left_layout(app, pr, g, idx);
+  const DockStripGeom g = dock_compute_strip_geom(app, pr, px, boxW);
+  const double slotL = dock_slot_layout_x(app, pr, g, idx);
   const double slotW = g.w[static_cast<size_t>(idx)];
   const double pxL = strip_surface_x_to_layout(pointer_x, g.midX, g.hScale);
   const double localX = pxL - slotL;
