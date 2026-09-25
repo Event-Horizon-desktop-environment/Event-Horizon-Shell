@@ -2,6 +2,9 @@
 
 Event Horizon — Wayland-native desktop shell in C++23. Dock, taskbar, desktop, widgets, and settings as layer-shell clients for your compositor.
 
+
+[![This shells Theme song](https://img.youtube.com/vi/ghQDM-hdtxc/hqdefault.jpg)](https://www.youtube.com/watch?v=ghQDM-hdtxc)
+
 Event Horizon is a complete desktop shell that runs alongside Hyprland, Niri, Mango, Sway, Labwc, and Triad. Panels, desktop icons/widgets, control center, notifications, wallpaper, lock screen, OSD, and embedded settings — rendered with Cairo/Vulkan over `wlr-layer-shell`, configured from TOML under `~/.config/event-horizon/`.
 Main entry: **`EventHorizon`**, with focused `horizon-*` helpers sharing one core.
 
