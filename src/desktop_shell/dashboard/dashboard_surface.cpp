@@ -237,7 +237,7 @@ void dashboard_changed(DockApp& app) {
 void dashboard_ensure_trigger(DockApp& app) {
   auto& d = app.dash;
   if (d.trigSurface) return;
-  if (!d.cfgValid || !d.cfg.enabled) return;
+  if (!d.cfgValid || !d.cfg.enabled || !d.cfg.hoverReveal) return;
   if (!app.compositor || !app.layerShell || !app.shm) return;
   wl_output* out = pick_output(app);
   if (!out) return;

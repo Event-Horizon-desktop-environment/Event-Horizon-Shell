@@ -1,6 +1,9 @@
 #include "desktop_shell/controlcenter/layout/control_center_panel_geometry.hpp"
 
+#include "desktop_shell/controlcenter/layout/control_center_pear_layout.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
+#include "desktop_shell/controlcenter/state/control_center_pear_config.hpp"
+#include "desktop_shell/dock/widgets/dock_widget_tokens.hpp"
 #include "desktop_shell/shared/popup/geometry/layout.hpp"
 #include "desktop_shell/dock/core/dock_app.h"
 #include "desktop_shell/dock/input/dock_position.hpp"
@@ -68,7 +71,23 @@ double cc_layout_card_h() {
   return 92.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock);
 }
 
+int control_center_popup_width_for(const eh::config::ShellConfig& sc, const std::string& widgetId) {
+  namespace ccl = eh::shell::dock::control_center;
+  const double us = dock_ui_scale(sc.dock);
+  if (ccl::pear_layout_enabled(sc, widgetId)) return static_cast<int>(360.0 * us);
+  return static_cast<int>(620.0 * us);
+}
+
 double control_center_popup_height() {
+  const eh::config::ShellConfig& sc = eh::config::shell_config_snapshot();
+  if (eh::shell::dock::control_center::pear_layout_enabled(sc, "control_center")) {
+    eh::shell::dock::control_center::ControlCenterState def{};
+    const auto cfg = eh::shell::dock::control_center::pear_center_config(sc, "control_center");
+    return eh::shell::dock::control_center::cc_compute_pear_layout(
+               static_cast<double>(eh::shell::dock::kControlCenterPopupW()), def, cfg,
+               dock_ui_scale(sc.dock))
+        .totalH;
+  }
   eh::shell::dock::control_center::ControlCenterState def{};
   return eh::shell::dock::control_center::cc_compute_layout(
              static_cast<double>(eh::shell::dock::kControlCenterPopupW()), def,
@@ -79,12 +98,24 @@ double control_center_popup_height() {
 double control_center_popup_height(const DockApp& app) {
   namespace ccl = eh::shell::dock::control_center;
   const double W = static_cast<double>(app.popupW > 0 ? app.popupW : eh::shell::dock::kControlCenterPopupW());
+  const eh::config::ShellConfig& sc = eh::config::shell_config_snapshot();
   // Size with animations resolved to their targets so the surface is born at
   // its resting height; paint/hit keep using the interpolated (animated) form.
-  int wantH = static_cast<int>(std::ceil(
-      ccl::cc_compute_layout(W, const_cast<ccl::ControlCenterState&>(app.ccState),
-                             eh::shell::now_mono_ms(), true)
-          .totalH));
+  int wantH;
+  const std::string wid = dock_active_control_center_widget_id(app);
+  const std::string& widRef = wid.empty() ? std::string("control_center") : wid;
+  if (ccl::pear_layout_enabled(sc, widRef)) {
+    const auto cfg = ccl::pear_center_config(sc, widRef);
+    wantH = static_cast<int>(std::ceil(
+        ccl::cc_compute_pear_layout(W, const_cast<ccl::ControlCenterState&>(app.ccState), cfg,
+                                   dock_ui_scale(sc.dock))
+            .totalH));
+  } else {
+    wantH = static_cast<int>(std::ceil(
+        ccl::cc_compute_layout(W, const_cast<ccl::ControlCenterState&>(app.ccState),
+                               eh::shell::now_mono_ms(), true)
+            .totalH));
+  }
   // Clamp so fully-expanded content never runs under the dock: reserve the
   // bottom clearance plus a breathing row at the top.
   if (DockOutputLayer* L = dock_popup_margin_reference_layer(const_cast<DockApp&>(app))) {

@@ -44,19 +44,27 @@ struct DashMixerGeom {
 [[nodiscard]] std::vector<eh::shell::dock::control_center::ControlCenterWifiAp> dashboard_sorted_wifi_aps();
 [[nodiscard]] std::vector<eh::widgets::BluetoothDevice> dashboard_sorted_bt_devices();
 
-// Calendar grid metrics shared by layout (natural height) and paint.
-constexpr double kDashCalHeaderH = 44.0;
-constexpr double kDashCalDowH = 24.0;
-constexpr double kDashCalRowH = 40.0;
-constexpr double kDashCalBottomPad = 12.0;
+// Compact audio (volume/mic) row geometry from the card box alone: eyebrow
+// label on top, then icon + flat bar + percent. Shared paint/hit.
+struct DashAudioGeom {
+  double muteX = 0.0, muteY = 0.0, muteS = 28.0;  // mute hit box
+  double iconCX = 0.0, iconCY = 0.0;              // glyph center
+  double trackX = 0.0, trackY = 0.0, trackW = 0.0, trackH = 3.0;
+  double hitX = 0.0, hitY = 0.0, hitW = 0.0, hitH = 0.0;
+  double pctRightX = 0.0, pctBase = 0.0;  // percent label right edge + baseline
+};
+[[nodiscard]] DashAudioGeom dashboard_audio_geom(const CardRect& c);
 
 // Media progress bar geometry from the card box alone (shared paint/hit).
+// The bar lives in the text column; transport glyphs cluster right.
 struct DashMediaProgressGeom {
   double hitX = 0.0, hitY = 0.0, hitW = 0.0, hitH = 0.0;
   double trackX = 0.0, trackY = 0.0, trackW = 0.0, trackH = 0.0;
-  double labelBase = 0.0;
 };
 [[nodiscard]] DashMediaProgressGeom dashboard_media_progress_geom(const CardRect& c);
+// Media transport row: vertical center shared by art/text/buttons.
+[[nodiscard]] double dashboard_media_row_cy(const CardRect& c);
+[[nodiscard]] double dashboard_media_btn_cx(const CardRect& c, int idx);
 
 // Clock text honouring [time] (use24h / showSeconds / showDate / dateFormat /
 // customFormat / timezone). Never mutates the process TZ.

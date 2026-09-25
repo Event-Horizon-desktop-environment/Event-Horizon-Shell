@@ -11,6 +11,7 @@
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/common/monitor/output_assign.hpp"
 #include "desktop_shell/common/mem/periodic_trim.hpp"
+#include "desktop_shell/controlcenter/input/control_center_bus_hook.hpp"
 #include "desktop_shell/shared/core/config_watch.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
 #include "services/ipc/client.hpp"
@@ -169,6 +170,10 @@ int run_taskbar_standalone() {
   // supervisor flips the display, and the click handler flips the paint state
   // locally (existing null-gamma fallback).
   taskbar_set_nightlight_toggle_fn([&ipc]() { (void)ipc.publish("command.request", "nightlight.toggle"); });
+
+  // Control Centre PearCenter compact popup commands (DND / color scheme toggles).
+  eh::shell::dock::control_center::control_center_set_bus_publish_fn(
+      [&ipc](const std::string& payload) { (void)ipc.publish("command.request", payload); });
 
   // Own settings watcher: raw file edits are not broadcast on the bus; each
   // child watches its own config (mirrors horizon-dock / horizon-desktop).

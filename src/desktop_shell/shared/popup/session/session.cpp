@@ -7,6 +7,7 @@
 #include "desktop_shell/shared/popup/chrome/chrome.hpp"
 #include "desktop_shell/controlcenter/persist/control_center_persist.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_panel_geometry.hpp"
+#include "desktop_shell/dock/widgets/dock_widget_tokens.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
 #include "desktop_shell/dock/core/dock_boot_log.hpp"
 #include "desktop_shell/shared/popup/geometry/layout.hpp"
@@ -605,7 +606,11 @@ void popup_open_control_center(DockApp& app, int anchorX, uint32_t serial, bool 
     }
   }
   app.popupKind = DockApp::PopupKind::ControlCenter;
-  app.popupW = kControlCenterPopupW();
+  {
+    const std::string wid = dock_active_control_center_widget_id(app);
+    const std::string& widRef = wid.empty() ? std::string("control_center") : wid;
+    app.popupW = control_center_popup_width_for(eh::config::shell_config_snapshot(), widRef);
+  }
   app.popupH = static_cast<int>(std::ceil(control_center_popup_height(app)));
   app.popupAnchorX = anchorX;
   app.popupAnchorY = 0;

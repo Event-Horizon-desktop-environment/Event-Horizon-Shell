@@ -3,6 +3,9 @@
 #include "desktop_shell/dock/core/dock_app.h"
 #include "desktop_shell/dock/input/dock_position.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
+#include "desktop_shell/controlcenter/layout/control_center_pear_layout.hpp"
+#include "desktop_shell/controlcenter/state/control_center_pear_config.hpp"
+#include "desktop_shell/dock/widgets/dock_widget_tokens.hpp"
 #include "desktop_shell/controlcenter/debug/control_center_log.hpp"
 #include "desktop_shell/shared/popup/session/session.hpp"
 #include "desktop_shell/common/bench/shell_bench.hpp"
@@ -52,8 +55,23 @@ void popup_finish_draw(DockApp& app, bool vk_path, bool queue_caret_followup, bo
     const bool settled =
         cs.netAnimStartMs == 0 && cs.btAnimStartMs == 0 && cs.weatherAnimStartMs == 0;
     if (settled) {
-      const int wantH = static_cast<int>(std::ceil(
-          ccl::cc_compute_layout(static_cast<double>(app.popupW), cs, nowMs, true).totalH));
+      // Height must come from the same layout the popup paints with:
+      // comparing a PearCenter surface against the legacy height would
+      // recreate the popup on nearly every draw (visible flicker).
+      const eh::config::ShellConfig& sc = eh::config::shell_config_snapshot();
+      std::string wid = dock_active_control_center_widget_id(app);
+      if (wid.empty()) wid = "control_center";
+      int wantH;
+      if (ccl::pear_layout_enabled(sc, wid)) {
+        const auto cfg = ccl::pear_center_config(sc, wid);
+        wantH = static_cast<int>(std::ceil(
+            ccl::cc_compute_pear_layout(static_cast<double>(app.popupW), cs, cfg,
+                                        dock_ui_scale(sc.dock))
+                .totalH));
+      } else {
+        wantH = static_cast<int>(std::ceil(
+            ccl::cc_compute_layout(static_cast<double>(app.popupW), cs, nowMs, true).totalH));
+      }
       if (wantH != app.popupH && nowMs - cs.ccLastSettleResizeMs > 800) {
         cs.ccLastSettleResizeMs = nowMs;
         ccl::cc_log("settle-resize surface=" + std::to_string(app.popupH) +

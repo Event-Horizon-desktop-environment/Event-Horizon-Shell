@@ -14,11 +14,15 @@
 #include "ux/settings/settings_tab_dock_appearance/settings_tab_dock_appearance.hpp"
 #include "ux/settings/settings_tab_sound/settings_tab_sound.hpp"
 #include "ux/settings/settings_tab_monitors/settings_tab_monitors.hpp"
+#include "ux/settings/settings_tab_accounts/settings_tab_accounts.hpp"
+#include "ux/settings/settings_tab_time/settings_tab_time.hpp"
+#include "ux/settings/settings_tab_autostart/settings_tab_autostart.hpp"
 #include "ux/settings/settings_tab_wallpaper/settings_tab_wallpaper.hpp"
 #include "ux/settings/settings_tab_appearance/settings_tab_appearance.hpp"
 #include "ux/settings/settings_tab_mango/settings_tab_mango.hpp"
 #include "ux/settings/settings_tab_hyprland/settings_tab_hyprland.hpp"
 #include "ux/settings/settings_tab_launcher/settings_tab_launcher.hpp"
+#include "ux/settings/settings_tab_keyboard/settings_tab_keyboard.hpp"
 #include "ux/settings/settings_tab_default_apps/settings_tab_default_apps.hpp"
 #include "ux/settings/settings_tab_color_themes/settings_tab_color_themes.hpp"
 #include "services/audio/pipewire_service.hpp"
@@ -164,12 +168,25 @@ void settings_clamp_taskbar_scroll_px(App& app) {
 
 void settings_clamp_autostart_scroll_px(App& app) {
   const int viewH = app.height - kContentTop - kSpacingL;
-  const auto& entries = app.autostartEntries;
-  const int entryH = static_cast<int>(entries.size()) * 60;
-  const int formH = app.autostartFormOpen ? (36 * 2 + 36 + 10 * 4 + 40) : 0;
-  const int cardH = std::max(180, 80 + entryH + formH + 16 + 40);
-  const int maxScroll = std::max(0, cardH - viewH);
+  const int cardH = autostart_content_height_px(app);
+  const int maxScroll = std::max(0, kContentTop + cardH + kSpacingL - viewH);
   app.autostartScrollPx = std::clamp(app.autostartScrollPx, 0, maxScroll);
+}
+
+void settings_clamp_accounts_scroll_px(App& app) {
+  int tcx = 0, tcw = 0;
+  settings_content_column_geom(app, &tcx, &tcw);
+  const int viewH = app.height - kContentTop - kSpacingL;
+  const int bottom = accounts_content_bottom_px(tcx, tcw);
+  const int maxScroll = std::max(0, bottom + kSpacingL - viewH);
+  app.settingsAccountsScrollPx = std::clamp(app.settingsAccountsScrollPx, 0, maxScroll);
+}
+
+void settings_clamp_time_scroll_px(App& app) {
+  const int viewH = app.height - kContentTop - kSpacingL;
+  const int bottom = time_content_bottom(app);
+  const int maxScroll = std::max(0, bottom + kSpacingL - viewH);
+  app.settingsTimeScrollPx = std::clamp(app.settingsTimeScrollPx, 0, maxScroll);
 }
 
 void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
@@ -402,6 +419,8 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
     return;
   }
   if (app.activeTab == 30) {
+    // The timezone picker modal scrolls its own list.
+    if (app.timeZonePickerOpen && time_zone_picker_consume_scroll(app, delta_px)) return;
     int tcx = 0, tcw = 0;
     settings_content_column_geom(app, &tcx, &tcw);
     const int colH = app.height - kContentTop - kSpacingL;
@@ -410,6 +429,7 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
     const int step = static_cast<int>(std::lround(delta_px));
     if (step == 0) return;
     app.settingsTimeScrollPx = std::max(0, app.settingsTimeScrollPx - step);
+    settings_clamp_time_scroll_px(app);
     settings_scroll_sync_after_clamp(app);
     scroll_draw(app);
     return;
@@ -422,7 +442,9 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
       return;
     const int step = static_cast<int>(std::lround(delta_px));
     if (step == 0) return;
-    app.settingsKeyboardScrollPx = std::max(0, app.settingsKeyboardScrollPx - step);
+    const int viewH = app.height - kContentTop - kSpacingL;
+    const int maxScroll = std::max(0, keyboard_tab::content_bottom(app) + kSpacingL - viewH);
+    app.settingsKeyboardScrollPx = std::clamp(app.settingsKeyboardScrollPx - step, 0, maxScroll);
     settings_scroll_sync_after_clamp(app);
     scroll_draw(app);
     return;
@@ -449,6 +471,7 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
     const int step = static_cast<int>(std::lround(delta_px));
     if (step == 0) return;
     app.settingsAccountsScrollPx = std::max(0, app.settingsAccountsScrollPx - step);
+    settings_clamp_accounts_scroll_px(app);
     settings_scroll_sync_after_clamp(app);
     scroll_draw(app);
     return;

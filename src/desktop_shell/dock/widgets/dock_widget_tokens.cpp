@@ -16,3 +16,8 @@ std::string dock_first_control_center_widget_id(const DockSettings& s) {
   }
   return {};
 }
+
+std::string dock_active_control_center_widget_id(const DockApp& app) {
+  if (!app.ccWidgetId.empty()) return app.ccWidgetId;
+  return dock_first_control_center_widget_id(app.settings);
+}

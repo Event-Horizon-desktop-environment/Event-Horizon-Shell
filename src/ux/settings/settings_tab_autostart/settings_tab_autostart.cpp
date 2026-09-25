@@ -1,5 +1,7 @@
 #include <cairo/cairo.h>
+#include <wayland-client.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -16,6 +18,7 @@
 #include "ux/settings/data/default_apps/settings_default_apps.hpp"
 #include "ux/settings/settings_tab_autostart/settings_tab_autostart.hpp"
 #include "ux/settings/utils/helpers/material_glyphs.hpp"
+#include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 
 #include <filesystem>
 
@@ -119,10 +122,124 @@ static void da_toggle_autostart(App& app, const std::string& desktop_id, bool en
     }
     eh::autostart::set_autostart_enabled(stem, true);
   } else {
-    eh::autostart::remove_autostart_override(stem);
+    // Disabling writes Hidden=true so system entries actually turn off too
+    // (removing the override would just re-expose the system default).
+    eh::autostart::set_autostart_enabled(stem, false);
   }
 
   app.autostartNeedsRefresh = true;
+}
+
+[[nodiscard]] long long autostart_now_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+
+void autostart_set_status(App& app, const std::string& msg) {
+  app.autostartStatusMsg = msg;
+  app.autostartStatusMsgUntilMs = autostart_now_ms() + 4000;
+}
+
+// Unique stem for Add: never silently overwrite an existing entry.
+[[nodiscard]] std::string autostart_unique_stem(App& app, std::string base) {
+  if (base.empty()) base = "app";
+  auto taken = [&](const std::string& s) {
+    for (const auto& e : app.autostartEntries) {
+      if (e.stem == s) return true;
+    }
+    return false;
+  };
+  if (!taken(base)) return base;
+  for (int i = 2;; ++i) {
+    std::string cand = base + "-" + std::to_string(i);
+    if (!taken(cand)) return cand;
+  }
+}
+
+// Shared by the Save button and the Enter key. Returns true on success.
+bool autostart_try_save_form(App& app) {
+  if (app.autostartEditName.empty() || app.autostartEditExec.empty()) {
+    app.autostartFormError = "Enter a name and a command.";
+    draw(app);
+    return false;
+  }
+  int delayVal = 0;
+  if (!app.autostartEditDelayText.empty()) {
+    for (char c : app.autostartEditDelayText) {
+      if (c < '0' || c > '9') {
+        app.autostartFormError = "Delay must be a number of seconds (0\u2013999).";
+        draw(app);
+        return false;
+      }
+    }
+    delayVal = std::atoi(app.autostartEditDelayText.c_str());
+    if (delayVal > 999) {
+      app.autostartFormError = "Delay must be a number of seconds (0\u2013999).";
+      draw(app);
+      return false;
+    }
+  }
+  app.autostartEditDelay = delayVal;
+
+  // Editing must not silently flip the enabled switch: the service writers
+  // always store enabled=true, so re-apply a prior disabled state.
+  bool wasEnabled = true;
+  if (app.autostartEditMode) {
+    for (const auto& e : app.autostartEntries) {
+      if (e.stem == app.autostartEditStem) {
+        wasEnabled = e.enabled;
+        break;
+      }
+    }
+  }
+
+  bool ok = false;
+  std::string stem = app.autostartEditStem;
+  if (app.autostartEditMode) {
+    if (app.autostartEditIsOverride) {
+      ok = eh::autostart::edit_autostart_entry(stem, app.autostartEditName, app.autostartEditExec,
+                                               app.autostartEditIcon, app.autostartEditDelay,
+                                               app.autostartEditTerminal);
+    } else {
+      // Editing a system entry: create a user copy that shadows it.
+      ok = eh::autostart::create_autostart_entry(stem, app.autostartEditName, app.autostartEditExec,
+                                                 app.autostartEditIcon, app.autostartEditDelay,
+                                                 app.autostartEditTerminal);
+    }
+  } else {
+    if (stem.empty()) {
+      stem = app.autostartEditName;
+      for (auto& c : stem) {
+        if (c == ' ' || c == '\t')
+          c = '_';
+        else
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      }
+    }
+    stem = autostart_unique_stem(app, stem);
+    ok = eh::autostart::create_autostart_entry(stem, app.autostartEditName, app.autostartEditExec,
+                                               app.autostartEditIcon, app.autostartEditDelay,
+                                               app.autostartEditTerminal);
+  }
+  if (!ok) {
+    app.autostartFormError = "Could not write ~/.config/autostart/" + (stem.empty() ? std::string("entry") : stem) +
+                             ".desktop.";
+    draw(app);
+    return false;
+  }
+  if (app.autostartEditMode && !wasEnabled)
+    eh::autostart::set_autostart_enabled(stem, false);
+  autostart_set_status(app, "Saved \u2018" + app.autostartEditName + "\u2019.");
+  app.autostartFormOpen = false;
+  app.autostartEditMode = false;
+  app.autostartActiveField = AutostartField::None;
+  app.autostartFormError.clear();
+  app.autostartNeedsRefresh = true;
+  app.autostartScrollPx = 0;
+  app.autostartDeleteConfirmRow = -1;
+  draw(app);
+  return true;
 }
 
 } // anonymous namespace
@@ -228,7 +345,7 @@ static void form_text_field(cairo_t* cr, int x, int y, int w, int h,
 
 // Form overlay.
 static void draw_form_card(App& app, cairo_t* cr, double) {
-  const int fw = 420, fh = 350;
+  const int fw = 420, fh = 380;
   const int fx = (app.width - fw) / 2;
   const int fy = std::max(40, (app.height - fh) / 3);
 
@@ -294,13 +411,36 @@ static void draw_form_card(App& app, cairo_t* cr, double) {
   {
     int dlyX = px + lblW;
     int dlyW = 70;
-    form_text_field(cr, dlyX, yy, dlyW, fh_, app.autostartEditIcon,
+    form_text_field(cr, dlyX, yy, dlyW, fh_, app.autostartEditDelayText,
                     app.autostartActiveField == AutostartField::Delay,
                     "0", tr, tg, tb, ar, ag, ab, sr, sg, sb);
     settings_show_text(cr, dlyX + dlyW + 10, yy + fh_ * 0.5 + 2, "seconds", 13.f, 400,
                        tr, tg, tb, 0.50f);
   }
-  yy += 54;
+  yy += fh_ + 20;
+
+  // Run in terminal toggle row.
+  const int termTglX = px + pw - 52;
+  const int termTglY = yy + 3;
+  settings_show_text(cr, px, yy + 15, "Run in terminal", 13.f, 500, tr, tg, tb, 0.65f);
+  {
+    const bool tHov =
+        app.pointerX >= termTglX - 6 && app.pointerX < termTglX + 52 && app.pointerY >= yy &&
+        app.pointerY < yy + 30;
+    m3::Box tbg;
+    if (app.autostartEditTerminal)
+      tbg.setColor(ar, ag, ab, 0.90f);
+    else
+      tbg.setColor(tr, tg, tb, 0.12f);
+    tbg.setRadius(12.0f);
+    tbg.setGeometry(static_cast<float>(termTglX), static_cast<float>(termTglY), 46.0f, 24.0f);
+    tbg.paint(cr);
+    cairo_set_source_rgba(cr, 1, 1, 1, app.autostartEditTerminal ? 0.95f : (tHov ? 0.75f : 0.55f));
+    cairo_arc(cr, termTglX + (app.autostartEditTerminal ? 33.0 : 13.0), termTglY + 12.0, 8.0, 0,
+              2 * M_PI);
+    cairo_fill(cr);
+  }
+  yy += 40;
 
   // Save / Cancel.
   const int bW = 110, bH = 34;
@@ -344,10 +484,64 @@ static void draw_form_card(App& app, cairo_t* cr, double) {
     cl.paintAt(cr, static_cast<float>(px + pw - bW) + (bW - cw_s) * 0.5f,
                static_cast<float>(yy) + (bH - ch_s) * 0.5f);
   }
+
+  // Validation error line.
+  if (!app.autostartFormError.empty()) {
+    settings_show_text(cr, px, yy + bH + 20, app.autostartFormError.c_str(), 12.f, 400, 0.95f, 0.35f,
+                       0.35f, 0.90f);
+  }
 }
 
-// Kebab popup.
-static void draw_kebab_popup(App& app, cairo_t* cr, int popX, int popY) {
+// Kebab popup geometry shared by paint and hit-testing (flips above the
+// row when it would overflow the clipped list).
+static void autostart_popup_geom(int cx, int cw, int ry, int listBottom, int* popX, int* popY) {
+  const int kbX = cx + cw - kCardPad - kActBtn;
+  *popX = kbX - 130 + kActBtn;
+  *popY = ry + kRowHt;
+  if (*popY + 72 > listBottom) *popY = ry - 72 - 4;
+}
+
+// True when a system autostart dir ships <stem>.desktop (i.e. the entry is
+// a system entry, possibly shadowed by a user override).
+static bool autostart_system_base_exists(const std::string& stem) {
+  if (stem.empty() || stem.size() > 128 || stem == "." || stem == ".." ||
+      stem.find('/') != std::string::npos)
+    return false;
+  std::string dirs;
+  if (const char* env = std::getenv("XDG_CONFIG_DIRS")) dirs = env;
+  if (dirs.empty()) dirs = "/etc/xdg";
+  std::string::size_type pos = 0;
+  while (pos <= dirs.size()) {
+    const auto next = dirs.find(':', pos);
+    std::string d = dirs.substr(pos, next == std::string::npos ? next : next - pos);
+    while (!d.empty() && (d.back() == ' ' || d.back() == '\t')) d.pop_back();
+    while (!d.empty() && (d.front() == ' ' || d.front() == '\t')) d.erase(d.begin());
+    if (!d.empty()) {
+      const std::string p = d + "/autostart/" + stem + ".desktop";
+      std::error_code ec;
+      if (std::filesystem::is_regular_file(p, ec) && !ec) return true;
+    }
+    if (next == std::string::npos) break;
+    pos = next + 1;
+  }
+  return false;
+}
+
+// Second-row kebab label for an entry.
+static const char* autostart_popup_action(const eh::autostart::AutostartUiEntry& e) {
+  if (!autostart_system_base_exists(e.stem)) return "Delete"; // user-created
+  if (e.isUserOverride) return "Reset to System";             // shadowed system entry
+  return e.enabled ? "Disable" : "Enable";                    // pure system entry
+}
+
+// Bottom of the clipped entry list (paint and hit-test must agree).
+static int autostart_list_bottom(int daCount, size_t nEntries) {
+  const int eh = static_cast<int>(nEntries) * kRowHt;
+  if (daCount <= 0) return kContentTop + 68 + eh + 4;
+  return kContentTop + 68 + eh + 16 + 28 + daCount * 44 + 16 + 4;
+}
+
+static void draw_kebab_popup(App& app, cairo_t* cr, int popX, int popY, const char* actionLabel) {
   float ar, ag, ab, tr, tg, tb, sr, sg, sb, or_, og, ob;
   settings_resolve_colors(app, ar, ag, ab, tr, tg, tb, sr, sg, sb, or_, og, ob);
   const int pw = 130, ph = 72;
@@ -390,7 +584,7 @@ static void draw_kebab_popup(App& app, cairo_t* cr, int popX, int popY) {
       hb.paint(cr);
     }
     material_symbols_draw_glyph(cr, px + 20, py + 55, 15.0, "delete", tr, tg, tb, 0.70f);
-    settings_show_text(cr, px + 34, py + 57, "Delete", 13.f, 500, tr, tg, tb, delH ? 0.90f : 0.70f);
+    settings_show_text(cr, px + 34, py + 57, actionLabel, 13.f, 500, tr, tg, tb, delH ? 0.90f : 0.70f);
   }
 }
 
@@ -427,7 +621,7 @@ static void draw_app_browser(App& app, cairo_t* cr) {
   const int vis = std::min(total, maxVis);
   const int scrollPx = app.autostartAppBrowserScrollPx;
   const int startIdx = scrollPx / kBrowserEntryH;
-  const int endIdx = std::min(startIdx + vis, total);
+  const int endIdx = std::min(startIdx + vis + 1, total);
 
   cairo_save(cr);
   cairo_rectangle(cr, bx + 8, lt, bw - 16, lh);
@@ -526,6 +720,15 @@ static void draw_app_browser(App& app, cairo_t* cr) {
 }
 
 // Main paint.
+int autostart_content_height_px(const App& app) {
+  const int eh = static_cast<int>(app.autostartEntries.size()) * kRowHt;
+  const int daCount = da_count_configured(app.settings.defaultApps);
+  static constexpr int daRowH = 44;
+  const int daH = (daCount > 0) ? (28 + daCount * daRowH + 16) : 0;
+  // Mirrors the card height math in paint_autostart_tab.
+  return std::max(200, 70 + eh + 20 + daH + (daCount > 0 ? 16 : 0));
+}
+
 void paint_autostart_tab(App& app, cairo_t* cr, int contentX, int contentW, double glassOv) {
   if (app.autostartNeedsRefresh) settings_autostart_refresh_entries(app);
   const auto& entries = app.autostartEntries;
@@ -554,6 +757,23 @@ void paint_autostart_tab(App& app, cairo_t* cr, int contentX, int contentW, doub
   const int hh = 48;
   const int hy = kContentTop + 10;
   settings_show_text(cr, cx + kCardPad, hy + hh * 0.5 + 7, "Startup Applications", 21.f, 600, tr, tg, tb, 0.92f);
+
+  // Transient status line (last action), right-aligned before the + Add button.
+  if (!app.autostartStatusMsg.empty() && autostart_now_ms() < app.autostartStatusMsgUntilMs) {
+    const int abW0 = 150;
+    const int statusRight = cx + cw - kCardPad - abW0 - 16;
+    m3::Label stLbl;
+    stLbl.setText(app.autostartStatusMsg.c_str());
+    stLbl.setFontSize(12.0f);
+    stLbl.setFontWeight(400);
+    stLbl.setColor(tr, tg, tb, 0.55f);
+    float stW, stH;
+    stLbl.measureExtents(stW, stH);
+    const double statusLeft = static_cast<double>(cx + kCardPad) + 300.0;
+    if (stW > 0 && statusLeft + stW < statusRight) {
+      stLbl.paintAt(cr, static_cast<float>(statusRight - stW), static_cast<float>(hy + (hh - stH) * 0.5));
+    }
+  }
 
   const int abW = 150, abH = 34;
   const int abX = cx + cw - kCardPad - abW;
@@ -585,7 +805,7 @@ void paint_autostart_tab(App& app, cairo_t* cr, int contentX, int contentW, doub
 
   // Entry list + default apps section.
   const int ly = kContentTop + 68;
-  const int clipBottom = daCount > 0 ? (daY + daH + 4) : (ly + eh + 4);
+  const int clipBottom = autostart_list_bottom(daCount, entries.size());
   const int clipH = clipBottom - ly + 4;
 
   cairo_save(cr);
@@ -608,8 +828,37 @@ void paint_autostart_tab(App& app, cairo_t* cr, int contentX, int contentW, doub
       hb.paint(cr);
     }
 
-    // Badge
-    colored_badge(cr, cx + kCardPad, ry, static_cast<int>(i));
+    // Badge: real app icon when resolvable, colored glyph otherwise.
+    {
+      std::string appId;
+      if (!e.desktopPath.empty()) {
+        appId = e.desktopPath;
+        const auto slash = appId.rfind('/');
+        if (slash != std::string::npos) appId = appId.substr(slash + 1);
+        const auto dot = appId.rfind('.');
+        if (dot != std::string::npos) appId = appId.substr(0, dot);
+      }
+      const auto* iconEntry = appId.empty() ? nullptr : s_app_browser_icon_cache.app_icon(appId);
+      if (iconEntry && iconEntry->surface && iconEntry->width > 0 && iconEntry->height > 0) {
+        const double iw = static_cast<double>(iconEntry->width);
+        const double ih = static_cast<double>(iconEntry->height);
+        const double scale = static_cast<double>(kBadgeSz) / std::max(1.0, std::max(iw, ih));
+        const int bx = cx + kCardPad;
+        const int by = ry + (kRowHt - kBadgeSz) / 2;
+        cairo_save(cr);
+        cairo_rectangle(cr, bx, by, kBadgeSz, kBadgeSz);
+        cairo_clip(cr);
+        cairo_translate(cr, bx, by);
+        cairo_scale(cr, scale, scale);
+        cairo_set_source_surface(cr, iconEntry->surface,
+                                 ((kBadgeSz / scale) - iw) * 0.5,
+                                 ((kBadgeSz / scale) - ih) * 0.5);
+        cairo_paint(cr);
+        cairo_restore(cr);
+      } else {
+        colored_badge(cr, cx + kCardPad, ry, static_cast<int>(i));
+      }
+    }
 
     // Name + subtitle
     const int tx = cx + kCardPad + kBadgeSz + 14;
@@ -632,14 +881,17 @@ void paint_autostart_tab(App& app, cairo_t* cr, int contentX, int contentW, doub
         std::snprintf(buf, sizeof(buf), "  \xc2\xb7  +%ds delay", e.delaySec);
         sub += buf;
       }
-      m3::Label sl;
-      sl.setText(sub.c_str());
-      sl.setFontSize(11.0f);
-      sl.setFontWeight(400);
-      sl.setColor(tr, tg, tb, 0.42f);
-      float sw, sh;
-      sl.measureExtents(sw, sh);
-      sl.paintAt(cr, tx, ry + kRowHt - 16 - sh + 3.0f);
+      if (e.runInTerminal) sub += "  \xc2\xb7  Terminal";
+      if (!e.exec.empty()) {
+        std::string exec = e.exec;
+        if (exec.size() > 48) exec = exec.substr(0, 47) + "\u2026";
+        sub += "  \xc2\xb7  " + exec;
+      }
+      // Width-capped so the subtitle never runs under the toggle.
+      const int subMaxX = cx + cw - kCardPad - kPillW - kActBtn - 10 - 8;
+      const size_t maxChars = static_cast<size_t>(std::max(8, (subMaxX - tx) / 6));
+      settings_draw_trimmed_text_line(cr, sub, tx, ry + kRowHt - 16 + 3.0f - 4.0, maxChars, 0.42f,
+                                      11.f, 400);
     }
 
     // Toggle
@@ -649,13 +901,13 @@ void paint_autostart_tab(App& app, cairo_t* cr, int contentX, int contentW, doub
     // Kebab button
     const int kbX = cx + cw - kCardPad - kActBtn;
     const bool kbHv = hv && point_in_rect(app.pointerX, pyC, kbX, ry, kActBtn, kRowHt);
-    icon_btn(cr, kbX, ry, "more_vert", tr, tg, tb, hv ? 0.55f : 0.12f, kbHv, false);
+    icon_btn(cr, kbX, ry, "more_vert", tr, tg, tb, hv ? 0.55f : 0.45f, kbHv, false);
 
     // Kebab popup (shown for the row with menu open)
     if (app.autostartDeleteConfirmRow == static_cast<int>(i) && !app.autostartFormOpen) {
-      const int popX = kbX - 130 + kActBtn;
-      const int popY = ry + kRowHt;
-      draw_kebab_popup(app, cr, popX, popY);
+      int popX = 0, popY = 0;
+      autostart_popup_geom(cx, cw, ry, clipBottom, &popX, &popY);
+      draw_kebab_popup(app, cr, popX, popY, autostart_popup_action(e));
     }
   }
 
@@ -780,7 +1032,7 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
     const int vis = std::min(total, maxVis);
     const int scrollPx = app.autostartAppBrowserScrollPx;
     const int startIdx = scrollPx / kBrowserEntryH;
-    const int endIdx = std::min(startIdx + vis, total);
+    const int endIdx = std::min(startIdx + vis + 1, total);
     for (int i = startIdx; i < endIdx; ++i) {
       const int ry = lt + (i - startIdx) * kBrowserEntryH - (scrollPx % kBrowserEntryH);
       if (point_in_rect(app.pointerX, app.pointerY, bx + 10, ry, bw - 20, kBrowserEntryH)) {
@@ -797,7 +1049,7 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
 
   // Form overlay active.
   if (app.autostartFormOpen) {
-    const int fw = 420, fh = 350;
+    const int fw = 420, fh = 380;
     const int fx = (app.width - fw) / 2;
     const int fy = std::max(40, (app.height - fh) / 3);
     const int px = fx + kCardPad;
@@ -848,59 +1100,36 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
     int dlyX = px + lblW;
     int dlyW = 70;
     if (point_in_rect(app.pointerX, app.pointerY, dlyX, yy, dlyW, fh_)) {
-      if (app.autostartEditIcon.empty()) {
+      if (app.autostartEditDelayText.empty()) {
         char db[16];
         std::snprintf(db, sizeof(db), "%d", app.autostartEditDelay);
-        app.autostartEditIcon = db;
+        app.autostartEditDelayText = db;
       }
-      if (app.autostartEditIcon == "0") {
-        app.autostartEditIcon.clear();
+      if (app.autostartEditDelayText == "0") {
+        app.autostartEditDelayText.clear();
       }
       app.autostartActiveField = AutostartField::Delay;
       draw(app);
       return true;
     }
-    yy += 54;
+    yy += fh_ + 20;
+
+    // Run in terminal toggle
+    {
+      const int termTglX = px + pw - 52;
+      if (point_in_rect(app.pointerX, app.pointerY, termTglX - 6, yy, 58, 30)) {
+        app.autostartEditTerminal = !app.autostartEditTerminal;
+        draw(app);
+        return true;
+      }
+    }
+    yy += 40;
 
     // Save
     const int bW = 110, bH = 34;
     if (point_in_rect(app.pointerX, app.pointerY, px + pw - bW * 2 - 12, yy, bW, bH)) {
-      if (!app.autostartEditName.empty() && !app.autostartEditExec.empty()) {
-        int delayVal = 0;
-        if (!app.autostartEditIcon.empty()) {
-          delayVal = std::atoi(app.autostartEditIcon.c_str());
-          if (delayVal < 0) delayVal = 0;
-          if (delayVal > 999) delayVal = 999;
-        }
-        app.autostartEditDelay = delayVal;
-        std::string stem = app.autostartEditStem;
-        if (stem.empty()) {
-          stem = app.autostartEditName;
-          for (auto& c : stem) {
-            if (c == ' ' || c == '\t') c = '_';
-            else c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-          }
-        }
-        if (app.autostartEditMode) {
-          eh::autostart::edit_autostart_entry(stem, app.autostartEditName,
-                                              app.autostartEditExec,
-                                              "",
-                                              app.autostartEditDelay);
-        } else {
-          eh::autostart::create_autostart_entry(stem, app.autostartEditName,
-                                                app.autostartEditExec,
-                                                "",
-                                                app.autostartEditDelay);
-        }
-        app.autostartFormOpen = false;
-        app.autostartEditMode = false;
-        app.autostartActiveField = AutostartField::None;
-        app.autostartNeedsRefresh = true;
-        app.autostartScrollPx = 0;
-        app.autostartDeleteConfirmRow = -1;
-        draw(app);
-        return true;
-      }
+      autostart_try_save_form(app);
+      return true;
     }
 
     // Cancel
@@ -912,6 +1141,10 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
       app.autostartEditExec.clear();
       app.autostartEditStem.clear();
       app.autostartEditIcon.clear();
+      app.autostartEditDelayText.clear();
+      app.autostartEditTerminal = false;
+      app.autostartEditIsOverride = false;
+      app.autostartFormError.clear();
       app.autostartEditDelay = 0;
       app.autostartDeleteConfirmRow = -1;
       draw(app);
@@ -937,7 +1170,11 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
       app.autostartEditStem.clear();
       app.autostartEditName.clear();
       app.autostartEditExec.clear();
-      app.autostartEditIcon = "0";
+      app.autostartEditIcon.clear();
+      app.autostartEditDelayText.clear();
+      app.autostartEditTerminal = false;
+      app.autostartEditIsOverride = false;
+      app.autostartFormError.clear();
       app.autostartEditDelay = 0;
       app.autostartDeleteConfirmRow = -1;
       draw(app);
@@ -957,14 +1194,22 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
       int rowIdx = 0;
       for (int cat = 0; cat < eh::settings::default_apps::kNumCategories; ++cat) {
         const auto& id = da_field_ref(app.settings.defaultApps, cat);
-        if (id.empty()) { ++rowIdx; continue; }
+        if (id.empty()) continue;  // mirrors paint: only configured rows take space
 
         const int rry = daY + 28 + rowIdx * daRowH;
         const int tgY = rry + (daRowH - kPillH) / 2;
 
         if (point_in_rect(app.pointerX, pyC, daToggleX, tgY, kPillW, kPillH)) {
-          bool currentlyOn = da_is_autostarted(app.autostartEntries, id);
+          const bool currentlyOn = da_is_autostarted(app.autostartEntries, id);
           da_toggle_autostart(app, id, !currentlyOn);
+          settings_autostart_refresh_entries(app);
+          const bool nowOn = da_is_autostarted(app.autostartEntries, id);
+          if (nowOn == !currentlyOn) {
+            autostart_set_status(app, std::string(currentlyOn ? "Disabled " : "Enabled ") + "\u2018" +
+                                          da_resolve_app_name(id) + "\u2019 at login.");
+          } else {
+            autostart_set_status(app, "Could not update \u2018" + da_resolve_app_name(id) + "\u2019.");
+          }
           app.autostartDeleteConfirmRow = -1;
           draw(app);
           return true;
@@ -982,6 +1227,7 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
 
   // Entry rows.
   const int ly = kContentTop + 68;
+  const int listBottom = autostart_list_bottom(da_count_configured(app.settings.defaultApps), entries.size());
 
   for (size_t i = 0; i < entries.size(); ++i) {
     const auto& e = entries[i];
@@ -989,9 +1235,8 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
 
     // Kebab popup actions
     if (app.autostartDeleteConfirmRow == static_cast<int>(i) && !app.autostartFormOpen) {
-      const int kbX = cx + cw - kCardPad - kActBtn;
-      const int popX = kbX - 130 + kActBtn;
-      const int popY = ry + kRowHt;
+      int popX = 0, popY = 0;
+      autostart_popup_geom(cx, cw, ry, listBottom, &popX, &popY);
 
       // Edit
       if (point_in_rect(app.pointerX, pyC, popX + 4, popY + 2, 122, 34)) {
@@ -1000,34 +1245,60 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
         app.autostartActiveField = AutostartField::Name;
         app.autostartEditStem = e.stem;
         app.autostartEditName = e.name;
-        app.autostartEditExec.clear();
-        {
+        app.autostartEditExec = e.exec;
+        app.autostartEditIcon = e.icon;
+        if (e.delaySec > 0) {
           char db[16];
           std::snprintf(db, sizeof(db), "%d", e.delaySec);
-          app.autostartEditIcon = db;
+          app.autostartEditDelayText = db;
+        } else {
+          app.autostartEditDelayText.clear();
         }
+        app.autostartEditTerminal = e.runInTerminal;
+        app.autostartEditIsOverride = e.isUserOverride;
+        app.autostartFormError.clear();
         app.autostartEditDelay = e.delaySec;
         app.autostartDeleteConfirmRow = -1;
         draw(app);
         return true;
       }
-      // Delete
+      // Second action depends on the entry kind (see autostart_popup_action).
       if (point_in_rect(app.pointerX, pyC, popX + 4, popY + 36, 122, 34)) {
-        if (e.isUserOverride) {
-          eh::autostart::remove_autostart_override(e.stem);
-          app.autostartNeedsRefresh = true;
+        const bool userEntry = !autostart_system_base_exists(e.stem);
+        if (userEntry) {
+          if (eh::autostart::remove_autostart_override(e.stem))
+            autostart_set_status(app, "Removed \u2018" + e.name + "\u2019.");
+          else
+            autostart_set_status(app, "Could not remove \u2018" + e.name + "\u2019.");
+        } else if (e.isUserOverride) {
+          if (eh::autostart::remove_autostart_override(e.stem))
+            autostart_set_status(app, "Restored system default for \u2018" + e.name + "\u2019.");
+          else
+            autostart_set_status(app, "Could not reset \u2018" + e.name + "\u2019.");
+        } else if (e.enabled) {
+          if (eh::autostart::set_autostart_enabled(e.stem, false))
+            autostart_set_status(app, "Disabled \u2018" + e.name + "\u2019 (system entry).");
+          else
+            autostart_set_status(app, "Could not disable \u2018" + e.name + "\u2019.");
+        } else {
+          if (eh::autostart::set_autostart_enabled(e.stem, true))
+            autostart_set_status(app, "Enabled \u2018" + e.name + "\u2019 (system entry).");
+          else
+            autostart_set_status(app, "Could not enable \u2018" + e.name + "\u2019.");
         }
+        app.autostartNeedsRefresh = true;
         app.autostartDeleteConfirmRow = -1;
         draw(app);
         return true;
       }
-      // Click outside popup closes it
+      // Click outside the popup closes it, then falls through so the click
+      // still reaches the row beneath instead of being swallowed.
       if (!point_in_rect(app.pointerX, pyC, popX, popY, 130, 72)) {
         app.autostartDeleteConfirmRow = -1;
+      } else {
         draw(app);
         return true;
       }
-      return true;
     }
 
     // Kebab button
@@ -1046,16 +1317,24 @@ bool settings_autostart_consume_pointer_down(App& app, int contentX, int content
     const int tgX = cx + cw - kCardPad - kPillW - kActBtn - 10;
     const int tgY = ry + (kRowHt - kPillH) / 2;
     if (point_in_rect(app.pointerX, pyC, tgX, tgY, kPillW, kPillH)) {
-      eh::autostart::set_autostart_enabled(e.stem, !e.enabled);
+      if (eh::autostart::set_autostart_enabled(e.stem, !e.enabled)) {
+        autostart_set_status(app, std::string(!e.enabled ? "Enabled \u2018" : "Disabled \u2018") +
+                                        e.name + "\u2019.");
+      } else {
+        autostart_set_status(app, "Could not update \u2018" + e.name + "\u2019.");
+      }
       app.autostartNeedsRefresh = true;
       app.autostartDeleteConfirmRow = -1;
       draw(app);
       return true;
     }
 
-    // Row hover for other rows closes kebab
+    // Row body only highlights (the kebab opens from its own button).
     if (point_in_rect(app.pointerX, pyC, cx + 6, ry, cw - 12, kRowHt)) {
-      app.autostartHoverRow = static_cast<int>(i);
+      if (app.autostartHoverRow != static_cast<int>(i)) {
+        app.autostartHoverRow = static_cast<int>(i);
+        draw(app);
+      }
       return true;
     }
   }
@@ -1086,7 +1365,7 @@ bool settings_autostart_consume_pointer_move(App& app, int contentX, int content
     const int vis = std::min(total, maxVis);
     const int scrollPx = app.autostartAppBrowserScrollPx;
     const int startIdx = scrollPx / kBrowserEntryH;
-    const int endIdx = std::min(startIdx + vis, total);
+    const int endIdx = std::min(startIdx + vis + 1, total);
     int nh = -1;
     for (int i = startIdx; i < endIdx; ++i) {
       const int ry = lt + (i - startIdx) * kBrowserEntryH - (scrollPx % kBrowserEntryH);
@@ -1130,7 +1409,7 @@ bool settings_autostart_consume_pointer_move(App& app, int contentX, int content
     int rowIdx = 0;
     for (int cat = 0; cat < eh::settings::default_apps::kNumCategories; ++cat) {
       const auto& id = da_field_ref(app.settings.defaultApps, cat);
-      if (id.empty()) { ++rowIdx; continue; }
+      if (id.empty()) continue;  // mirrors paint: only configured rows take space
       const int rry = daRowBase + rowIdx * daRowH;
       if (point_in_rect(app.pointerX, pyC, cx + 6, rry, cw - 12, daRowH)) {
         daNh = rowIdx;
@@ -1159,20 +1438,37 @@ bool settings_autostart_consume_key(App& app, unsigned sym, unsigned state,
                                     const char* utf8, int utf8Len) {
   if (app.activeTab != 48) return false;
   if (app.autostartActiveField == AutostartField::None) return false;
-  if (state != 0) return false;
+  // Wayland: RELEASED=0, PRESSED=1, REPEATED=2. Repeats edit text but must
+  // not re-trigger one-shot actions (Enter/Escape/Tab).
+  if (state != WL_KEYBOARD_KEY_STATE_PRESSED && state != WL_KEYBOARD_KEY_STATE_REPEATED)
+    return false;
+  const bool repeat = (state == WL_KEYBOARD_KEY_STATE_REPEATED);
 
   auto& buf = (app.autostartActiveField == AutostartField::Name)
                   ? app.autostartEditName
                   : (app.autostartActiveField == AutostartField::Exec)
                       ? app.autostartEditExec
-                      : app.autostartEditIcon;
+                      : app.autostartEditDelayText;
 
-  if (sym == 0xff0d || sym == 0xff8d || sym == 0xff1b) {
+  if (!repeat && (sym == 0xff0d || sym == 0xff8d)) {
+    // Enter saves the form (with validation); Escape closes it.
+    if (app.autostartFormOpen) autostart_try_save_form(app);
+    return true;
+  }
+  if (!repeat && sym == 0xff1b) {
+    if (app.autostartFormOpen) {
+      app.autostartFormOpen = false;
+      app.autostartEditMode = false;
+      app.autostartActiveField = AutostartField::None;
+      app.autostartFormError.clear();
+      draw(app);
+      return true;
+    }
     app.autostartActiveField = AutostartField::None;
     draw(app);
     return true;
   }
-  if (sym == 0xff09) {
+  if (!repeat && sym == 0xff09) {
     if (app.autostartActiveField == AutostartField::Name)
       app.autostartActiveField = AutostartField::Exec;
     else if (app.autostartActiveField == AutostartField::Exec)
@@ -1183,6 +1479,7 @@ bool settings_autostart_consume_key(App& app, unsigned sym, unsigned state,
     return true;
   }
   if (sym == 0xff08) {
+    while (!buf.empty() && (buf.back() & 0xC0) == 0x80) buf.pop_back();
     if (!buf.empty()) buf.pop_back();
     draw(app);
     return true;

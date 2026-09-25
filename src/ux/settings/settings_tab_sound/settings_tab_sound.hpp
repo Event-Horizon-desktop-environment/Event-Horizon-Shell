@@ -73,7 +73,7 @@ void sound_stream_slider_geom_content(int sec_content_y0, int sec_x, int sec_w, 
                                       int* trX, int* trY, int* trW);
 void settings_clamp_sound_scroll_px(App& app, int n_play, int n_rec, int n_cards);
 
-inline constexpr int kSoundMaxCards = 6;
+inline constexpr int kSoundMaxCards = 12;
 inline constexpr int kSoundCardDdBase = 600;
 inline constexpr int kSoundEngineRates[] = {44100, 48000, 88200, 96000, 176400, 192000};
 inline constexpr int kSoundEngineQuantums[] = {128, 256, 512, 1024, 2048, 4096, 8192};

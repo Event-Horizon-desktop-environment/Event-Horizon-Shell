@@ -1,5 +1,6 @@
 #include "ux/settings/data/default_apps/settings_default_apps_apply.hpp"
 
+#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <iostream>
@@ -80,12 +81,51 @@ void run_xdg_mime_default(const std::string& desktop, const char* mime) {
 
 }
 
+// Captures the system default we are about to overwrite, so "reset" can restore it.
+static std::array<std::string, kNumCategories> s_pre_apply{};
+static std::array<bool, kNumCategories> s_pre_apply_set{};
+
 void apply_category_default(const std::string& desktop_id, int category_index) {
   if (desktop_id.empty()) return;
   const char* const* mimes = category_mime_list(category_index);
   if (!mimes) return;
   const std::string id = normalize_desktop_id(desktop_id);
+  if (category_index >= 0 && category_index < kNumCategories && !s_pre_apply_set[static_cast<size_t>(category_index)]) {
+    s_pre_apply[static_cast<size_t>(category_index)] = query_effective_desktop_id(category_index);
+    s_pre_apply_set[static_cast<size_t>(category_index)] = true;
+  }
   for (size_t m = 0; mimes[m] != nullptr; ++m) run_xdg_mime_default(id, mimes[m]);
+}
+
+std::string captured_system_default(int category_index) {
+  if (category_index < 0 || category_index >= kNumCategories) return {};
+  if (!s_pre_apply_set[static_cast<size_t>(category_index)]) return {};
+  return s_pre_apply[static_cast<size_t>(category_index)];
+}
+
+void restore_category_system_default(int category_index) {
+  if (category_index < 0 || category_index >= kNumCategories) return;
+  const char* const* mimes = category_mime_list(category_index);
+  if (!mimes) return;
+  const size_t ci = static_cast<size_t>(category_index);
+  const std::string prior = s_pre_apply_set[ci] ? s_pre_apply[ci] : query_effective_desktop_id(category_index);
+  s_pre_apply_set[ci] = true;
+  s_pre_apply[ci] = prior;
+  if (!prior.empty()) {
+    const std::string id = normalize_desktop_id(prior);
+    for (size_t m = 0; mimes[m] != nullptr; ++m) run_xdg_mime_default(id, mimes[m]);
+    return;
+  }
+  // No prior default existed: drop the user-level override lines so the system value re-surfaces.
+  for (size_t m = 0; mimes[m] != nullptr; ++m) {
+    const std::string inner =
+        std::string("f=\"$HOME/.config/mimeapps.list\"; [ -f \"$f\" ] || exit 0; t=\"$(mktemp)\"; "
+                    "grep -v \"^") +
+        mimes[m] + "=\" \"$f\" > \"$t\" && mv \"$t\" \"$f\"";
+    const std::string cmd = "/bin/sh -c " + shell_quote_single(inner);
+    if (const int st = std::system(cmd.c_str()); st != 0)
+      std::cerr << "[default-apps-apply] unset failed status=" << st << " mime=" << mimes[m] << '\n';
+  }
 }
 
 void apply_from_config(const eh::config::DefaultAppsSettings& d) {

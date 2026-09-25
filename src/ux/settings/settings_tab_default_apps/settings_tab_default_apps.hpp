@@ -12,6 +12,9 @@ struct DefaultAppsLayout;
 void paint_default_apps_tab(App& app, cairo_t* cr, int contentX, int contentW, double glassOv);
 bool settings_default_apps_consume_pointer_down(App& app, int contentX, int contentW);
 
+// Height of the search bar at the top of the picker popup (used by hover/click math).
+int default_app_picker_search_bar_h();
+
 void settings_paint_default_app_picker_popup(App& app, cairo_t* cr, int contentX, int contentW, double glassOv);
 void settings_fill_default_app_picker(App& app);
 void default_app_picker_teardown_layer(App& app);

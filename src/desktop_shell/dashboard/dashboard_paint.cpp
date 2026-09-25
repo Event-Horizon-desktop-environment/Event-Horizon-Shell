@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cairo/cairo.h>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -32,27 +33,14 @@ namespace ccu = eh::shell::dock::control_center::paint_utils;
 namespace sm = eh::shell::cc_slider;
 namespace hooks = eh::shell::dock_slot_hooks;
 
-constexpr double kCardR = 20.0;  // CC inner-card radius (control_center_popup_paint card lambda)
-constexpr double kPanelR = 24.0;  // CC outer-popup radius (floating panel, same nesting)
+constexpr double kCardR = 14.0;
+constexpr double kPanelR = 16.0;
+constexpr double kMutR = 0.42, kMutG = 0.44, kMutB = 0.46;  // eyebrow labels
 constexpr double kNetHeaderH = 40.0;
 constexpr double kMixerHeaderH = sm::kMixerHeaderH;
 constexpr double kMixerRowH = sm::kMixerRowH;
-constexpr double kSysHeaderH = 36.0;
-constexpr double kSysRowH = 46.0;
 
-const char* kMonthNames[12] = {"January", "February",   "March",    "April",  "May",      "June",
-                               "July",    "August",     "September", "October", "November", "December"};
 const char* kDowShort[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
-
-int days_in_month(int y, int m) {
-  static const int k[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-  if (m < 1 || m > 12) return 30;
-  if (m == 2) {
-    const bool leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-    return leap ? 29 : 28;
-  }
-  return k[m - 1];
-}
 
 void rrect(cairo_t* cr, double x, double y, double w, double h, double r) { ccu::rrect(cr, x, y, w, h, r); }
 
@@ -130,14 +118,19 @@ void text_r(cairo_t* cr, const std::string& s, double rightX, double baseline, d
   cairo_show_text(cr, s.c_str());
 }
 
-void card_title(cairo_t* cr, const eh::config::ChromePaintColors& mc, const CardRect& c, const char* glyph,
-                const char* label) {
-  eh::shell::draw_material_glyph(cr, c.x + 24.0, c.y + kSysHeaderH * 0.5 + 1.0, 18.0, glyph, mc.textR, mc.textG,
-                                 mc.textB, 1.0);
-  text_l(cr, label, c.x + 40.0, c.y + kSysHeaderH * 0.5 + 5.0, 15.0, mc.textR, mc.textG, mc.textB, 1.0);
+std::string upper_str(const std::string& s) {
+  std::string out = s;
+  for (char& ch : out) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+  return out;
 }
 
-// ---------------------------------------------------------------- clock ----
+void eyebrow(cairo_t* cr, const std::string& s, double x, double baseline) {
+  text_l(cr, s, x, baseline, 11.0, kMutR, kMutG, kMutB, 1.0);
+}
+
+// ------------------------------------------------------- calendar (week) ----
+// Current-week strip (v5): seven day cells for the week containing today,
+// today highlighted. No navigation state.
 
 void paint_clock(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
   (void)app;
@@ -148,128 +141,46 @@ void paint_clock(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
-  cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.95);
-  cairo_arc(cr, c.x + 20.0, c.y + 24.0, 4.0, 0.0, 2.0 * M_PI);
-  cairo_fill(cr);
-  text_l(cr, t.zone.empty() ? std::string("Local time") : t.zone, c.x + 32.0, c.y + 28.0, 11.0, mc.textR, mc.textG, mc.textB,
-         0.90);
-
-  text_c(cr, t.time, c.x + c.w * 0.5, c.y + 92.0, 44.0, mc.textR, mc.textG, mc.textB, 1.0);
+  eyebrow(cr, "LOCAL TIME", c.x + 16.0, c.y + 27.0);
+  text_l(cr, t.time, c.x + 16.0, c.y + 66.0, 32.0, mc.textR, mc.textG, mc.textB, 1.0);
   if (!t.date.empty())
-    text_c(cr, t.date, c.x + c.w * 0.5, c.y + 118.0, 13.0, mc.textR, mc.textG, mc.textB, 0.95);
+    text_l(cr, t.date, c.x + 16.0, c.y + 88.0, 13.0, mc.textR, mc.textG, mc.textB, 0.90);
 }
 
 // ------------------------------------------------------------- calendar ----
 
 void paint_calendar(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
-  auto& d = app.dash;
+  (void)app;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
 
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
-  // Title: bright month + dim year, truncated to clear the Today pill.
-  const std::string month =
-      trunc(cr, kMonthNames[std::clamp(d.calMonth, 1, 12) - 1], std::max(40.0, c.w - 230.0), 15.0);
-  const std::string year = std::string(" ") + std::to_string(d.calYear);
-  cairo_set_font_size(cr, 15.0);
-  cairo_text_extents_t mte;
-  cairo_text_extents(cr, month.c_str(), &mte);
-  cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 1.0);
-  cairo_move_to(cr, c.x + 16.0, c.y + 28.0);
-  cairo_show_text(cr, month.c_str());
-  cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.85);
-  cairo_move_to(cr, c.x + 16.0 + mte.x_advance, c.y + 28.0);
-  cairo_show_text(cr, year.c_str());
+  eyebrow(cr, "THIS WEEK", c.x + 16.0, c.y + 27.0);
 
-  // Prev / next chevrons: subtle squares matching their 28x28 hit rects.
-  for (int i = 0; i < 2; ++i) {
-    const double cx = c.x + c.w - (i == 0 ? 60.0 : 28.0);
-    const double cy = c.y + 22.0;
-    rrect(cr, cx - 14.0, cy - 14.0, 28.0, 28.0, 8.0);
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.06);
-    cairo_fill(cr);
-    eh::shell::draw_material_glyph(cr, cx, cy + 1.0, 18.0, i == 0 ? "chevron_left" : "chevron_right", 0.88, 0.93,
-                                   0.96, 1.0);
-  }
+  const std::chrono::sys_days today =
+      std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now());
+  const unsigned dow = static_cast<unsigned>(std::chrono::weekday{today}.c_encoding());
+  const std::chrono::sys_days weekStart = today - std::chrono::days{dow};
 
-  // Today pill: jumps back to the current month.
-  rrect(cr, c.x + c.w - 146.0, c.y + 8.0, 64.0, 28.0, 14.0);
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
-  cairo_fill(cr);
-  text_c(cr, "Today", c.x + c.w - 146.0 + 32.0, c.y + 26.0, 11.0, mc.textR, mc.textG, mc.textB, 0.95);
-
-  cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.22);
-  cairo_set_line_width(cr, 1.0);
-  cairo_move_to(cr, c.x + 14.0, c.y + 44.0);
-  cairo_line_to(cr, c.x + c.w - 14.0, c.y + 44.0);
-  cairo_stroke(cr);
-
-  constexpr double kInset = 16.0;
-  const double gridW = std::max(40.0, c.w - 2.0 * kInset);
-  const double colW = gridW / 7.0;
-  const double gridTop = c.y + kDashCalHeaderH + kDashCalDowH;
-
-  for (int i = 0; i < 7; ++i)
-    text_l(cr, kDowShort[i], c.x + kInset + static_cast<double>(i) * colW + 8.0, c.y + kDashCalHeaderH + 18.0, 10.0,
-           mc.textR, mc.textG, mc.textB, 0.80);
-
-  const int y = d.calYear, m = std::clamp(d.calMonth, 1, 12);
-  const auto ymd = std::chrono::year_month_day{std::chrono::year{y} / std::chrono::month{static_cast<unsigned>(m)} /
-                                               std::chrono::day{1}};
-  const unsigned firstDow =
-      static_cast<unsigned>(std::chrono::weekday{static_cast<std::chrono::sys_days>(ymd)}.c_encoding());
-  const int dim = days_in_month(y, m);
-  const int prevDim = days_in_month(m == 1 ? y : y, m == 1 ? 12 : m - 1);
-
-  const auto today = std::chrono::year_month_day{std::chrono::floor<std::chrono::days>(
-      std::chrono::system_clock::now())};
-  const int todayY = static_cast<int>(today.year());
-  const int todayM = static_cast<int>(static_cast<unsigned>(today.month()));
-  const int todayD = static_cast<int>(static_cast<unsigned>(today.day()));
-
-  // Hairline cell separators.
-  cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.10);
-  cairo_set_line_width(cr, 1.0);
-  for (int i = 0; i <= 7; ++i) {
-    const double lx = c.x + kInset + static_cast<double>(i) * colW;
-    cairo_move_to(cr, lx, gridTop);
-    cairo_line_to(cr, lx, gridTop + 6.0 * kDashCalRowH);
-  }
-  for (int r = 0; r <= 6; ++r) {
-    const double ly = gridTop + static_cast<double>(r) * kDashCalRowH;
-    cairo_move_to(cr, c.x + kInset, ly);
-    cairo_line_to(cr, c.x + kInset + gridW, ly);
-  }
-  cairo_stroke(cr);
-
-  int day = 1 - static_cast<int>(firstDow);
-  for (int r = 0; r < 6; ++r) {
-    for (int col = 0; col < 7; ++col, ++day) {
-      const double cellX = c.x + kInset + static_cast<double>(col) * colW;
-      const double cellTop = gridTop + static_cast<double>(r) * kDashCalRowH;
-      int show;
-      double alpha;
-      if (day < 1) {
-        show = prevDim + day;
-        alpha = 0.32;
-      } else if (day > dim) {
-        show = day - dim;
-        alpha = 0.32;
-      } else {
-        show = day;
-        alpha = 0.90;
-      }
-      const bool isToday =
-          (day >= 1 && day <= dim) && (y == todayY) && (m == todayM) && (day == todayD);
-      if (isToday) {
-        rrect(cr, cellX + 3.0, cellTop + 2.0, 27.0, 23.0, 7.0);
-        cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.85);
-        cairo_fill(cr);
-        text_c(cr, std::to_string(show), cellX + 16.5, cellTop + 18.0, 12.0, 0.05, 0.05, 0.07, 1.0);
-      } else {
-        text_l(cr, std::to_string(show), cellX + 8.0, cellTop + 18.0, 12.0, mc.textR, mc.textG, mc.textB, alpha);
-      }
+  constexpr double kPadX = 16.0;
+  constexpr double kGap = 6.0;
+  constexpr double kCellH = 48.0;
+  const double gridTop = c.y + 43.0;
+  const double colW = std::max(24.0, (c.w - 2.0 * kPadX - 6.0 * kGap) / 7.0);
+  for (int i = 0; i < 7; ++i) {
+    const std::chrono::sys_days dd = weekStart + std::chrono::days{i};
+    const int num = static_cast<int>(static_cast<unsigned>(std::chrono::year_month_day{dd}.day()));
+    const double cx0 = c.x + kPadX + static_cast<double>(i) * (colW + kGap);
+    if (dd == today) {
+      rrect(cr, cx0, gridTop, colW, kCellH, 8.0);
+      cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.90);
+      cairo_fill(cr);
+      text_c(cr, kDowShort[i], cx0 + colW * 0.5, gridTop + 18.0, 10.0, 0.05, 0.05, 0.07, 1.0);
+      text_c(cr, std::to_string(num), cx0 + colW * 0.5, gridTop + 36.0, 14.0, 0.05, 0.05, 0.07, 1.0);
+    } else {
+      text_c(cr, kDowShort[i], cx0 + colW * 0.5, gridTop + 18.0, 10.0, kMutR, kMutG, kMutB, 1.0);
+      text_c(cr, std::to_string(num), cx0 + colW * 0.5, gridTop + 36.0, 14.0, mc.textR, mc.textG, mc.textB, 1.0);
     }
   }
 }
@@ -287,56 +198,22 @@ void paint_weather(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
-  eh::shell::draw_material_glyph(cr, c.x + 34.0, c.y + 44.0, 36.0, glyph, 0.94, 0.96, 0.98, 1.0);
-  text_l(cr, ws.available ? (std::to_string(ws.temp) + "\u00b0" + unitCh) : "--", c.x + 58.0, c.y + 58.0, 42.0,
-         mc.textR, mc.textG, mc.textB, 1.0);
-
   std::string city = ws.location;
   const auto p = city.find(',');
   if (p != std::string::npos) city = city.substr(0, p);
-  text_l(cr, trunc(cr, city.empty() ? std::string("No location") : city, c.w - 36.0, 13.0), c.x + 18.0, c.y + 104.0, 13.0,
+  if (city.empty()) city = "No location";
+  eyebrow(cr, upper_str(trunc(cr, city, std::max(20.0, c.w - 32.0), 11.0)), c.x + 16.0, c.y + 27.0);
+
+  const double cy = c.y + 52.0;
+  eh::shell::draw_material_glyph(cr, c.x + 30.0, cy, 22.0, glyph, ws.available ? mc.accentR : 0.65,
+                                 ws.available ? mc.accentG : 0.68, ws.available ? mc.accentB : 0.72, 1.0);
+  text_l(cr, ws.available ? (std::to_string(ws.temp) + "\u00b0" + unitCh) : "--", c.x + 48.0, cy + 8.0, 22.0,
          mc.textR, mc.textG, mc.textB, 1.0);
-  text_l(cr, ws.fahrenheit ? std::string("Fahrenheit") : std::string("Celsius"), c.x + 18.0, c.y + 124.0, 12.0,
-         mc.textR, mc.textG, mc.textB, 0.92);
 
-  const double chipY = c.y + 134.0;
-  const double chipH = 42.0;
-  const double chipGap = 8.0;
-  const double chipW = std::max(30.0, (c.w - 36.0 - 3.0 * chipGap) / 4.0);
-  auto chip = [&](int i, const char* label, const std::string& val) {
-    const double x = c.x + 18.0 + static_cast<double>(i) * (chipW + chipGap);
-    rrect(cr, x, chipY, chipW, chipH, 12.0);
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.06);
-    cairo_fill(cr);
-    text_l(cr, trunc(cr, label, chipW - 16.0, 10.0), x + 10.0, chipY + 16.0, 10.0, mc.textR, mc.textG, mc.textB, 0.90);
-    text_l(cr, trunc(cr, val, chipW - 16.0, 13.0), x + 10.0, chipY + 34.0, 13.0, mc.textR, mc.textG, mc.textB, 1.0);
-  };
-  chip(0, "Feels", ws.available ? (std::to_string(ws.feels_like) + "\u00b0" + unitCh) : "--");
-  chip(1, "Humidity", ws.available ? (std::to_string(ws.humidity_pct) + "%") : "--");
-  chip(2, "Wind", ws.available ? (std::to_string(ws.wind_kmh) + " km/h") : "--");
-  chip(3, "Visibility", ws.available ? std::to_string(ws.visibility_m) : "--");
-
-  if (!ws.forecast.empty()) {
-    text_l(cr, "5-Day Forecast", c.x + 18.0, c.y + 196.0, 12.0, mc.textR, mc.textG, mc.textB, 0.92);
-    const double fy0 = c.y + 206.0;
-    const double fh = 64.0;
-    const double fGap = 8.0;
-    const double fw = std::max(24.0, (c.w - 36.0 - 4.0 * fGap) / 5.0);
-    const int nf = std::min(5, static_cast<int>(ws.forecast.size()));
-    for (int i = 0; i < nf; ++i) {
-      const auto& fd = ws.forecast[static_cast<size_t>(i)];
-      const double fx = c.x + 18.0 + static_cast<double>(i) * (fw + fGap);
-      rrect(cr, fx, fy0, fw, fh, 10.0);
-      cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.06);
-      cairo_fill(cr);
-      text_c(cr, trunc(cr, fd.day, std::max(8.0, fw - 8.0), 11.0), fx + fw * 0.5, fy0 + 16.0, 11.0, mc.textR, mc.textG, mc.textB,
-             0.92);
-      eh::shell::draw_material_glyph(cr, fx + fw * 0.5, fy0 + 36.0, 16.0, fd.icon.c_str(), 0.88, 0.93, 0.96, 1.0);
-      text_c(cr, trunc(cr, std::to_string(fd.hi) + "\u00b0/" + std::to_string(fd.lo) + "\u00b0",
-                       std::max(8.0, fw - 8.0), 12.0),
-             fx + fw * 0.5, fy0 + 58.0, 12.0, mc.textR, mc.textG, mc.textB, 1.0);
-    }
-  }
+  const std::string sub = std::string("Feels ") + (ws.available ? (std::to_string(ws.feels_like) + unitCh) : "--") +
+                          " \u00b7 Wind " + (ws.available ? (std::to_string(ws.wind_kmh) + " km/h") : "--");
+  text_l(cr, trunc(cr, sub, std::max(20.0, c.w - 32.0), 12.0), c.x + 16.0, c.y + 80.0, 12.0, mc.textR, mc.textG,
+         mc.textB, 0.90);
 }
 
 // ---------------------------------------------------------------- media ----
@@ -353,13 +230,15 @@ void paint_media(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
-  const double artX = c.x + 12.0, artY = c.y + 14.0, artS = 56.0;
-  rrect(cr, artX, artY, artS, artS, 12.0);
+  const double cy = dashboard_media_row_cy(c);
+  const double artS = 48.0;
+  const double artX = c.x + 16.0, artY = cy - artS * 0.5;
+  rrect(cr, artX, artY, artS, artS, 8.0);
   cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.07);
   cairo_fill(cr);
   if (active && ms.art) {
     cairo_save(cr);
-    rrect(cr, artX, artY, artS, artS, 12.0);
+    rrect(cr, artX, artY, artS, artS, 8.0);
     cairo_clip(cr);
     const int iw = cairo_image_surface_get_width(ms.art.get());
     const int ih = cairo_image_surface_get_height(ms.art.get());
@@ -370,67 +249,44 @@ void paint_media(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
     cairo_paint(cr);
     cairo_restore(cr);
   } else {
-    eh::shell::draw_material_glyph(cr, artX + artS * 0.5, artY + artS * 0.55, 24.0, "music_note", 0.88, 0.93, 0.96, 1.0);
+    eh::shell::draw_material_glyph(cr, artX + artS * 0.5, artY + artS * 0.55, 22.0, "music_note", 0.88, 0.93, 0.96,
+                                   1.0);
   }
 
-  const double textX = c.x + 80.0;
-  const double textMaxW = std::max(20.0, c.w - textX - 14.0);
+  const double textX = c.x + 78.0;
+  const double textMaxW = std::max(20.0, (c.x + c.w - 124.0) - textX);
   text_l(cr, trunc(cr, active ? (ms.title.empty() ? std::string("Unknown title") : ms.title) : std::string("No Media"),
-                    textMaxW, 13.0),
-         textX, c.y + 34.0, 13.0, mc.textR, mc.textG, mc.textB, 1.0);
+                   textMaxW, 14.0),
+         textX, cy - 12.0, 14.0, mc.textR, mc.textG, mc.textB, 1.0);
   text_l(cr, trunc(cr, active ? (ms.artist.empty() ? std::string("Unknown artist") : ms.artist) : std::string("—"),
-                    textMaxW, 12.0),
-         textX, c.y + 54.0, 12.0, mc.textR, mc.textG, mc.textB, 0.92);
-
-  const double cy = cc::cc_media_btn_cy(c.y, c.h);
-  auto btn = [&](int idx, const char* glyph, bool enabled, bool primary) {
-    const double cx = cc::cc_media_btn_cx(c.x, c.w, idx);
-    cairo_new_path(cr);
-    cairo_arc(cr, cx, cy, 14.0, 0.0, 2.0 * M_PI);
-    if (primary) {
-      cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, enabled ? 0.85 : 0.30);
-      cairo_fill(cr);
-      eh::shell::draw_material_glyph(cr, cx, cy + 0.5, 18.0, glyph, 0.05, 0.05, 0.07, 1.0);
-      return;
-    }
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, enabled ? 0.10 : 0.04);
-    cairo_fill_preserve(cr);
-    cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.13);
-    cairo_set_line_width(cr, 1.0);
-    cairo_stroke(cr);
-    eh::shell::draw_material_glyph(cr, cx, cy + 0.5, 18.0, glyph, 0.88, 0.93, 0.96, 1.0);
-  };
-  if (active) {
-    btn(0, "skip_previous", ms.can_go_previous, false);
-    btn(1, playing ? "pause" : "play_arrow", ms.can_play || ms.can_pause, true);
-    btn(2, "skip_next", ms.can_go_next, false);
-  }
+                   textMaxW, 12.0),
+         textX, cy + 4.0, 12.0, mc.textR, mc.textG, mc.textB, 0.92);
 
   if (active && ms.duration_us > 0) {
     const DashMediaProgressGeom g = dashboard_media_progress_geom(c);
     double frac = std::clamp(static_cast<double>(ms.position_us) / static_cast<double>(ms.duration_us), 0.0, 1.0);
     if (d.dragging && d.dragKind == DashDragKind::Seek && d.dragVisualT >= 0.0)
       frac = std::clamp(d.dragVisualT, 0.0, 1.0);
-    rrect(cr, g.trackX, g.trackY, g.trackW, g.trackH, 3.0);
-    cairo_set_source_rgba(cr, mc.drawerDimR, mc.drawerDimG, mc.drawerDimB, 0.85 * s + 0.15);
+    rrect(cr, g.trackX, g.trackY, g.trackW, g.trackH, 1.5);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
     cairo_fill(cr);
     const double fillW = g.trackW * frac;
     if (fillW > 0.5) {
-      rrect(cr, g.trackX, g.trackY, std::max(6.0, fillW), g.trackH, 3.0);
+      rrect(cr, g.trackX, g.trackY, std::max(3.0, fillW), g.trackH, 1.5);
       cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.90);
       cairo_fill(cr);
-      cairo_arc(cr, g.trackX + fillW, g.trackY + g.trackH * 0.5, 4.5, 0.0, 2.0 * M_PI);
-      cairo_fill(cr);
     }
-    const auto fmt = [](std::int64_t us) {
-      const long total = static_cast<long>(us / 1000000);
-      char b[32];
-      std::snprintf(b, sizeof(b), "%ld:%02ld", total / 60, total % 60);
-      return std::string(b);
+  }
+
+  if (active) {
+    auto btn = [&](int idx, const char* glyph, bool enabled, double size, double alpha) {
+      const double cx = dashboard_media_btn_cx(c, idx);
+      eh::shell::draw_material_glyph(cr, cx, cy + 0.5, size, glyph, mc.textR, mc.textG, mc.textB,
+                                     enabled ? alpha : 0.35);
     };
-    text_l(cr, fmt(static_cast<std::int64_t>(frac * static_cast<double>(ms.duration_us))), c.x + 14.0, g.labelBase,
-           11.0, mc.textR, mc.textG, mc.textB, 0.90);
-    text_r(cr, fmt(ms.duration_us), c.x + c.w - 14.0, g.labelBase, 11.0, mc.textR, mc.textG, mc.textB, 0.90);
+    btn(0, "skip_previous", ms.can_go_previous, 16.0, 0.90);
+    btn(1, playing ? "pause" : "play_arrow", ms.can_play || ms.can_pause, 22.0, 1.0);
+    btn(2, "skip_next", ms.can_go_next, 16.0, 0.90);
   }
 }
 
@@ -448,9 +304,7 @@ void paint_mixer(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
   const int n = std::min(total, c.span >= 2 ? 6 : 3);
   const DashMixerGeom g = dashboard_mixer_geom(c.x, c.w);
 
-  eh::shell::draw_material_glyph(cr, c.x + 24.0, c.y + kMixerHeaderH * 0.5 + 1.0, 18.0,
-                                 total > (c.span >= 2 ? 6 : 3) ? "expand_more" : "tune", 0.88, 0.93, 0.96, 1.0);
-  text_l(cr, "Volume Mixer", g.nameX, c.y + kMixerHeaderH * 0.5 + 5.0, 15.0, mc.textR, mc.textG, mc.textB, 1.0);
+  eyebrow(cr, "VOLUME MIXER", c.x + 16.0, c.y + 27.0);
 
   for (int i = 0; i < n; ++i) {
     const auto& st = streams[static_cast<size_t>(i)];
@@ -516,51 +370,38 @@ void paint_system(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
 
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-  card_title(cr, mc, c, "insights", "System");
+  eyebrow(cr, "SYSTEM", c.x + 16.0, c.y + 27.0);
 
   dashboard_sample_system(app);
 
   char b[64];
-  struct Row {
-    const char* glyph;
-    const char* label;
-    std::string value;
-    double frac;
-  };
-  Row rows[3];
-  std::snprintf(b, sizeof(b), "%.1f%%", d.sysCpuPct);
-  rows[0] = Row{"speed", "CPU", b, std::clamp(d.sysCpuPct / 100.0, 0.0, 1.0)};
-
+  std::snprintf(b, sizeof(b), "%.0f%%", d.sysCpuPct);
+  const std::string cpuV = b;
+  const double cpuFrac = std::clamp(d.sysCpuPct / 100.0, 0.0, 1.0);
   if (d.sysMemTotalMb > 0.0)
-    std::snprintf(b, sizeof(b), "%.1f / %.1f GB", d.sysMemMb / 1024.0, d.sysMemTotalMb / 1024.0);
+    std::snprintf(b, sizeof(b), "%.1f/%.1f GB", d.sysMemMb / 1024.0, d.sysMemTotalMb / 1024.0);
   else
     std::snprintf(b, sizeof(b), "--");
-  rows[1] = Row{"memory", "Memory", b,
-                d.sysMemTotalMb > 0.0 ? std::clamp(d.sysMemMb / d.sysMemTotalMb, 0.0, 1.0) : 0.0};
+  const std::string memV = b;
+  const double memFrac =
+      d.sysMemTotalMb > 0.0 ? std::clamp(d.sysMemMb / d.sysMemTotalMb, 0.0, 1.0) : 0.0;
 
-  const bool haveTemp = d.sysTempC > 0.5;
-  if (haveTemp) std::snprintf(b, sizeof(b), "%.0f\u00b0C", d.sysTempC);
-  else std::snprintf(b, sizeof(b), "--");
-  rows[2] = Row{"thermostat", "Temperature", b, haveTemp ? std::clamp(d.sysTempC / 100.0, 0.0, 1.0) : 0.0};
-
-  for (int i = 0; i < 3; ++i) {
-    const double rowY = c.y + kSysHeaderH + static_cast<double>(i) * kSysRowH;
-    eh::shell::draw_material_glyph(cr, c.x + 24.0, rowY + 20.0, 16.0, rows[i].glyph, 0.80, 0.86, 0.90, 1.0);
-    text_l(cr, rows[i].label, c.x + 40.0, rowY + 24.0, 12.0, mc.textR, mc.textG, mc.textB, 0.95);
-    text_r(cr, rows[i].value, c.x + c.w - 16.0, rowY + 24.0, 12.0, mc.textR, mc.textG, mc.textB, 1.0);
-
-    const double barX = c.x + 40.0;
-    const double barW = std::max(30.0, c.w - 56.0 - 40.0);
-    const double barY = rowY + 32.0;
-    rrect(cr, barX, barY, barW, 6.0, 3.0);
-    cairo_set_source_rgba(cr, mc.drawerDimR, mc.drawerDimG, mc.drawerDimB, 0.85 * s + 0.15);
+  const double barX = c.x + 16.0;
+  const double barW = std::max(30.0, c.w - 32.0);
+  auto bar_row = [&](double labelBase, const char* label, const std::string& value, double frac) {
+    text_l(cr, label, barX, labelBase, 12.0, mc.textR, mc.textG, mc.textB, 0.90);
+    text_r(cr, value, barX + barW, labelBase, 12.0, mc.textR, mc.textG, mc.textB, 1.0);
+    rrect(cr, barX, labelBase + 3.0, barW, 4.0, 2.0);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
     cairo_fill(cr);
-    if (rows[i].frac > 0.005) {
-      rrect(cr, barX, barY, std::max(4.0, barW * rows[i].frac), 6.0, 3.0);
+    if (frac > 0.005) {
+      rrect(cr, barX, labelBase + 3.0, std::max(4.0, barW * frac), 4.0, 2.0);
       cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.90);
       cairo_fill(cr);
     }
-  }
+  };
+  bar_row(c.y + 47.0, "CPU", cpuV, cpuFrac);
+  bar_row(c.y + 74.0, "Memory", memV, memFrac);
 }
 
 // ------------------------------------------- expanded network/bluetooth ----
@@ -732,10 +573,73 @@ void paint_bt_compact(cairo_t* cr, const CardRect& c, const eh::config::ChromePa
   ccu::cc_draw_status_pill(cr, c.x + c.w - 112.0, c.y + 9.0, bs.powered ? "On" : "Off", bs.powered, s, mc);
 }
 
+// -------------------------------------------- compact volume/mic rows (84px) ----
+// Eyebrow device label on top, then mute icon + flat bar + percent. Replaces
+// the shared two-line audio cards (same mute/slider behavior, new geometry).
+
+void paint_audio_compact(DockApp& app, cairo_t* cr, const CardRect& c,
+                         const eh::config::ChromePaintColors& mc, double s, bool isInput) {
+  auto& d = app.dash;
+  bool muted = false;
+  int volPct = 0;
+  std::string device;
+  if (isInput) {
+    const auto as = hooks::control_center_audio_input_state();
+    muted = as.muted;
+    volPct = as.volume_pct;
+    device = as.device_name;
+  } else {
+    const auto as = hooks::control_center_audio_output_state();
+    muted = as.muted;
+    volPct = as.volume_pct;
+    device = as.device_name;
+  }
+  const DashAudioGeom g = dashboard_audio_geom(c);
+
+  double frac = std::clamp(static_cast<double>(volPct) / 100.0, 0.0, 1.0);
+  int pct = volPct;
+  const DashDragKind wantKind = isInput ? DashDragKind::InputVolume : DashDragKind::Volume;
+  if (d.dragging && d.dragKind == wantKind && d.dragVisualT >= 0.0) {
+    frac = std::clamp(d.dragVisualT, 0.0, 1.0);
+    pct = static_cast<int>(std::lround(frac * 100.0));
+  }
+
+  ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+
+  if (device.empty()) device = "Unknown";
+  eyebrow(cr, trunc(cr, (isInput ? std::string("INPUT \u00b7 ") : std::string("OUTPUT \u00b7 ")) + upper_str(device),
+                    std::max(20.0, c.w - 32.0), 11.0),
+          c.x + 16.0, c.y + 27.0);
+
+  const char* glyph;
+  if (isInput) {
+    glyph = muted ? "mic_off" : "mic";
+  } else {
+    glyph = (muted || pct <= 0) ? "volume_off" : (pct < 34 ? "volume_down" : "volume_up");
+  }
+  const double igr = muted ? 0.65 : mc.accentR;
+  const double igg = muted ? 0.68 : mc.accentG;
+  const double igb = muted ? 0.72 : mc.accentB;
+  eh::shell::draw_material_glyph(cr, g.iconCX, g.iconCY + 1.0, 18.0, glyph, igr, igg, igb, 0.96);
+
+  rrect(cr, g.trackX, g.trackY, g.trackW, g.trackH, 1.5);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
+  cairo_fill(cr);
+  if (frac > 0.005) {
+    rrect(cr, g.trackX, g.trackY, std::max(3.0, g.trackW * frac), g.trackH, 1.5);
+    cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.90);
+    cairo_fill(cr);
+  }
+
+  char pb[32];
+  std::snprintf(pb, sizeof(pb), "%d%%", pct);
+  text_r(cr, pb, g.pctRightX, g.pctBase, 12.0, mc.textR, mc.textG, mc.textB, 0.90);
+}
+
 // ----------------------------------------------------------------- card ----
 
 void paint_card(DockApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc, double inner) {
-  auto& d = app.dash;
   switch (c.kind) {
     case DashCardKind::Clock:
       paint_clock(app, cr, c, inner);
@@ -756,17 +660,11 @@ void paint_card(DockApp& app, cairo_t* cr, const CardRect& c, const eh::config::
       paint_system(app, cr, c, inner);
       break;
     case DashCardKind::Volume: {
-      auto as = hooks::control_center_audio_output_state();
-      if (d.dragging && d.dragKind == DashDragKind::Volume && d.dragVisualT >= 0.0)
-        as.volume_fill_t_override = std::clamp(d.dragVisualT, 0.0, 1.0);
-      hooks::paint_control_center_audio_output_card(cr, c.x, c.y, c.w, c.h, as, inner, kCardR);
+      paint_audio_compact(app, cr, c, mc, inner, false);
       break;
     }
     case DashCardKind::Mic: {
-      auto as = hooks::control_center_audio_input_state();
-      if (d.dragging && d.dragKind == DashDragKind::InputVolume && d.dragVisualT >= 0.0)
-        as.volume_fill_t_override = std::clamp(d.dragVisualT, 0.0, 1.0);
-      hooks::paint_control_center_audio_input_card(cr, c.x, c.y, c.w, c.h, as, inner, kCardR);
+      paint_audio_compact(app, cr, c, mc, inner, true);
       break;
     }
     case DashCardKind::Network: {
@@ -833,9 +731,7 @@ void dashboard_paint(DockApp& app, cairo_t* cr, double surfaceW, double surfaceH
     if (d.hover.sub >= 0 && d.hover.sub < static_cast<int>(c.subs.size())) {
       const SubRect& sr = c.subs[static_cast<size_t>(d.hover.sub)];
       const double r = (sr.role == DashCardRole::Mute || sr.role == DashCardRole::MediaPrev ||
-                        sr.role == DashCardRole::MediaPlayPause || sr.role == DashCardRole::MediaNext ||
-                        sr.role == DashCardRole::CalPrev || sr.role == DashCardRole::CalNext ||
-                        sr.role == DashCardRole::CalToday)
+                        sr.role == DashCardRole::MediaPlayPause || sr.role == DashCardRole::MediaNext)
                            ? 14.0
                            : 16.0;
       hover_hl(cr, mc, sr.paintX, sr.paintY, sr.paintW, sr.paintH, r);

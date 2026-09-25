@@ -13,7 +13,7 @@ struct App;
 inline constexpr const char* kDockWidgetPickIds[] = {
     "pinned_apps",     "running_apps", "tray",           "settings_button",
     "app_menu",        "app_drawer",   "smenu",          "launchpad",      "distro_spotlight", "clock", "weather", "media", "workspaces", "world_clock",
-    "control_center",  "notifications", "spacer", "trash", "volume_mixer", "vpn", "battery", "bluetooth",
+    "control_center", "pear_center", "notifications", "spacer", "trash", "volume_mixer", "vpn", "battery", "bluetooth",
 };
 inline constexpr int kDockWidgetPickCount =
     static_cast<int>(sizeof(kDockWidgetPickIds) / sizeof(kDockWidgetPickIds[0]));

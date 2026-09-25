@@ -82,6 +82,7 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
   }
   {
     const double slotCenterX = dock_strip_slot_center_x(app, pr, pr.idx);
+    if (hit.kind == PickSlot::Kind::ControlCenter) app.ccWidgetId = hit.key;
     if (eh::shell::popup::popup_dispatch_slot(app, static_cast<int>(hit.kind), static_cast<int>(slotCenterX), serial)) return;
   }
 

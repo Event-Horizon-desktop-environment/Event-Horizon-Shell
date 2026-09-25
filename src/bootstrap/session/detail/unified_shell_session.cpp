@@ -818,6 +818,24 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
             const bool next = !gamma_service_->enabled();
             gamma_service_->set_enabled(next);
             if (next) gamma_service_->set_temperature(4000);
+          } else if (payload == "dnd.toggle") {
+            // Control Centre DND button: flip notifications.doNotDisturb and
+            // persist + broadcast so horizon-notifications re-syncs. Same
+            // save path as pin drags (write + apply_from_memory).
+            eh::config::ShellConfig sc =
+                eh::config::shell_config_snapshot_skip_matugen();
+            sc.notifications.doNotDisturb = !sc.notifications.doNotDisturb;
+            if (eh::config::write_state_settings_toml(sc))
+              eh::config::shell_config_apply_from_memory(std::move(sc));
+          } else if (payload == "color-scheme.toggle") {
+            // PearCenter theme switcher: flip the matugen mode. The mode drives
+            // the derived palette + external templates on the next apply.
+            eh::config::ShellConfig sc =
+                eh::config::shell_config_snapshot_skip_matugen();
+            sc.appearance.matugenMode =
+                (sc.appearance.matugenMode == "light") ? "dark" : "light";
+            if (eh::config::write_state_settings_toml(sc))
+              eh::config::shell_config_apply_from_memory(std::move(sc));
           }
         });
   }

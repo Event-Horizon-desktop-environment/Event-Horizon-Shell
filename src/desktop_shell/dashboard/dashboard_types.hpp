@@ -41,13 +41,10 @@ enum class DashCardRole : std::uint8_t {
   Toggle,        // network / bluetooth header (expand-collapse)
   Row,           // expanded network AP row or bluetooth device row
   Mute,          // audio card icon button
-  Slider,        // volume / mic / mixer track
+  Slider,        // volume / mic / mixer track / media progress
   MediaPrev,
   MediaPlayPause,
   MediaNext,
-  CalPrev,
-  CalNext,
-  CalToday,  // jump back to the current month
 };
 
 // One interactive (or purely informational) rect inside a card. `paint*` is

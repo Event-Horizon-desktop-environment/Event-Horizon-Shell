@@ -259,7 +259,7 @@ Organized into subdirectories by function:
 
 ## `src/platform/` -- Platform Helpers
 
-**`rfkill_helper.cpp`** / `.h` -- rfkill interface for enabling/disabling radios (used by the network/Bluetooth settings).
+**`radio_block.cpp`** / `.h` -- radio-block probe/control via rfkill sysfs + control node (used by Bluetooth status).
 
 ---
 

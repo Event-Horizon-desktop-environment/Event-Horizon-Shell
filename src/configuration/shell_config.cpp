@@ -182,7 +182,7 @@ bool dock_tray_list_token_local(const ShellConfig& c, const std::string& token) 
   return it != c.widgets.end() && it->second.type == "system_tray";
 }
 
-void dock_migrate_legacy_autosep_slots(ShellConfig& c) { 
+void dock_migrate_legacy_autosep_slots(ShellConfig& c) {
   auto fix = [&](std::vector<std::string>& v) {
     for (size_t i = 0; i + 1 < v.size(); ++i) {
       if (dock_tray_list_token_local(c, v[i]) && v[i + 1] == "settings_button") {
@@ -194,6 +194,30 @@ void dock_migrate_legacy_autosep_slots(ShellConfig& c) {
   fix(c.dock.leftWidgets);
   fix(c.dock.centerWidgets);
   fix(c.dock.rightWidgets);
+}
+
+// v0 dashboard blocks (written before config versions existed) pin the old
+// defaults: max_width 1800, pre-reorder widget list. Upgrade values that
+// still equal those defaults in place; anything the user customized (any
+// other value) passes through untouched. Idempotent.
+void dashboard_migrate_legacy_defaults(ShellConfig& c) {
+  auto& d = c.dashboard;
+  if (d.configVersion >= 1) return;
+  if (d.maxWidth == 1800) d.maxWidth = 0;
+  if (d.cards.size() == 10) {
+    const char* ids[10] = {"clock",  "weather", "calendar", "media",  "volume",
+                           "mic",    "network", "bluetooth", "mixer",  "system"};
+    const int spans[10] = {1, 1, 2, 2, 1, 1, 1, 1, 1, 1};
+    bool oldOrder = true;
+    for (size_t i = 0; i < 10; ++i) {
+      if (d.cards[i].id != ids[i] || d.cards[i].span != spans[i]) {
+        oldOrder = false;
+        break;
+      }
+    }
+    if (oldOrder) d.cards = DashboardConfig::default_cards();
+  }
+  d.configVersion = 1;
 }
 
 void ensure_builtin_tray_widget(ShellConfig& c) {
@@ -229,7 +253,7 @@ void apply_dock_defaults_if_needed(ShellConfig& c) {
   if (c.dock.leftWidgets.empty() && c.dock.centerWidgets.empty() && c.dock.rightWidgets.empty()) {
     c.dock.leftWidgets = {"smenu", "media"};
     c.dock.centerWidgets = {"launchpad", "pinned_apps", "running_apps", "trash"};
-    c.dock.rightWidgets = {"tray", "weather", "clock", "control_center", "settings_button"};
+    c.dock.rightWidgets = {"tray", "weather", "clock", "pear_center", "settings_button"};
   }
 }
 
@@ -238,7 +262,7 @@ void apply_taskbar_defaults_if_needed(ShellConfig& c) {
   if (c.taskbar.leftWidgets.empty() && c.taskbar.centerWidgets.empty() && c.taskbar.rightWidgets.empty()) {
     c.taskbar.leftWidgets = {"smenu", "media"};
     c.taskbar.centerWidgets = {"launchpad", "pinned_apps", "running_apps", "trash"};
-    c.taskbar.rightWidgets = {"tray", "weather", "clock", "control_center", "settings_button"};
+    c.taskbar.rightWidgets = {"tray", "weather", "clock", "pear_center", "settings_button"};
   }
 }
 
@@ -360,6 +384,7 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
       c.dashboard.marginBottom = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(200)));
     if (auto v = (*db)["max_width"].value<int64_t>())
       c.dashboard.maxWidth = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(7680)));
+    if (auto v = (*db)["hover_reveal"].value<bool>()) c.dashboard.hoverReveal = *v;
     // Widgets: ["clock", "media:2", ...] — "id" or "id:span". An explicit
     // list replaces the default order/set entirely.
     if (const auto* a = (*db)["widgets"].as_array()) {
@@ -743,9 +768,9 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
   if (const auto* au = root.get_as<toml::table>("audio")) {
     if (auto s = (*au)["default_sink_name"].value<std::string>()) c.audio.default_sink_name = *s;
     if (auto s = (*au)["default_source_name"].value<std::string>()) c.audio.default_source_name = *s;
-    if (auto v = (*au)["default_sink_volume_pct"].value<int64_t>()) c.audio.default_sink_volume_pct = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(100)));
+    if (auto v = (*au)["default_sink_volume_pct"].value<int64_t>()) c.audio.default_sink_volume_pct = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(150)));
     if (auto v = (*au)["default_sink_muted"].value<bool>()) c.audio.default_sink_muted = *v;
-    if (auto v = (*au)["default_source_volume_pct"].value<int64_t>()) c.audio.default_source_volume_pct = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(100)));
+    if (auto v = (*au)["default_source_volume_pct"].value<int64_t>()) c.audio.default_source_volume_pct = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(150)));
     if (auto v = (*au)["default_source_muted"].value<bool>()) c.audio.default_source_muted = *v;
     if (auto v = (*au)["engine_clock_rate_hz"].value<int64_t>()) c.audio.engine_clock_rate_hz = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(384000)));
     if (auto v = (*au)["engine_force_rate_hz"].value<int64_t>()) c.audio.engine_force_rate_hz = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(384000)));
@@ -759,6 +784,7 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     if (auto v = (*au)["compat_pcm_format"].value<int64_t>()) c.audio.compat_pcm_format = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(3)));
     if (auto v = (*au)["engine_quantum"].value<int64_t>()) c.audio.engine_quantum = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(65536)));
     if (auto v = (*au)["engine_force_quantum"].value<int64_t>()) c.audio.engine_force_quantum = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(65536)));
+    if (auto v = (*au)["allow_over_amplification"].value<bool>()) c.audio.allow_over_amplification = *v;
   }
 
   if (const auto* wtab = root.get_as<toml::table>("widget")) {
@@ -1012,6 +1038,7 @@ ShellConfig load_uncached(bool skip_matugen = false) {
   apply_taskbar_defaults_if_needed(c);
   normalize_legacy_tray_tokens(c);
   dock_migrate_legacy_autosep_slots(c);
+  dashboard_migrate_legacy_defaults(c);
   ensure_builtin_tray_widget(c);
   ensure_builtin_media_widget(c);
   ensure_builtin_spacer_widget(c);
@@ -1172,8 +1199,20 @@ std::string widget_implementation_type(std::string_view instance_id) {
   std::lock_guard<std::mutex> lock(g_mu);
   if (!g_cache) g_cache = load_uncached();
   const std::string id(instance_id);
+  // PearCenter is the user-facing name for the quick-settings widget; it
+  // shares the control_center implementation (legacy configs keep working).
+  if (id == "pear_center") {
+    const auto it = g_cache->widgets.find(id);
+    if (it == g_cache->widgets.end() || it->second.type.empty() ||
+        it->second.type == "pear_center")
+      return "control_center";
+    return it->second.type;
+  }
   const auto it = g_cache->widgets.find(id);
-  if (it != g_cache->widgets.end()) return it->second.type;
+  if (it != g_cache->widgets.end()) {
+    if (it->second.type == "pear_center") return "control_center";
+    return it->second.type;
+  }
   return id;
 }
 
@@ -1328,6 +1367,8 @@ bool write_state_settings_toml(const ShellConfig& c) {
     db.insert_or_assign("margin_top", static_cast<int64_t>(merged.dashboard.marginTop));
     db.insert_or_assign("margin_bottom", static_cast<int64_t>(merged.dashboard.marginBottom));
     db.insert_or_assign("max_width", static_cast<int64_t>(merged.dashboard.maxWidth));
+    db.insert_or_assign("hover_reveal", merged.dashboard.hoverReveal);
+    db.insert_or_assign("config_version", static_cast<int64_t>(merged.dashboard.configVersion));
     {
       toml::array cards;
       const auto& src = merged.dashboard.cards.empty() ? DashboardConfig::default_cards()
@@ -1627,6 +1668,7 @@ bool write_state_settings_toml(const ShellConfig& c) {
     au.insert_or_assign("compat_pcm_format", static_cast<int64_t>(merged.audio.compat_pcm_format));
     au.insert_or_assign("engine_quantum", static_cast<int64_t>(merged.audio.engine_quantum));
     au.insert_or_assign("engine_force_quantum", static_cast<int64_t>(merged.audio.engine_force_quantum));
+    au.insert_or_assign("allow_over_amplification", merged.audio.allow_over_amplification);
     root.insert_or_assign("audio", std::move(au));
   }
 

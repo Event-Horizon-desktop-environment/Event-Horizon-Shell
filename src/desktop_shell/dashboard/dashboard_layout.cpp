@@ -45,15 +45,46 @@ std::vector<eh::widgets::BluetoothDevice> dashboard_sorted_bt_devices() {
 
 DashMediaProgressGeom dashboard_media_progress_geom(const CardRect& c) {
   DashMediaProgressGeom g;
-  g.hitX = c.x + 14.0;
-  g.hitW = std::max(30.0, c.w - 28.0);
-  g.hitY = c.y + 70.0;
-  g.hitH = 22.0;
-  g.trackX = c.x + 64.0;
-  g.trackW = std::max(30.0, c.w - 128.0);
-  g.trackY = c.y + 78.0;
-  g.trackH = 6.0;
-  g.labelBase = c.y + 84.0;
+  const double barRight = c.x + c.w - 132.0;
+  const double barX = c.x + 78.0;
+  const double cy = dashboard_media_row_cy(c);
+  g.trackX = barX;
+  g.trackW = std::max(30.0, barRight - barX);
+  g.trackY = cy + 10.0;
+  g.trackH = 3.0;
+  g.hitX = barX;
+  g.hitW = g.trackW;
+  g.hitY = cy + 2.0;
+  g.hitH = 20.0;
+  return g;
+}
+
+double dashboard_media_row_cy(const CardRect& c) { return c.y + c.h * 0.5; }
+
+double dashboard_media_btn_cx(const CardRect& c, int idx) {
+  if (idx <= 0) return c.x + c.w - 110.0;
+  if (idx == 1) return c.x + c.w - 78.0;
+  return c.x + c.w - 46.0;
+}
+
+DashAudioGeom dashboard_audio_geom(const CardRect& c) {
+  DashAudioGeom g;
+  const double cy = c.y + 52.0;
+  g.muteX = c.x + 8.0;
+  g.muteY = cy - 14.0;
+  g.muteS = 28.0;
+  g.iconCX = c.x + 22.0;
+  g.iconCY = cy;
+  g.trackX = c.x + 44.0;
+  g.trackW = std::max(30.0, c.w - 100.0);
+  g.trackY = cy - 1.5;
+  g.trackH = 3.0;
+  g.hitX = g.trackX;
+  g.hitW = g.trackW;
+  g.hitY = cy - 10.0;
+  g.hitH = 20.0;
+  g.pctRightX = c.x + c.w - 16.0;
+  g.pctBase = cy + 4.0;
   return g;
 }
 
@@ -62,10 +93,9 @@ namespace {
 namespace cc = eh::shell::dock::control_center;
 namespace sm = eh::shell::cc_slider;
 
-// Cards tile the panel edge-to-edge with no outer padding: the dashboard is
-// one continuous glass sheet, not floating tiles. (Inter-card spacing is the
-// `gap` config, which also defaults to 0 for the same reason.)
-constexpr double kPad = 0.0;
+// Panel frame between the glass backdrop and the card grid (v5: 20px).
+// Inter-card spacing is the `gap` config (v5 tiles: 12px).
+constexpr double kPad = 20.0;
 
 constexpr double kNetHeaderH = 40.0;   // dashboard compact header (CC's own is 76)
 constexpr double kRowHeaderH = 32.0;
@@ -74,8 +104,6 @@ constexpr double kRowBottomPad = 12.0;
 constexpr double kWifiErrorH = 18.0;
 constexpr double kMixerHeaderH = sm::kMixerHeaderH;
 constexpr double kMixerRowH = sm::kMixerRowH;
-constexpr double kSysHeaderH = 36.0;
-constexpr double kSysRowH = 46.0;
 
 int row_count(int n) { return std::max(1, std::min(6, n)); }
 
@@ -86,25 +114,16 @@ bool wifi_error_active(const DockApp& app) {
 double natural_height(DockApp& app, DashCardKind k, int span) {
   switch (k) {
     case DashCardKind::Clock:
-      return 150.0;
+      return 104.0;
     case DashCardKind::Calendar:
-      return kDashCalHeaderH + kDashCalDowH + 6.0 * kDashCalRowH + kDashCalBottomPad;
-    case DashCardKind::Weather: {
-      const auto ws = eh::shell::dock_slot_hooks::control_center_weather_state(
-          eh::config::shell_config_snapshot(), dashboard_weather_instance_id(app));
-      return ws.forecast.empty() ? 184.0 : 284.0;
-    }
-    case DashCardKind::Media: {
-      if (app.mpris) {
-        const auto ms = app.mpris->snapshot();
-        const bool active = ms.active && (!ms.title.empty() || !ms.artist.empty());
-        if (active && ms.duration_us > 0) return 132.0;
-      }
+      return 108.0;  // current-week strip
+    case DashCardKind::Weather:
       return 100.0;
-    }
+    case DashCardKind::Media:
+      return 84.0;
     case DashCardKind::Volume:
     case DashCardKind::Mic:
-      return sm::kAudioCardH;
+      return 84.0;
     case DashCardKind::Network: {
       double h = kNetHeaderH;
       if (app.dash.netExpanded) {
@@ -129,7 +148,7 @@ double natural_height(DockApp& app, DashCardKind k, int span) {
       return kMixerHeaderH + static_cast<double>(n) * kMixerRowH + 14.0;
     }
     case DashCardKind::System:
-      return kSysHeaderH + 3.0 * kSysRowH;
+      return 100.0;
     default:
       return kNetHeaderH;
   }
@@ -160,11 +179,9 @@ void build_subs(CardRect& c, DockApp& app) {
     case DashCardKind::Volume:
     case DashCardKind::Mic: {
       // Mute first: its box overlaps the slider's padded hit box.
-      push_sub(c, DashCardRole::Mute, c.x + 10.0, c.y + 14.0, 28.0, 28.0);
-      push_sub(c, DashCardRole::Slider, c.x + sm::kAudioTrackXPad - sm::kAudioHitPadH,
-               c.y + sm::kAudioTrackYFromCardTop - sm::kAudioHitPadV,
-               c.w - 2.0 * sm::kAudioTrackXPad + 2.0 * sm::kAudioHitPadH, sm::kAudioTrackH + 2.0 * sm::kAudioHitPadV,
-               -1, -1, c.x + sm::kAudioTrackXPad, c.w - 2.0 * sm::kAudioTrackXPad);
+      const DashAudioGeom g = dashboard_audio_geom(c);
+      push_sub(c, DashCardRole::Mute, g.muteX, g.muteY, g.muteS, g.muteS);
+      push_sub(c, DashCardRole::Slider, g.hitX, g.hitY, g.hitW, g.hitH, -1, -1, g.trackX, g.trackW);
       break;
     }
     case DashCardKind::Network: {
@@ -188,10 +205,10 @@ void build_subs(CardRect& c, DockApp& app) {
       break;
     }
     case DashCardKind::Media: {
-      const double cy = cc::cc_media_btn_cy(c.y, c.h);
-      push_sub(c, DashCardRole::MediaPrev, cc::cc_media_btn_cx(c.x, c.w, 0) - 14.0, cy - 14.0, 28.0, 28.0);
-      push_sub(c, DashCardRole::MediaPlayPause, cc::cc_media_btn_cx(c.x, c.w, 1) - 14.0, cy - 14.0, 28.0, 28.0);
-      push_sub(c, DashCardRole::MediaNext, cc::cc_media_btn_cx(c.x, c.w, 2) - 14.0, cy - 14.0, 28.0, 28.0);
+      const double cy = dashboard_media_row_cy(c);
+      push_sub(c, DashCardRole::MediaPrev, dashboard_media_btn_cx(c, 0) - 14.0, cy - 14.0, 28.0, 28.0);
+      push_sub(c, DashCardRole::MediaPlayPause, dashboard_media_btn_cx(c, 1) - 14.0, cy - 14.0, 28.0, 28.0);
+      push_sub(c, DashCardRole::MediaNext, dashboard_media_btn_cx(c, 2) - 14.0, cy - 14.0, 28.0, 28.0);
       bool showBar = false;
       if (app.mpris) {
         const auto ms = app.mpris->snapshot();
@@ -201,12 +218,6 @@ void build_subs(CardRect& c, DockApp& app) {
         const DashMediaProgressGeom g = dashboard_media_progress_geom(c);
         push_sub(c, DashCardRole::Slider, g.hitX, g.hitY, g.hitW, g.hitH, -1, -1, g.trackX, g.trackW);
       }
-      break;
-    }
-    case DashCardKind::Calendar: {
-      push_sub(c, DashCardRole::CalPrev, c.x + c.w - 60.0 - 14.0, c.y + 22.0 - 14.0, 28.0, 28.0);
-      push_sub(c, DashCardRole::CalNext, c.x + c.w - 28.0 - 14.0, c.y + 22.0 - 14.0, 28.0, 28.0);
-      push_sub(c, DashCardRole::CalToday, c.x + c.w - 146.0, c.y + 8.0, 64.0, 28.0);
       break;
     }
     case DashCardKind::Mixer: {
@@ -423,8 +434,7 @@ DashClockText dashboard_clock_text(const eh::config::ShellConfig& sc) {
     const char* timeFmt = sc.time.use24h ? (sc.time.showSeconds ? "%H:%M:%S" : "%H:%M")
                                          : (sc.time.showSeconds ? "%I:%M:%S" : "%I:%M");
     out.time = strftime_or_empty(timeFmt, lt.tm);
-    // The dashboard always shows the full date (not the compact dateFormat).
-    if (sc.time.showDate) out.date = strftime_or_empty("%A, %B %d, %Y", lt.tm);
+    if (sc.time.showDate) out.date = strftime_or_empty("%a, %b %d", lt.tm);
   }
   if (!sc.time.timezone.empty()) {
     out.zone = sc.time.timezone;

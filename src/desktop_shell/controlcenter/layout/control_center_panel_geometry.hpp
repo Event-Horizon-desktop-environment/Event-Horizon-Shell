@@ -1,12 +1,22 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+
+namespace eh::config {
+struct ShellConfig;
+}
 
 struct DockApp;
 namespace eh::shell::dock::control_center { struct ControlCenterState; }
 
 [[nodiscard]] double control_center_popup_height();
 [[nodiscard]] double control_center_popup_height(const DockApp& app);
+
+// Popup width follows the widget design: PearCenter compact is 360px wide,
+// legacy Control Center is 620px wide (both scaled by the dock ui scale).
+[[nodiscard]] int control_center_popup_width_for(const eh::config::ShellConfig& sc,
+                                                const std::string& widgetId);
 
 // New layout position helpers (computed at runtime with current scale)
 [[nodiscard]] double cc_layout_pad();

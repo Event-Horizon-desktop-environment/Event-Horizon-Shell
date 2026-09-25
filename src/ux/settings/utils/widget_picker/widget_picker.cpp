@@ -100,9 +100,11 @@ static const char* widget_display_desc(const std::string& id) {
   if (id == "world_clock")
     return "Multi-timezone clock w/ neon retro style; configurable via [widget.world_clock] in TOML";
   if (id == "control_center")
-    return "Status pill icons (ethernet/audio/mic/bluetooth); optional [widget.control_center] show_* booleans";
+    return "Control Center classic popup (network, audio, mixer, media, weather); legacy design";
+  if (id == "pear_center")
+    return "PearCenter quick settings (network, audio, display, media); optional [widget.pear_center] pear_* booleans";
   if (id == "notifications")
-    return "Bell opens Control Center notifications; right-click toggles do-not-disturb";
+    return "Bell opens PearCenter notifications; right-click toggles do-not-disturb";
   if (id == "spacer" || eh::config::widget_implementation_type(id) == "spacer")
     return "Empty slot one icon wide; use between dock groups instead of automatic gaps";
   if (id == "trash" || eh::config::widget_implementation_type(id) == "trash")

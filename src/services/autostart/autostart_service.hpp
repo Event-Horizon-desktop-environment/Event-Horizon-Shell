@@ -45,6 +45,8 @@ struct AutostartUiEntry {
   std::string stem;             // basename without .desktop, used as key
   std::string name;
   std::string icon;             // icon name from .desktop
+  std::string exec;             // Exec command line from .desktop
+  bool runInTerminal = false;   // Terminal=true in .desktop
   std::string desktopPath;      // path to the file that would be used (user or system)
   bool enabled = true;
   bool isUserOverride = false;  // lives in ~/.config/autostart
@@ -70,13 +72,13 @@ bool remove_autostart_override(const std::string& stem);
 // Returns true on success.
 bool create_autostart_entry(const std::string& stem, const std::string& name,
                             const std::string& exec, const std::string& icon,
-                            int delaySec);
+                            int delaySec, bool runInTerminal = false);
 
 // Update an existing user-override autostart entry's metadata (name, exec, icon, delay).
 // Only affects files already in ~/.config/autostart/. Returns true on success.
 bool edit_autostart_entry(const std::string& stem, const std::string& name,
                           const std::string& exec, const std::string& icon,
-                          int delaySec);
+                          int delaySec, bool runInTerminal = false);
 
 struct InstalledApp {
   std::string name;

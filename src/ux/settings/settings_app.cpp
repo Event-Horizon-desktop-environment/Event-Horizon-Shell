@@ -780,13 +780,14 @@ void draw(App& app) {
 
   if (app.activeTab == 0) settings_clamp_dock_scroll_px(app);
   else if (app.activeTab == 11) settings_clamp_taskbar_scroll_px(app);
-  else if (app.activeTab == 46) app.settingsAccountsScrollPx = std::max(0, app.settingsAccountsScrollPx);
+  else if (app.activeTab == 46) settings_clamp_accounts_scroll_px(app);
   else if (app.activeTab == 48) settings_clamp_autostart_scroll_px(app);
   else if (app.activeTab == 47) app.settingsBluetoothScrollPx = std::max(0, app.settingsBluetoothScrollPx);
   else if (app.activeTab >= 20 && app.activeTab <= 26) settings_clamp_mango_scroll_px(app);
   else if (app.activeTab == 33) settings_clamp_hyprland_scroll_px(app);
   else if (app.activeTab == 9) settings_clamp_launcher_scroll_px(app);
   if (app.activeTab == 2) settings_clamp_appearance_scroll_px(app);
+  if (app.activeTab == 30) settings_clamp_time_scroll_px(app);
   if (app.activeTab == 6) settings_clamp_wallpaper_scroll_px(app);
   if (app.activeTab == 7) settings_clamp_monitors_scroll_px(app);
   if (app.activeTab == 44) settings_clamp_icons_scroll_px(app);
@@ -804,6 +805,8 @@ void draw(App& app) {
                                : app.activeTab == 17 ? app.settingsNetworkScrollPx
                               : app.activeTab == 31 ? app.settingsKeyboardScrollPx
                               : app.activeTab == 47 ? app.settingsBluetoothScrollPx
+  : app.activeTab == 30 ? app.settingsTimeScrollPx
+  : app.activeTab == 46 ? app.settingsAccountsScrollPx
   : app.activeTab == 48 ? app.autostartScrollPx
                                 : (app.activeTab >= 20 && app.activeTab <= 26) ? app.settingsMangoScrollPx
                                 : (app.activeTab == 33) ? app.settingsHyprlandScrollPx
@@ -1227,8 +1230,15 @@ void draw(App& app) {
                                       kDateFormatLabels, app.settings.timeDateFormat,
                                       app.timeFormatDropdownHoverRow, glassOv);
     }
+    if (time_zone_picker_visible(app)) {
+      paint_time_zone_picker(app, cr);
+    }
   } else if (app.activeTab == 31) {
-    app.settingsKeyboardScrollPx = std::max(0, std::min(app.settingsKeyboardScrollPx, 400));
+    {
+      const int viewH = app.height - kContentTop - kSpacingL;
+      const int maxScroll = std::max(0, keyboard_tab::content_bottom(app) + kSpacingL - viewH);
+      app.settingsKeyboardScrollPx = std::clamp(app.settingsKeyboardScrollPx, 0, maxScroll);
+    }
     cairo_save(cr);
     cairo_rectangle(cr, static_cast<double>(contentX), static_cast<double>(kContentTop),
                     static_cast<double>(contentW),
@@ -1239,9 +1249,10 @@ void draw(App& app) {
     cairo_restore(cr);
     if (app.settingsKeyboardDdKind >= 0) {
       const int rightRail = contentX + contentW - 32;
-      const int cbx = rightRail - keyboard_tab::kComboW;
-      const int cbw = keyboard_tab::kComboW;
       const int cbh = keyboard_tab::kComboH;
+      const int behaviorTop = keyboard_tab::behavior_card_top(app);
+      int ddX = rightRail - keyboard_tab::kComboW;
+      int ddW = keyboard_tab::kComboW;
       int ddY = 0;
       int nItems = 0;
       const char* const* labels = nullptr;
@@ -1255,13 +1266,19 @@ void draw(App& app) {
         nItems = kSwitchShortcutCount;
         labels = kSwitchShortcutLabels;
       } else if (app.settingsKeyboardDdKind == 2) {
-        ddY = keyboard_tab::kBehaviorCardTop + 52 + 0 * kSliderRowH + 40 + cbh + 2;
+        ddY = behaviorTop + 52 + 0 * kSliderRowH + 40 + cbh + 2;
         nItems = kCapsLockCount;
         labels = kCapsLockLabels;
       } else if (app.settingsKeyboardDdKind == 3) {
-        ddY = keyboard_tab::kBehaviorCardTop + 52 + 1 * kSliderRowH + 40 + cbh + 2;
+        ddY = behaviorTop + 52 + 1 * kSliderRowH + 40 + cbh + 2;
         nItems = kComposeKeyCount;
         labels = kComposeKeyLabels;
+      } else if (app.settingsKeyboardDdKind == 4) {
+        const int n = static_cast<int>(app.settings.keyboardLayouts.size());
+        ddX = contentX + 8 + kCardPad;
+        ddY = keyboard_tab::sources_card_top() + 52 + n * keyboard_tab::kSourcesRowH + 6 + 34 + 2;
+        nItems = static_cast<int>(keyboard_available_layouts(app).size());
+        layoutLabels = nullptr;
       }
       if (nItems > 0) {
         static std::vector<const char*> ddLabels;
@@ -1272,7 +1289,15 @@ void draw(App& app) {
         ddLabels.reserve(nItems);
         if (layoutLabels) {
           for (const auto& l : *layoutLabels) {
-            ddStrStorage.push_back(l);
+            ddStrStorage.push_back(keyboard_layout_display_name(l));
+          }
+          for (const auto& s : ddStrStorage) {
+            ddLabels.push_back(s.c_str());
+          }
+          labels = ddLabels.data();
+        } else if (app.settingsKeyboardDdKind == 4) {
+          for (const auto& l : keyboard_available_layouts(app)) {
+            ddStrStorage.push_back(keyboard_layout_display_name(l));
           }
           for (const auto& s : ddStrStorage) {
             ddLabels.push_back(s.c_str());
@@ -1289,9 +1314,10 @@ void draw(App& app) {
           case 1: selIdx = app.settings.keyboardSwitchShortcut; break;
           case 2: selIdx = app.settings.keyboardCapsLockBehavior; break;
           case 3: selIdx = app.settings.keyboardComposeKey; break;
+          case 4: selIdx = -1; break;
         }
         const int ddScreenY = ddY - settings_scroll_px_int(app);
-        settings_paint_combo_list_popup(app, cr, cbx, ddScreenY, cbw, kSettingsDdRowH, nItems,
+        settings_paint_combo_list_popup(app, cr, ddX, ddScreenY, ddW, kSettingsDdRowH, nItems,
                                         labels, selIdx, app.settingsKeyboardDdHoverRow, glassOv);
       }
     }

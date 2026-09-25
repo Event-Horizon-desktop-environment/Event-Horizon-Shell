@@ -45,6 +45,7 @@ std::string widget_display_title(const std::string& id) {
   if (id == "workspaces") return "Workspaces";
   if (id == "world_clock") return "World Clock";
   if (id == "control_center") return "Control Center";
+  if (id == "pear_center") return "PearCenter";
   if (id == "notifications") return "Notifications";
   if (id == "spacer" || eh::config::widget_implementation_type(id) == "spacer") return "Spacer";
   if (id == "trash" || eh::config::widget_implementation_type(id) == "trash") return "Trash";

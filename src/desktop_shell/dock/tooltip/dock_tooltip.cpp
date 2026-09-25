@@ -66,7 +66,11 @@ std::string resolve_text_for_slot(const PickSlot& slot, const DockPickResult& pr
     case PickSlot::Kind::AppDrawer:       return "All Apps";
     case PickSlot::Kind::Trash:           return "Trash";
     case PickSlot::Kind::Media:           return {};
-    case PickSlot::Kind::ControlCenter:   return "Control Center";
+    case PickSlot::Kind::ControlCenter: {
+      const std::string raw = eh::config::widget_implementation_type(slot.key);
+      if (slot.key == "pear_center" || raw == "pear_center") return "PearCenter";
+      return "Control Center";
+    }
     case PickSlot::Kind::Workspaces:      return "Workspaces";
     case PickSlot::Kind::VolumeMixer:     return "Volume";
     default: return {};

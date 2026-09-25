@@ -1,11 +1,16 @@
 #include <cairo/cairo.h>
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "m3/core/primitives/box.hpp"
 #include "m3/core/label.hpp"
@@ -96,6 +101,113 @@ static void monitors_combo_geom_at_content_row(int content_y0, int cardX, int ca
   *ch = kSettingsComboH;
 }
 
+static int sound_volume_max_pct(const App& app) {
+  return app.settings.audioAllowOverAmp ? 150 : 100;
+}
+
+// Persistent track value in the reserved 56px zone past the track end
+// (the m3 popup only appears while dragging).
+static void sound_paint_track_value(cairo_t* cr, const char* text, int trackEndX, int trey) {
+  m3::Label vl;
+  vl.setText(text);
+  vl.setFontSize(12.0f);
+  vl.setFontWeight(600);
+  vl.setColor(static_cast<float>(Theme::TextR), static_cast<float>(Theme::TextG),
+              static_cast<float>(Theme::TextB), 0.70f);
+  float lw = 0, lh = 0;
+  vl.measureExtents(lw, lh);
+  vl.paintAt(cr, static_cast<float>(trackEndX + 56) - lw, static_cast<float>(trey) + 8.0f - lh * 0.5f);
+}
+
+// Track norm (0..1 across the slider) -> PipeWire volume, honoring the
+// over-amplification ceiling.
+static void sound_apply_drag_volume(eh::audio::PipeWireService& pw, std::uint32_t node_id,
+                                    const App& app, double norm_t) {
+  const double scaled = std::clamp(norm_t, 0.0, 1.0) * (sound_volume_max_pct(app) / 100.0);
+  pw.set_node_volume(node_id, scaled);
+}
+
+// Pango text width on a scratch surface, so hit-testing can size combos with
+// the exact same metric paint uses (same font/size, same process fontmap).
+static int sound_text_w_px(const char* t) {
+  if (!t || !t[0]) return 0;
+  cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_A8, 1, 1);
+  cairo_t* cr = cairo_create(s);
+  auto* layout = pango_cairo_create_layout(cr);
+  auto* desc = pango_font_description_new();
+  pango_font_description_set_family(desc, "Inter");
+  pango_font_description_set_size(desc, static_cast<int>(12.0f * PANGO_SCALE));
+  pango_font_description_set_weight(desc, static_cast<PangoWeight>(400));
+  pango_layout_set_font_description(layout, desc);
+  pango_layout_set_text(layout, t, -1);
+  int tw = 0, th = 0;
+  pango_layout_get_pixel_size(layout, &tw, &th);
+  pango_font_description_free(desc);
+  g_object_unref(layout);
+  cairo_destroy(cr);
+  cairo_surface_destroy(s);
+  return tw;
+}
+
+// Closed-combo rect shared by paint and hit-test: fixed base widened to fit
+// the value text (clamped). Identical inputs always yield identical rects,
+// and long device names widen the box instead of truncating to "...".
+static void sound_combo_geom_for(const SoundSectionGeom& sec, int row_ix, const char* value_text,
+                                 int* cx, int* cy, int* cw, int* ch) {
+  monitors_combo_geom_at_content_row(sec.content_y0, sec.x, sec.w, row_ix, cx, cy, cw, ch);
+  const int desiredW = sound_text_w_px(value_text) + 48;
+  const int rightEdge = sec.x + sec.w - kCardPad;
+  const int maxW = std::max(kSettingsComboW, rightEdge - (sec.x + kCardPad + kSpacingM));
+  *cw = std::clamp(desiredW, kSettingsComboW, maxW);
+  *cx = rightEdge - *cw;
+}
+
+// Fire-and-forget speaker test: plays front-left then front-right on the
+// given sink without blocking the UI (double-fork; the intermediate is
+// reaped immediately so nothing lingers).
+static void sound_test_speakers(std::uint32_t sink_id) {
+  if (sink_id == 0) return;
+  const char* left = "/usr/share/sounds/freedesktop/stereo/audio-channel-front-left.oga";
+  const char* right = "/usr/share/sounds/freedesktop/stereo/audio-channel-front-right.oga";
+  const char* fallback = "/usr/share/sounds/freedesktop/stereo/audio-test-signal.oga";
+  const bool haveLR = (access(left, R_OK) == 0 && access(right, R_OK) == 0);
+  if (!haveLR && access(fallback, R_OK) != 0) return;
+  const pid_t intermediate = ::fork();
+  if (intermediate < 0) return;
+  if (intermediate > 0) {
+    int st = 0;
+    while (::waitpid(intermediate, &st, 0) < 0) {
+      if (errno != EINTR) break;
+    }
+    return;
+  }
+  if (::setsid() < 0) ::_exit(1);
+  const pid_t worker = ::fork();
+  if (worker < 0) ::_exit(1);
+  if (worker > 0) ::_exit(0);
+  const std::string target = "--target=" + std::to_string(sink_id);
+  auto play = [&](const char* file) {
+    const pid_t p = ::fork();
+    if (p < 0) return;
+    if (p > 0) {
+      int st = 0;
+      while (::waitpid(p, &st, 0) < 0) {
+        if (errno != EINTR) break;
+      }
+      return;
+    }
+    execlp("pw-play", "pw-play", target.c_str(), file, nullptr);
+    _exit(127);
+  };
+  if (haveLR) {
+    play(left);
+    play(right);
+  } else {
+    play(fallback);
+  }
+  ::_exit(0);
+}
+
 // Engine 2-column grid geometry helpers
 static void snd_engine_grid_geom(const SoundSectionGeom& sec, int* colW, int* col1X, int* col2X) {
   const int innerW = sec.w - 2 * kCardPad;
@@ -118,19 +230,6 @@ static void snd_engine_select_geom(const SoundSectionGeom& sec, int colIx, int r
 
 static int snd_engine_label_y(const SoundSectionGeom& sec, int rowIx) {
   return sec.content_y0 + rowIx * kSndGridRowH;
-}
-
-// Char-count estimation of text-sized combo geom (no Pango/cairo needed).
-static void snd_combo_text_geom(int content_y0, int cardX, int cardW, int rowIx,
-                                const char* value_text, int* cx, int* cy, int* cw, int* ch) {
-  monitors_combo_geom_at_content_row(content_y0, cardX, cardW, rowIx, cx, cy, cw, ch);
-  if (!value_text || !value_text[0]) return;
-  const int estPx = static_cast<int>(std::strlen(value_text)) * 8 + 4;
-  const int desiredW = estPx + 48;
-  const int rightEdge = cardX + cardW - kCardPad;
-  const int maxW = std::max(kSettingsComboW, rightEdge - (cardX + kCardPad + kSpacingM));
-  *cw = std::clamp(desiredW, kSettingsComboW, maxW);
-  *cx = rightEdge - *cw;
 }
 
 static void monitors_form_slider_track_geom_content(int content_y0, int cardX, int cardW, int rowIx, int* trX,
@@ -345,7 +444,9 @@ SoundTabGeom sound_compute_child_geom(int content_x, int content_w, int content_
 
   switch (child) {
     case kSoundChildDevices: {
-      const int dh = monitors_section_card_height_rows(4);
+      // Rows: output combo, output slider, input combo, input slider,
+      // over-amplification toggle, speaker test.
+      const int dh = monitors_section_card_height_rows(6);
       g.devices = {x, y, w, dh, monitors_section_content_y0(y)};
       y += dh + kMonSecGap;
       const int rows = std::max(1, g.n_cards);
@@ -764,30 +865,11 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
                          Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
     }
 
-    auto measure_text_px = [&](const char* t) -> int {
-      if (!t || !t[0]) return 0;
-      auto* layout = pango_cairo_create_layout(cr);
-      auto* desc = pango_font_description_new();
-      pango_font_description_set_family(desc, "Inter");
-      pango_font_description_set_size(desc, static_cast<int>(12.0f * PANGO_SCALE));
-      pango_font_description_set_weight(desc, static_cast<PangoWeight>(400));
-      pango_layout_set_font_description(layout, desc);
-      pango_layout_set_text(layout, t, -1);
-      int tw = 0, th = 0;
-      pango_layout_get_pixel_size(layout, &tw, &th);
-      pango_font_description_free(desc);
-      g_object_unref(layout);
-      return tw;
-    };
     auto snd_combo_geom = [&](const SoundSectionGeom& sec, int row_ix, const char* value_text,
                               int& cx, int& cy, int& cw, int& ch) {
-      monitors_combo_geom_at_content_row(sec.content_y0, sec.x, sec.w, row_ix, &cx, &cy, &cw, &ch);
-      const int textW = measure_text_px(value_text);
-      const int desiredW = textW + 48;
-      const int rightEdge = sec.x + sec.w - kCardPad;
-      const int maxW = std::max(kSettingsComboW, rightEdge - (sec.x + kCardPad + kSpacingM));
-      cw = std::clamp(desiredW, kSettingsComboW, maxW);
-      cx = rightEdge - cw;
+      // Autosized to the text via the shared helper, so paint and hit-test
+      // always agree and long names widen the box instead of truncating.
+      sound_combo_geom_for(sec, row_ix, value_text, &cx, &cy, &cw, &ch);
     };
     auto paint_snd_combo_row = [&](const SoundSectionGeom& sec, int row_ix, const char* label, const char* value_text,
                                    bool expanded) {
@@ -929,10 +1011,17 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
                                     def_sink->muted ? "volume_off" : "volume_up",
                                     Theme::TextR, Theme::TextG, Theme::TextB, (iconHot ? 0.95 : 0.50) * glassOv);
         char ddisp[32];
-        std::snprintf(ddisp, sizeof(ddisp), "%d%%", std::clamp(def_sink->volume_pct, 0, 100));
-        sound_settings_slider(app, cr, trx, trey, trw, std::clamp(def_sink->volume_pct, 0, 100), 0, 100, paintPointerYOffset,
+        const int vmax = sound_volume_max_pct(app);
+        std::snprintf(ddisp, sizeof(ddisp), "%d%%", std::clamp(def_sink->volume_pct, 0, vmax));
+        sound_settings_slider(app, cr, trx, trey, trw, std::clamp(def_sink->volume_pct, 0, vmax), 0, vmax, paintPointerYOffset,
                         ddisp, false,
                         (app.soundVolDragCode == 2000) ? app.settingsSliderDragNormT : -1.0);
+        sound_paint_track_value(cr, ddisp, trx + trw, trey);
+      } else {
+        settings_show_text(cr, static_cast<double>(sg.devices.x + kCardPad),
+                           static_cast<double>(sg.devices.content_y0 + 1 * kMonFormRowPitch + 19),
+                           "No output device available.", 12, 400, Theme::TextR, Theme::TextG,
+                           Theme::TextB, 0.45 * glassOv);
       }
 
       // Default input.
@@ -996,10 +1085,62 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
                                     def_src->muted ? "mic_off" : "mic",
                                     Theme::TextR, Theme::TextG, Theme::TextB, (iconHot ? 0.95 : 0.50) * glassOv);
         char sdisp[32];
-        std::snprintf(sdisp, sizeof(sdisp), "%d%%", std::clamp(def_src->volume_pct, 0, 100));
-        sound_settings_slider(app, cr, trx, trey, trw, std::clamp(def_src->volume_pct, 0, 100), 0, 100, paintPointerYOffset,
+        const int vmax = sound_volume_max_pct(app);
+        std::snprintf(sdisp, sizeof(sdisp), "%d%%", std::clamp(def_src->volume_pct, 0, vmax));
+        sound_settings_slider(app, cr, trx, trey, trw, std::clamp(def_src->volume_pct, 0, vmax), 0, vmax, paintPointerYOffset,
                         sdisp, false,
                         (app.soundVolDragCode == 2001) ? app.settingsSliderDragNormT : -1.0);
+        sound_paint_track_value(cr, sdisp, trx + trw, trey);
+      } else {
+        settings_show_text(cr, static_cast<double>(sg.devices.x + kCardPad),
+                           static_cast<double>(sg.devices.content_y0 + 3 * kMonFormRowPitch + 19),
+                           "No input device available.", 12, 400, Theme::TextR, Theme::TextG,
+                           Theme::TextB, 0.45 * glassOv);
+      }
+
+      // Row 4: over-amplification toggle. Row 5: speaker test.
+      {
+        const int rowY = sg.devices.content_y0 + 4 * kMonFormRowPitch;
+        settings_label(cr, static_cast<double>(sg.devices.x + kCardPad), static_cast<double>(rowY + 14),
+                       "Allow volume above 100%", nullptr);
+        settings_toggle(app, cr, sg.devices.x, rowY, sg.devices.w,
+                        static_cast<double>(rowY - 7), 28.0,
+                        app.settings.audioAllowOverAmp, 0.0);
+      }
+      {
+        const int rowY = sg.devices.content_y0 + 5 * kMonFormRowPitch;
+        settings_label(cr, static_cast<double>(sg.devices.x + kCardPad), static_cast<double>(rowY + 14),
+                       "Speaker test", "Play test tones on the default output");
+        const int bw = 150, bh = 28;
+        const int bx = sg.devices.x + sg.devices.w - kCardPad - bw;
+        const int by = rowY + (kMonFormRowPitch - bh) / 2;
+        const bool hov = app.pointerX >= bx && pyH >= by && app.pointerX < bx + bw && pyH < by + bh;
+        m3::Box box;
+        float r, g, b;
+        if (app.drawChromeMatugen) {
+          r = app.drawChrome.panelFillR;
+          g = app.drawChrome.panelFillG;
+          b = app.drawChrome.panelFillB;
+        } else {
+          r = static_cast<float>(Theme::BgR);
+          g = static_cast<float>(Theme::BgG);
+          b = static_cast<float>(Theme::BgB);
+        }
+        box.setColor(r, g, b, static_cast<float>((hov ? 0.94 : 0.88) * glassOv));
+        box.setRadius(9.0f);
+        box.setGeometry(static_cast<float>(bx), static_cast<float>(by),
+                        static_cast<float>(bw), static_cast<float>(bh));
+        box.setGlassy(true);
+        box.paint(cr);
+        m3::Label lbl;
+        lbl.setText(snap.default_sink != 0 ? "Test Speakers" : "No Output");
+        lbl.setFontSize(12.0f);
+        lbl.setFontWeight(600);
+        float lw = 0, lh = 0;
+        lbl.measureExtents(lw, lh);
+        lbl.setColor(Theme::TextR, Theme::TextG, Theme::TextB,
+                     (hov && snap.default_sink != 0) ? 0.95f : 0.55f);
+        lbl.paintAt(cr, bx + (bw - lw) * 0.5f, by + (bh - lh) * 0.5f);
       }
     }
         paint_cards_section(sg.cards, "Card profiles", "tune",
@@ -1021,25 +1162,25 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
       const std::string disp_rate =
           es.available ? sound_engine_hz_display(es.clock_rate_hz) : std::string("(pw-metadata unavailable)");
       const std::string disp_force =
-          !es.available ? std::string("\xe2\x80\x94")
+          !es.available ? std::string("Unavailable")
                       : (es.clock_force_rate_hz == 0 ? std::string("Auto") : sound_engine_hz_display(es.clock_force_rate_hz));
       const std::string disp_allow =
-          es.available ? sound_engine_allowed_combo_display(es) : std::string("\xe2\x80\x94");
+          es.available ? sound_engine_allowed_combo_display(es) : std::string("Unavailable");
       const std::string disp_pcm = sound_compat_pcm_combo_display(cf);
       const std::string disp_quantum =
-          !es.available ? std::string("\xe2\x80\x94")
+          !es.available ? std::string("Unavailable")
                         : (es.clock_quantum == 0 ? std::string("Auto") : std::to_string(es.clock_quantum));
       const std::string disp_force_q =
-          !es.available ? std::string("\xe2\x80\x94")
+          !es.available ? std::string("Unavailable")
                         : (es.clock_force_quantum == 0 ? std::string("Auto") : std::to_string(es.clock_force_quantum));
 
       const struct { const char* label; int ddId; const std::string* value; } kEngRows[6] = {
-        {"Default rate",          2, &disp_rate},
-        {"Force graph rate",      3, &disp_force},
-        {"Allowed rates preset",  4, &disp_allow},
-        {"Default PCM format",    5, &disp_pcm},
-        {"Default quantum",       6, &disp_quantum},
-        {"Force quantum",         7, &disp_force_q},
+        {"Default rate",          es.available ? 2 : -1, &disp_rate},
+        {"Force graph rate",      es.available ? 3 : -1, &disp_force},
+        {"Allowed rates preset",  es.available ? 4 : -1, &disp_allow},
+        {"Default PCM format",    cf.available ? 5 : -1, &disp_pcm},
+        {"Default quantum",       es.available ? 6 : -1, &disp_quantum},
+        {"Force quantum",         es.available ? 7 : -1, &disp_force_q},
       };
 
       paint_snd_grid_cell(app, cr, sg.engine, 0, 0, kEngRows[0].label, *kEngRows[0].value, kEngRows[0].ddId,
@@ -1293,9 +1434,10 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
                                       st.muted ? "volume_off" : "volume_up",
                                       Theme::TextR, Theme::TextG, Theme::TextB, (iconHot ? 0.95 : 0.50) * glassOv);
           char disp[32];
-          std::snprintf(disp, sizeof(disp), "%d%%", std::clamp(st.volume_pct, 0, 100));
-          sound_settings_slider(app, cr, trx, trey, trw, std::clamp(st.volume_pct, 0, 100), 0, 100, paintPointerYOffset, disp,
+          std::snprintf(disp, sizeof(disp), "%d%%", std::clamp(st.volume_pct, 0, sound_volume_max_pct(app)));
+          sound_settings_slider(app, cr, trx, trey, trw, std::clamp(st.volume_pct, 0, sound_volume_max_pct(app)), 0, sound_volume_max_pct(app), paintPointerYOffset, disp,
                           false, (app.soundVolDragCode == i) ? app.settingsSliderDragNormT : -1.0);
+          sound_paint_track_value(cr, disp, trx + trw, trey);
         }
       }
     }
@@ -1423,9 +1565,10 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
                                       st.muted ? "mic_off" : "mic",
                                       Theme::TextR, Theme::TextG, Theme::TextB, (iconHot ? 0.95 : 0.50) * glassOv);
           char disp[32];
-          std::snprintf(disp, sizeof(disp), "%d%%", std::clamp(st.volume_pct, 0, 100));
-          sound_settings_slider(app, cr, trx, trey, trw, std::clamp(st.volume_pct, 0, 100), 0, 100, paintPointerYOffset, disp,
+          std::snprintf(disp, sizeof(disp), "%d%%", std::clamp(st.volume_pct, 0, sound_volume_max_pct(app)));
+          sound_settings_slider(app, cr, trx, trey, trw, std::clamp(st.volume_pct, 0, sound_volume_max_pct(app)), 0, sound_volume_max_pct(app), paintPointerYOffset, disp,
                           false, (app.soundVolDragCode == 1000 + i) ? app.settingsSliderDragNormT : -1.0);
+          sound_paint_track_value(cr, disp, trx + trw, trey);
         }
       }
     }
@@ -1832,8 +1975,9 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       if (d.node_id == snap.default_sink) snd_def_sink = &d;
     }
     const std::string snd_sink_disp =
-        snd_def_sink ? (snd_def_sink->display_name.empty() ? snd_def_sink->name : snd_def_sink->display_name) : std::string("(none)");
-    snd_combo_text_geom(sg.devices.content_y0, sg.devices.x, sg.devices.w, 0, snd_sink_disp.c_str(), &cx, &cy, &cw, &ch);
+        snd_def_sink ? (snd_def_sink->display_name.empty() ? snd_def_sink->name : snd_def_sink->display_name)
+                     : std::string("(none)");
+    sound_combo_geom_for(sg.devices, 0, snd_sink_disp.c_str(), &cx, &cy, &cw, &ch);
   }
   if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
     settings_close_non_default_app_dropdowns(app);
@@ -1862,7 +2006,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       if (point_in_rect(app.pointerX, pyLogical, trx - 6, trey - 4, trw + 12, 28)) {
         app.soundVolDragCode = 2000;
         app.settingsSliderDragNormT = slider_norm_from_x(app.pointerX, trx, trw);
-        pw.set_node_volume(sd->node_id, slider_norm_from_x(app.pointerX, trx, trw));
+        sound_apply_drag_volume(pw, sd->node_id, app, slider_norm_from_x(app.pointerX, trx, trw));
         app.soundVolDragPwNodeId = sd->node_id;
         app.soundVolPwLastApplyMonoMs = eh::shell::now_mono_ms();
         draw(app);
@@ -1877,8 +2021,9 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       if (d.node_id == snap.default_source) snd_def_src = &d;
     }
     const std::string snd_src_disp =
-        snd_def_src ? (snd_def_src->display_name.empty() ? snd_def_src->name : snd_def_src->display_name) : std::string("(none)");
-    snd_combo_text_geom(sg.devices.content_y0, sg.devices.x, sg.devices.w, 2, snd_src_disp.c_str(), &cx, &cy, &cw, &ch);
+        snd_def_src ? (snd_def_src->display_name.empty() ? snd_def_src->name : snd_def_src->display_name)
+                    : std::string("(none)");
+    sound_combo_geom_for(sg.devices, 2, snd_src_disp.c_str(), &cx, &cy, &cw, &ch);
   }
   if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
     settings_close_non_default_app_dropdowns(app);
@@ -1908,7 +2053,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       if (point_in_rect(app.pointerX, pyLogical, trx - 6, trey - 4, trw + 12, 28)) {
         app.soundVolDragCode = 2001;
         app.settingsSliderDragNormT = slider_norm_from_x(app.pointerX, trx, trw);
-        pw.set_node_volume(srcd->node_id, slider_norm_from_x(app.pointerX, trx, trw));
+        sound_apply_drag_volume(pw, srcd->node_id, app, slider_norm_from_x(app.pointerX, trx, trw));
         app.soundVolDragPwNodeId = srcd->node_id;
         app.soundVolPwLastApplyMonoMs = eh::shell::now_mono_ms();
         draw(app);
@@ -1916,22 +2061,41 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       }
     }
   }
+
+  // Over-amplification toggle row + speaker test row (devices rows 4/5).
+  {
+    const int rowY4 = sg.devices.content_y0 + 4 * kMonFormRowPitch;
+    if (point_in_rect(app.pointerX, pyLogical, sg.devices.x + kCardPad, rowY4 - 8,
+                      sg.devices.w - 2 * kCardPad, 44)) {
+      app.settings.audioAllowOverAmp = !app.settings.audioAllowOverAmp;
+      save_settings(app.settings);
+      draw(app);
+      return true;
+    }
+    const int rowY5 = sg.devices.content_y0 + 5 * kMonFormRowPitch;
+    const int bw = 150, bh = 28;
+    const int bx = sg.devices.x + sg.devices.w - kCardPad - bw;
+    const int by = rowY5 + (kMonFormRowPitch - bh) / 2;
+    if (snap.default_sink != 0 && point_in_rect(app.pointerX, pyLogical, bx, by, bw, bh)) {
+      sound_test_speakers(snap.default_sink);
+      draw(app);
+      return true;
+    }
+  }
   }
 
   if (app.soundChildTab == kSoundChildBluetooth || app.soundChildTab == kSoundChildDevices) {
   for (int bi = 0; bi < sg.n_cards; ++bi) {
-    {
-      const auto& cards_bg = sound_tab_cards_cached(app);
-      const auto& btcrd = cards_bg[static_cast<size_t>(bi)];
-      std::string card_disp = btcrd.active_profile_key;
-      for (const auto& p : btcrd.profiles) {
-        if (p.key == btcrd.active_profile_key) {
-          card_disp = p.description.empty() ? p.key : p.description;
-          break;
-        }
+    const auto& cards_bg = sound_tab_cards_cached(app);
+    const auto& btcrd = cards_bg[static_cast<size_t>(bi)];
+    std::string card_disp = btcrd.active_profile_key;
+    for (const auto& p : btcrd.profiles) {
+      if (p.key == btcrd.active_profile_key) {
+        card_disp = p.description.empty() ? p.key : p.description;
+        break;
       }
-      snd_combo_text_geom(sg.cards.content_y0, sg.cards.x, sg.cards.w, bi, card_disp.c_str(), &cx, &cy, &cw, &ch);
     }
+    sound_combo_geom_for(sg.cards, bi, card_disp.c_str(), &cx, &cy, &cw, &ch);
     if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
       settings_close_non_default_app_dropdowns(app);
       app.soundActiveDd = kSoundCardDdBase + bi;
@@ -1942,8 +2106,11 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
   }
 
   if (app.soundChildTab == kSoundChildEngine) {
-  const eh::audio::EngineSettings es_nav = pw.query_engine_settings();
-  const eh::audio::CompatDefaultSinkFormat cf_nav = pw.query_compat_default_sink_format();
+  // Same cached values paint uses: a live re-query here could disagree with
+  // what is on screen (and make painted cells unclickable or vice versa).
+  eh::audio::EngineSettings es_nav{};
+  eh::audio::CompatDefaultSinkFormat cf_nav{};
+  settings_sound_engine_paint_cache_read(app, &es_nav, &cf_nav);
   if (es_nav.available) {
     {
       snd_engine_select_geom(sg.engine, 0, 0, &cx, &cy, &cw, &ch);
@@ -2025,9 +2192,21 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
   }
 
   if (app.soundChildTab == kSoundChildApps) {
+  // Same link snapshot paint parses: identical strings => identical rects.
+  std::string hit_link_blob;
+  if (n_play > 0 || n_rec > 0) (void)eh::audio::pw_link_list_capture_stdout(&hit_link_blob);
   for (int i = 0; i < n_play; ++i) {
-    monitors_combo_geom_at_content_row(sg.playback.content_y0, sg.playback.x, sg.playback.w, i * 2, &cx, &cy, &cw,
-                                       &ch);
+    const auto& st = snap.output_streams[static_cast<size_t>(i)];
+    const std::string route = eh::audio::pw_link_list_playback_sink_for_stream(hit_link_blob, st.node_name);
+    std::string route_disp = route;
+    for (const auto& d : snap.sinks) {
+      if (d.name == route) {
+        route_disp = d.display_name.empty() ? d.name : d.display_name;
+        break;
+      }
+    }
+    if (route_disp.empty()) route_disp = "(unknown sink)";
+    sound_combo_geom_for(sg.playback, i * 2, route_disp.c_str(), &cx, &cy, &cw, &ch);
     if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
       settings_close_non_default_app_dropdowns(app);
       app.soundActiveDd = 100 + i;
@@ -2049,7 +2228,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       app.soundVolDragCode = i;
       app.settingsSliderDragNormT = slider_norm_from_x(app.pointerX, trx, trw);
       const std::uint32_t nid = snap.output_streams[static_cast<size_t>(i)].node_id;
-      pw.set_node_volume(nid, slider_norm_from_x(app.pointerX, trx, trw));
+      sound_apply_drag_volume(pw, nid, app, slider_norm_from_x(app.pointerX, trx, trw));
       app.soundVolDragPwNodeId = nid;
       app.soundVolPwLastApplyMonoMs = eh::shell::now_mono_ms();
       draw(app);
@@ -2058,8 +2237,18 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
   }
 
   for (int i = 0; i < n_rec; ++i) {
-    monitors_combo_geom_at_content_row(sg.recording.content_y0, sg.recording.x, sg.recording.w, i * 2, &cx, &cy, &cw,
-                                       &ch);
+    const auto& rst = snap.input_streams[static_cast<size_t>(i)];
+    const std::string rroute =
+        eh::audio::pw_link_list_capture_source_for_stream(hit_link_blob, rst.node_name);
+    std::string rroute_disp = rroute;
+    for (const auto& d : snap.sources) {
+      if (d.name == rroute) {
+        rroute_disp = d.display_name.empty() ? d.name : d.display_name;
+        break;
+      }
+    }
+    if (rroute_disp.empty()) rroute_disp = "(unknown source)";
+    sound_combo_geom_for(sg.recording, i * 2, rroute_disp.c_str(), &cx, &cy, &cw, &ch);
     if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
       settings_close_non_default_app_dropdowns(app);
       app.soundActiveDd = 1000 + i;
@@ -2081,7 +2270,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       app.soundVolDragCode = 1000 + i;
       app.settingsSliderDragNormT = slider_norm_from_x(app.pointerX, trx, trw);
       const std::uint32_t nid = snap.input_streams[static_cast<size_t>(i)].node_id;
-      pw.set_node_volume(nid, slider_norm_from_x(app.pointerX, trx, trw));
+      sound_apply_drag_volume(pw, nid, app, slider_norm_from_x(app.pointerX, trx, trw));
       app.soundVolDragPwNodeId = nid;
       app.soundVolPwLastApplyMonoMs = eh::shell::now_mono_ms();
       draw(app);

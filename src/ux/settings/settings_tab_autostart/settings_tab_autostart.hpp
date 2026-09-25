@@ -17,3 +17,6 @@ void settings_autostart_consume_pointer_up(App& app);
 bool settings_autostart_consume_pointer_move(App& app, int contentX, int contentW);
 bool settings_autostart_consume_key(App& app, unsigned sym, unsigned state, const char* utf8, int utf8Len);
 void settings_autostart_refresh_entries(App& app);
+
+// Total card height for the tab (mirrors paint_autostart_tab) so scroll clamping matches.
+int autostart_content_height_px(const App& app);

@@ -279,6 +279,9 @@ struct DockApp : WaylandState {
   PopupMarginOverride popupMarginOverride{};
 
   eh::shell::dock::control_center::ControlCenterState ccState{};
+  // Widget id of the quick-settings slot that opened the current popup
+  // ("control_center" legacy or "pear_center" compact). Empty = none open.
+  std::string ccWidgetId{};
 
   // Top-edge dashboard (fully modular widget panel). Own layer surface and
   // retained layout; see desktop_shell/dashboard/.

@@ -2,6 +2,130 @@
 
 ## [Unreleased]
 
+### Settings Keyboard + Language — Working Layout Switching, Reorder, System Locale
+
+- **Layout switching actually switches**: clicking a source row, the layout
+  dropdown, or adding a layout now jumps the running compositor straight to
+  that layout on Hyprland (`hyprctl switchxkblayout` on the main keyboard,
+  parsed from `hyprctl -j devices`) and Sway (`swaymsg xkb_switch_layout`),
+  instead of only rewriting config and leaving the user to press the toggle
+  shortcut manually.
+- **Fixed the broken shortcut table**: "Super+Space" mapped to an empty XKB
+  option (a live no-op) — now `grp:win_space_toggle`. Sway pushes also gained
+  `xkb_numlock` and no longer go through a shell.
+- **Reorder sources** with per-row up/down chevrons (shared paint/hit zones);
+  removing the active layout still falls back sanely.
+- **System layout list**: the add-layout list comes from
+  `localectl list-x11-keymap-layouts` (cached, hardcoded fallback) with
+  prettified names for unknown codes, instead of 28 hardcoded entries.
+- **Repeat-slider drag skew fixed**: paint, pointer-down and pointer-motion
+  share one `repeat_slider_track_geom()` (motion used a hardcoded 240px
+  sidebar vs the real 260px and a 32px-narrower track).
+- **Dead toggles removed**: "Show layout indicator" and "Input method" had no
+  backend anywhere (zero readers) — the layout card shrinks from 5 rows to 3
+  and toggle hit rects now match paint exactly. Middle-click paste is wired
+  through to Hyprland's `misc.middle_click_paste`.
+- **New LANGUAGE card**: installed locales (`localectl list-locales`) with
+  current-locale badge, staged-apply via
+  `pkexec localectl set-locale` (validated against the installed list),
+  login-screen keymap readout plus one-click
+  `pkexec localectl set-x11-keymap` from the enabled layouts, and a status
+  line. Per-window switching scopes and IME management have no compositor
+  backend and were deliberately left out.
+- **Screenshot round**: repeat sliders show persistent values (the m3 popup
+  only appears mid-drag) in a fixed 76px reserve that keeps the shared
+  drag track stable.
+
+### Settings Time — Real System Timezone, Manual Clock, Scroll Fixes
+
+- **"Set as System Timezone"**: the picked override can now be written with
+  `pkexec timedatectl set-timezone` (validated against the zone database);
+  the card shows the real system timezone (cached, tick-refreshed) next to
+  the desktop-only override, with a status line.
+- **Manual clock editor** when NTP is off: date + time fields (strict
+  YYYY-MM-DD / HH:MM[:SS] validation incl. leap years) with Enter-to-set via
+  `pkexec timedatectl set-time`, UTF-8-safe editing and Tab switching.
+- **NTP query moved off the paint path** (tick refresh + Refresh button);
+  timezone picker list scrolls with the wheel; Change/Reset hovers respect
+  scroll offset; custom-format Backspace is UTF-8 safe.
+- **Scroll clamp for tab 30** (paint selector, wheel upper bound) so the
+  taller panel can't overscroll. Weekday/date-locale display options would
+  need clock-widget changes and were left out.
+- **Screenshot round**: the Refresh button moved left of the NTP toggle
+  (it painted on top of it); the preview card lost 28px of dead space.
+
+### Settings Sound — Unified Combos, Over-Amplification, Speaker Test
+- **Combo hit rects now equal paint rects**: closed combos are fixed
+  `kSettingsComboW` wide everywhere (long names ellipsize inside, full text
+  in the popup whose paint/hit already agreed) instead of paint widening by
+  Pango measure while hit-testing a `strlen*8` guess.
+- **Over-amplification**: "Allow volume above 100%" toggle (persisted
+  `audio.allow_over_amplification`) lifts all four sliders to 150%
+  (PipeWire already supports it; drag/throttle/final-commit scale the
+  0..1 track norm accordingly).
+- **Speaker test**: "Test Speakers" plays front-left then front-right
+  (`pw-play --target=`, double-fork so the UI never blocks, with a
+  test-signal fallback).
+- **Card list cap 6 → 12**; engine cells hit-test the same cached values
+  paint shows (no more clickable-but-dead or dead-but-painted cells);
+  "No output/input device available." placeholders instead of vanishing
+  sliders. Balance/meters/alert-volume/port selection have no PipeWire
+  service API and were left out.
+- **Screenshot round**: combos autosize to their text through one shared
+  paint/hit geometry function (proven identical via a Pango determinism
+  harness), so long device names widen the box instead of truncating to
+  "..." while clicks still land exactly; all sliders show persistent
+  percentages in their reserved track-end zone.
+
+### Settings Startup — Working Typing, Honest Menus, Icons
+
+- **Form typing works at all**: the key handler compared the Wayland state
+  against `0` (RELEASED) while the dispatcher only forwards PRESSED/REPEATED
+  — every keystroke was dropped. Now accepts both, with repeats guarded off
+  one-shot keys, plus UTF-8-safe Backspace.
+- **Row clicks no longer hijack the kebab menu** (hover highlight only);
+  outside-popup clicks close the menu *and* reach the row beneath; the popup
+  flips above the row when it would overflow the clipped list (shared
+  paint/hit geometry).
+- **Honest second action**: Delete (user entries), Reset to System
+  (shadowed system entries), Disable/Enable (pure system entries, verified
+  with `set_autostart_enabled` results and status messages); row and
+  default-app toggles report failures instead of assuming success; editing
+  preserves the disabled state instead of silently re-enabling.
+- **Entry icons** (resolved like the app browser, glyph fallback), Exec
+  shown width-capped in subtitles, delay validated with a form error
+  (0–999), browser tail row reachable at every scroll offset.
+
+### Settings Accounts — Full Multi-User Panel
+
+The Accounts tab now manages every local user, not just the current one, and the
+long-standing layout/wiring defects are fixed.
+
+- **USERS card** (`settings_tab_accounts.cpp`, new `accounts_users.{hpp,cpp}`):
+  user list enumerated with `getpwent` (UID ≥ 1000, current user first) with
+  You/Admin/Locked badges, click-to-select, Administrator toggle (`usermod`/
+  `gpasswd`, last-admin protected), Account Locked toggle (`passwd -l/-u`,
+  self-lock refused, state queried lazily), full-name editing (`usermod -c`),
+  and two-step Delete User (`userdel -r`, self-delete refused). All privileged
+  calls go through pkexec with direct fork+exec (no shell) plus strict
+  username/hostname/full-name validation.
+- **AUTOMATIC LOGIN card**: GDM/SDDM/LightDM detection with per-user
+  enable/disable (graceful "no supported login manager" state).
+- **SET PASSWORD card**: now targets the selected account with a strength
+  meter; create-user form gains an Administrator toggle; per-card
+  success/error status lines replace the single shared message.
+- **Layout**: the name/`@user`/button block is ellipsized into its own column
+  and can never cover the avatar; narrow cards stack vertically; every card
+  reserves a status strip; scroll is clamped to real content height (tab 46
+  added to the paint-scroll selector) with scroll-to-focus on field focus.
+- **Keyboard**: Enter submits the focused form, Delete works, key repeat
+  works, input capped at 256 chars, Tab order follows the visual order.
+- **Avatar**: JPEG and extensionless `~/.face` files decode (stb fallback),
+  per-user avatar cache, install to other users' homes via
+  `pkexec install -o user -g gid`; the missing-image disk probe no longer runs
+  every repaint. Fields scroll horizontally instead of silently truncating at
+  50 chars.
+
 ### Overview — Empty Workspaces Show the Desktop; Tiles Always Win
 
 Empty workspace cards no longer render blank (or inherit the wrong monitor's

@@ -40,9 +40,14 @@
 #include "desktop_shell/common/time/mono_time.hpp"
 #include "desktop_shell/common/time/text_caret.hpp"
 #include "desktop_shell/controlcenter/debug/control_center_log.hpp"
+#include "desktop_shell/controlcenter/input/control_center_bus_hook.hpp"
+#include "desktop_shell/controlcenter/input/control_center_pear_hit.hpp"
+#include "desktop_shell/controlcenter/layout/control_center_pear_layout.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_panel_geometry.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_slider_metrics.hpp"
+#include "desktop_shell/controlcenter/paint/control_center_pear_paint.hpp"
+#include "desktop_shell/controlcenter/state/control_center_pear_config.hpp"
 #include "desktop_shell/shared/popup/geometry/layout.hpp"
 #include "desktop_shell/spotlight/paint/popup_paint_spotlight.hpp"
 #include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
@@ -57,6 +62,7 @@
 #include <cmath>
 #include <numbers>
 #include <fcntl.h>
+#include <spawn.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -468,8 +474,18 @@ bool g_tbCcSettleResize = false;
 int taskbar_cc_want_height(TaskbarApp& app, int popupW) {
   namespace ccl = eh::shell::dock::control_center;
   const double W = static_cast<double>(popupW > 0 ? popupW : eh::shell::dock::kControlCenterPopupW());
+  const eh::config::ShellConfig& sc = eh::config::shell_config_snapshot();
+  const std::string widFb("control_center");
+  const std::string& wid = app.ccWidgetId.empty() ? widFb : app.ccWidgetId;
   const uint64_t nowMs = eh::shell::monotonic_ms();
-  int wantH = static_cast<int>(std::ceil(ccl::cc_compute_layout(W, app.ccState, nowMs, true).totalH));
+  int wantH;
+  if (ccl::pear_layout_enabled(sc, wid)) {
+    const auto cfg = ccl::pear_center_config(sc, wid);
+    wantH = static_cast<int>(std::ceil(
+        ccl::cc_compute_pear_layout(W, app.ccState, cfg, dock_ui_scale(sc.dock)).totalH));
+  } else {
+    wantH = static_cast<int>(std::ceil(ccl::cc_compute_layout(W, app.ccState, nowMs, true).totalH));
+  }
   if (auto* ref = taskbar_ref_layer(app); ref && app.wl) {
     for (const auto& b : app.wl->logical_output_bounds()) {
       if (b.output != ref->wlOut) continue;
@@ -503,7 +519,11 @@ bool taskbar_cc_settle_resize(TaskbarApp& app) {
   ccl::cc_log("settle-resize surface=" + std::to_string(app.popupH) +
               " want=" + std::to_string(wantH));
   g_tbCcSettleResize = true;
-  const bool ok = taskbar_popup_create(app, app.popupAnchorX, eh::shell::dock::kControlCenterPopupW(),
+  const std::string settleWid =
+      app.ccWidgetId.empty() ? std::string("control_center") : app.ccWidgetId;
+  const bool ok = taskbar_popup_create(app, app.popupAnchorX,
+                                       control_center_popup_width_for(
+                                           eh::config::shell_config_snapshot(), settleWid),
                                        wantH);
   g_tbCcSettleResize = false;
   return ok && app.popupSurface != nullptr;
@@ -674,6 +694,231 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
     namespace ccl = eh::shell::dock::control_center;
     ccl::cc_log("press taskbar x=" + std::to_string(static_cast<int>(px)) +
                 " y=" + std::to_string(static_cast<int>(py)));
+  }
+
+  // PearCenter compact layout press path (mirrors the dock handler; settle-resize in
+  // taskbar_popup_draw grows the surface, sliders are click-to-set).
+  {
+    namespace pearcc = eh::shell::dock::control_center;
+    const eh::config::ShellConfig& sc = eh::config::shell_config_snapshot();
+    const std::string widFb("control_center");
+    const std::string& wid = app.ccWidgetId.empty() ? widFb : app.ccWidgetId;
+    if (pearcc::pear_layout_enabled(sc, wid)) {
+      const PearHitContext pctx{static_cast<double>(app.popupW > 0 ? app.popupW : 360), s, wid};
+      auto pear_spawn = [](const std::string& cmd) {
+        if (cmd.empty()) return;
+        pid_t pid = -1;
+        const char* argv[] = {"sh", "-c", cmd.c_str(), nullptr};
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        (void)posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+        (void)posix_spawnp(&pid, "sh", nullptr, &attr,
+                           const_cast<char* const*>(argv), environ);
+        posix_spawnattr_destroy(&attr);
+      };
+      auto redraw = [&]() {
+        taskbar_popup_draw(app);
+        wl_display_flush(app.display);
+      };
+      if (s.networksOverlay) {
+        if (pear_networks_back_hit(pctx, px, py)) {
+          s.networksOverlay = false;
+          s.wifiPasswordPrompt = false;
+          redraw();
+          return;
+        }
+        if (pear_wifi_toggle_hit(pctx, px, py)) {
+          const bool on =
+              eh::net::NetworkManagerService::instance().snapshot().wireless_enabled;
+          eh::net::NetworkManagerService::instance().setWirelessEnabled(!on);
+          redraw();
+          return;
+        }
+        int idx = -1;
+        if (pear_network_row_hit(pctx, px, py, &idx)) {
+          const auto aps = eh::shell::dock_slot_hooks::control_center_wifi_scan(true);
+          if (idx >= 0 && idx < static_cast<int>(aps.size())) {
+            const auto& ap = aps[static_cast<size_t>(idx)];
+            s.wifiPendingSsid = ap.ssid;
+            s.wifiLastError.clear();
+            std::string err;
+            if (ap.needs_password) {
+              (void)eh::shell::dock_slot_hooks::control_center_wifi_connect(ap.ssid, {}, &err);
+              if (!err.empty()) s.wifiLastError = err;
+              s.wifiPasswordPrompt = true;
+              s.wifiPassword.clear();
+            } else {
+              const bool ok =
+                  eh::shell::dock_slot_hooks::control_center_wifi_connect(ap.ssid, {}, &err);
+              if (!ok) s.wifiLastError = err;
+              s.wifiPasswordPrompt = false;
+              s.wifiPassword.clear();
+            }
+            redraw();
+            return;
+          }
+        }
+        return;
+      }
+      if (pear_network_card_hit(pctx, px, py)) {
+        (void)eh::shell::dock_slot_hooks::control_center_wifi_scan(true);
+        s.networksOverlay = true;
+        s.wifiPasswordPrompt = false;
+        redraw();
+        return;
+      }
+      if (pear_bluetooth_card_hit(pctx, px, py)) {
+        const auto bstate = eh::shell::dock_slot_hooks::control_center_bluetooth_state();
+        if (!bstate.powered) {
+          eh::shell::dock_slot_hooks::bluetooth_ensure_service();
+          eh::widgets::bluetooth_set_powered(true);
+          eh::shell::dock_slot_hooks::bluetooth_start_discovery();
+        } else {
+          eh::widgets::bluetooth_set_powered(false);
+        }
+        redraw();
+        return;
+      }
+      if (pear_settings_row_hit(pctx, px, py)) {
+        eh::settings::request_launch_settings();
+        return;
+      }
+      if (pear_dnd_card_hit(pctx, px, py)) {
+        pearcc::control_center_bus_publish("dnd.toggle");
+        redraw();
+        return;
+      }
+      {
+        const int ti = pear_toggle_hit(pctx, px, py);
+        if (ti >= 0) {
+          const auto cfg = pearcc::pear_center_config(sc, wid);
+          const auto L = pearcc::cc_compute_pear_layout(pctx.popupW, s, cfg,
+                                                      dock_ui_scale(sc.dock));
+          if (static_cast<size_t>(ti) < L.toggles.size()) {
+            switch (L.toggles[static_cast<size_t>(ti)]) {
+              case pearcc::PearToggle::DeviceLink:
+                pear_spawn(cfg.deviceLinkCmd);
+                break;
+              case pearcc::PearToggle::NightColor: {
+                const bool next = !pearcc::pear_nightlight_active(sc);
+                pearcc::pear_nightlight_set_active(next);
+                pearcc::control_center_bus_publish("nightlight.toggle");
+                break;
+              }
+              case pearcc::PearToggle::ColorScheme:
+                pearcc::control_center_bus_publish("color-scheme.toggle");
+                break;
+              case pearcc::PearToggle::Camera:
+                taskbar_popup_close(app);
+                wl_display_flush(app.display);
+                if (!cfg.cameraCmd.empty())
+                  pear_spawn(cfg.cameraCmd);
+                else if (!pearcc::pear_spawn_screenshot_select())
+                  eh::shell::dock::control_center::cc_log("camera: screenshot selection spawn failed");
+                redraw();
+                return;
+              case pearcc::PearToggle::Cmd1:
+                pear_spawn(cfg.cmdRun1);
+                break;
+              case pearcc::PearToggle::Cmd2:
+                pear_spawn(cfg.cmdRun2);
+                break;
+            }
+            redraw();
+            return;
+          }
+        }
+      }
+      if (pear_volume_mute_hit(pctx, px, py)) {
+        const auto as = eh::shell::dock_slot_hooks::control_center_audio_output_state();
+        eh::shell::dock_slot_hooks::control_center_set_audio_output_mute(!as.muted);
+        redraw();
+        return;
+      }
+      {
+        int didx = -1;
+        if (pear_output_device_row_hit(pctx, px, py, &didx)) {
+          const auto devs = eh::shell::dock_slot_hooks::control_center_output_devices();
+          if (didx >= 0 && didx < static_cast<int>(devs.size())) {
+            eh::shell::dock_slot_hooks::control_center_set_default_sink(
+                devs[static_cast<size_t>(didx)].sink_name);
+            s.outputDevicesPendingSink = devs[static_cast<size_t>(didx)].sink_name;
+            s.outputDevicesIgnoreUntilMs = eh::shell::monotonic_ms() + 900;
+            redraw();
+            return;
+          }
+        }
+        if (pear_input_device_row_hit(pctx, px, py, &didx)) {
+          const auto devs = eh::shell::dock_slot_hooks::control_center_input_devices();
+          if (didx >= 0 && didx < static_cast<int>(devs.size())) {
+            eh::shell::dock_slot_hooks::control_center_set_default_source(
+                devs[static_cast<size_t>(didx)].source_name);
+            s.inputDevicesPendingSource = devs[static_cast<size_t>(didx)].source_name;
+            s.inputDevicesIgnoreUntilMs = eh::shell::monotonic_ms() + 900;
+            redraw();
+            return;
+          }
+        }
+      }
+      {
+        double t = 0.0;
+        if (pear_volume_slider_hit(pctx, px, py, &t)) {
+          const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
+          eh::shell::dock_slot_hooks::control_center_set_audio_output_volume(
+              static_cast<double>(pct) / 100.0);
+          redraw();
+          return;
+        }
+      }
+      if (pear_volume_row_hit(pctx, px, py)) {
+        s.outputDevicesExpanded = !s.outputDevicesExpanded;
+        redraw();
+        return;
+      }
+      if (pear_input_mute_hit(pctx, px, py)) {
+        const auto ii = eh::shell::dock_slot_hooks::control_center_audio_input_state();
+        eh::shell::dock_slot_hooks::control_center_set_audio_input_mute(!ii.muted);
+        redraw();
+        return;
+      }
+      {
+        double t = 0.0;
+        if (pear_input_slider_hit(pctx, px, py, &t)) {
+          const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
+          eh::shell::dock_slot_hooks::control_center_set_audio_input_volume(
+              static_cast<double>(pct) / 100.0);
+          redraw();
+          return;
+        }
+      }
+      if (pear_input_row_hit(pctx, px, py)) {
+        s.inputDevicesExpanded = !s.inputDevicesExpanded;
+        redraw();
+        return;
+      }
+      {
+        double t = 0.0;
+        if (pear_brightness_slider_hit(pctx, px, py, &t)) {
+          (void)pearcc::pear_set_brightness_pct(
+              std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100));
+          redraw();
+          return;
+        }
+      }
+      {
+        const int mz = pear_media_button_hit(pctx, px, py);
+        if (mz >= 0) {
+          if (app.mpris) {
+            if (mz == 0) app.mpris->previous();
+            if (mz == 1) app.mpris->play_pause();
+            if (mz == 2) app.mpris->next();
+          }
+          redraw();
+          return;
+        }
+      }
+      return;
+    }
   }
 
   auto in_rect = [&](double rx, double ry, double rw, double rh) -> bool {
@@ -2482,6 +2727,9 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     wl_display_flush(app.display);
   }
 
+  // Disabled bar owns no input: stale pick rects must not dispatch.
+  if (!app.settings.enabled) return;
+
   if (!taskbar_layer_surface(app, app.pointerSurface)) return;
 
   int hitIdx = -1;
@@ -2752,15 +3000,17 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
       taskbar_popup_close(app);
     } else {
       app.popupKind = TaskbarPopupKind::ControlCenter;
+      app.ccWidgetId = wid;
       app.ccState = eh::shell::controlcenter::ControlCenterState{};
       {
-        const std::string wid = app.ccWidgetId.empty() ? std::string("control_center") : app.ccWidgetId;
-        static_cast<void>(eh::shell::dock_slot_hooks::control_center_weather_state(eh::config::shell_config_snapshot(), wid));
+        const std::string widNow = app.ccWidgetId.empty() ? std::string("control_center") : app.ccWidgetId;
+        static_cast<void>(eh::shell::dock_slot_hooks::control_center_weather_state(eh::config::shell_config_snapshot(), widNow));
       }
       // Size to what the paint path will actually lay out (UI-scaled cards,
-      // gaps and margins, animations resolved to their targets) instead of the
-      // fixed 620x640 constant, which clipped the panel's tail.
-      const int ccW = eh::shell::dock::kControlCenterPopupW();
+      // gaps and margins, animations resolved to their targets) instead of
+      // fixed constants, which clipped the panel's tail.
+      const int ccW = control_center_popup_width_for(eh::config::shell_config_snapshot(),
+                                                     app.ccWidgetId.empty() ? wid : app.ccWidgetId);
       const int ccH = taskbar_cc_want_height(app, ccW);
       namespace ccl = eh::shell::dock::control_center;
       ccl::cc_log("resize reason=taskbar-open open w=" + std::to_string(ccW) +
@@ -3639,6 +3889,16 @@ void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfi
             jtBuf.mark_busy();
           }
           wl_surface_commit(up->surface);
+          // Input must follow visibility: an empty input region so the
+          // invisible bar can't be clicked. (A NULL region would mean
+          // full-surface input; only an empty region disables it.)
+          if (app.compositor) {
+            if (wl_region* emptyRgn = wl_compositor_create_region(app.compositor)) {
+              wl_surface_set_input_region(up->surface, emptyRgn);
+              wl_region_destroy(emptyRgn);
+              wl_surface_commit(up->surface);
+            }
+          }
         } else if (app.settings.enabled && up->everConfigured) {
           // Surface geometry hasn't changed, only exclusive zone.
           // Don't set configured = false — the compositor may not send a

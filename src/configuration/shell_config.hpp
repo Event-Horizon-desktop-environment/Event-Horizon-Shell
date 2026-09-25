@@ -345,6 +345,7 @@ struct AudioSettings {
   int engine_quantum = 0;        // 0 = unset (PipeWire default buffer size)
   int engine_force_quantum = 0;  // 0 = unset / Auto
   int compat_pcm_format = 0;
+  bool allow_over_amplification = false;
 };
 
 struct FileBrowserSettings {
@@ -393,13 +394,15 @@ struct DashboardConfig {
   bool enabled = true;
   int triggerHeight = 8;  // px hover strip at the top edge while hidden
   int columns = 4;        // grid columns inside the panel
-  int gap = 0;            // px between cards; 0 = one continuous sheet
+  int gap = 12;           // px between cards
   int marginX = 14;       // px panel side margin (surface is full-width)
   int marginTop = 12;     // px panel top margin
   int marginBottom = 14;  // px panel bottom margin
   int maxWidth = 0;       // px panel cap; 0 = full width minus margins (default: the
                           // trigger strip spans the screen, so the panel must too —
                           // otherwise moving down off the strip misses the panel)
+  bool hoverReveal = false;  // reveal by hovering the top edge (strip surface
+                             // is only created when this is on)
   std::vector<DashboardCardConfig> cards;
 
   // Default layout when no [dashboard] section (or no widgets) is present.

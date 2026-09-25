@@ -19,7 +19,10 @@
 
 extern void draw(App& app);
 
-static constexpr int kDefaultAppsDdRowH = 48;
+static constexpr int kDefaultAppsDdRowH = 40;
+static constexpr int kDefaultAppsSearchBarH = 40;
+
+int default_app_picker_search_bar_h() { return kDefaultAppsSearchBarH; }
 
 // Internal helpers.
 
@@ -75,16 +78,65 @@ static void default_apps_ellipsis_fit(cairo_t* cr, std::string* text, double max
 
 // Note: originally … was used as a literal; we use the Unicode ellipsis string above.
 
+static std::string da_fit_label_text(m3::Label& lbl, std::string text, double maxW) {
+  if (maxW <= 8.0) return "\u2026";
+  lbl.setText(text.c_str());
+  float tw = 0.0f;
+  float th = 0.0f;
+  lbl.measureExtents(tw, th);
+  if (static_cast<double>(tw) <= maxW) return text;
+  while (!text.empty()) {
+    while (!text.empty() && (static_cast<unsigned char>(text.back()) & 0xC0) == 0x80) text.pop_back();
+    if (!text.empty()) text.pop_back();
+    std::string trial = text + "\u2026";
+    lbl.setText(trial.c_str());
+    lbl.measureExtents(tw, th);
+    if (static_cast<double>(tw) <= maxW) return trial;
+  }
+  return "\u2026";
+}
+
+static void da_paint_centered_label(cairo_t* cr, m3::Label& lbl, const std::string& text, double left, double right,
+                                    double midY) {
+  const double cx = (left + right) * 0.5;
+  const double maxW = std::max(0.0, right - left);
+  const std::string fit = da_fit_label_text(lbl, text, maxW);
+  lbl.setText(fit.c_str());
+  float tw = 0.0f;
+  float th = 0.0f;
+  lbl.measureExtents(tw, th);
+  lbl.paintAt(cr, static_cast<float>(cx - static_cast<double>(tw) * 0.5),
+              static_cast<float>(midY - static_cast<double>(th) * 0.5));
+}
+
+// Text shown in a category pill. Prefers the stored choice; otherwise surfaces the
+// actual system default (cached via xdg-mime query) instead of a bare "System default".
+static std::string da_pill_display_text(const App& app, int cat, std::string* out_icon_id) {
+  const std::string* const saved = default_apps_saved_field(app, cat);
+  if (saved && !saved->empty()) {
+    *out_icon_id = *saved;
+    return eh::settings::default_apps::friendly_line_for_desktop_id(*saved);
+  }
+  const size_t ci = static_cast<size_t>(cat);
+  if (ci < app.defaultAppsSystemDefaultValid.size() && app.defaultAppsSystemDefaultValid[ci] &&
+      !app.defaultAppsSystemDefault[ci].empty()) {
+    *out_icon_id = app.defaultAppsSystemDefault[ci];
+    return "System default \u00b7 " + eh::settings::default_apps::friendly_line_for_desktop_id(*out_icon_id);
+  }
+  out_icon_id->clear();
+  return "System default";
+}
+
 static void default_apps_compute_pill_geometry(App& app, cairo_t* cr,
-                                               const eh::settings::default_apps::DefaultAppsLayout& daLay, int r,
-                                               double winH, int* out_ddx, int* out_ddy, int* out_ddw, int* out_ddh,
-                                               std::string* out_show) {
+                                               const eh::settings::default_apps::DefaultAppsLayout& daLay, int visual,
+                                               int cat, double winH, int* out_ddx, int* out_ddy, int* out_ddw,
+                                               int* out_ddh, std::string* out_show) {
    
   const double s = daLay.ui_scale;
   const int innerLeft = daLay.apps_x + daLay.inner_pad;
   const int innerRight = daLay.apps_x + daLay.apps_w - daLay.inner_pad;
   const int marginS = std::max(6, static_cast<int>(std::lround(8.0 * s)));
-  const int rowTop = daLay.first_row_y + r * daLay.row_h;
+  const int rowTop = daLay.first_row_y + visual * daLay.row_h;
 
   const double catIconPx = std::clamp(winH * 0.04, 18.0, 40.0);
   const double kCatIconSlotW = std::max(catIconPx + 10.0, 28.0 * s);
@@ -94,9 +146,8 @@ static void default_apps_compute_pill_geometry(App& app, cairo_t* cr,
   const double kPillChevronInset = std::max(9.0, 12.0 * s);
   const double rowFont = std::clamp(13.0 * std::min(s, 1.5), 11.0, 22.0);
 
-  const std::string& saved = *default_apps_saved_field(app, r);
-  std::string show =
-      saved.empty() ? std::string("System default") : eh::settings::default_apps::friendly_line_for_desktop_id(saved);
+  std::string ignoredIcon;
+  std::string show = da_pill_display_text(app, cat, &ignoredIcon);
 
   cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
   cairo_set_font_size(cr, rowFont);
@@ -111,7 +162,7 @@ static void default_apps_compute_pill_geometry(App& app, cairo_t* cr,
   *out_ddh = pill_h;
 
   cairo_text_extents_t te_cat{};
-  const char* catStr = eh::settings::default_apps::category_label(r);
+  const char* catStr = eh::settings::default_apps::category_label(cat);
   cairo_text_extents(cr, catStr, &te_cat);
 
   const double labelStart = static_cast<double>(innerLeft) + kCatIconSlotW + kCatIconLabelGap;
@@ -246,8 +297,7 @@ static void settings_paint_default_apps_pill(App& app, cairo_t* cr, int bx, int 
 static void settings_paint_default_app_picker_list(App& app, cairo_t* cr, int x, int y, int w, int viewH,
                                                    int rowCount, double glassOv, int scrollPx) {
   (void)glassOv;
-   
-  const int fullH = rowCount * kDefaultAppsDdRowH;
+  const int fullH = rowCount * kDefaultAppsDdRowH + kDefaultAppsSearchBarH;
   const int listH = (viewH > 0) ? viewH : fullH;
   {
     m3::Box box;
@@ -272,26 +322,77 @@ static void settings_paint_default_app_picker_list(App& app, cairo_t* cr, int x,
   cairo_set_line_width(cr, 1.0);
   cairo_stroke(cr);
 
+  // --- Search bar -----------------------------------------------------------
+  const double sbX = static_cast<double>(x) + 10.0;
+  const double sbY = static_cast<double>(y) + 7.0;
+  const double sbW = static_cast<double>(w) - 20.0;
+  const double sbH = static_cast<double>(kDefaultAppsSearchBarH) - 14.0;
+  {
+    m3::Box box;
+    float r, g, b;
+    if (app.drawChromeMatugen) {
+      r = app.drawChrome.panelFillR;
+      g = app.drawChrome.panelFillG;
+      b = app.drawChrome.panelFillB;
+    } else {
+      r = static_cast<float>(Theme::BgR);
+      g = static_cast<float>(Theme::BgG);
+      b = static_cast<float>(Theme::BgB);
+    }
+    box.setColor(r, g, b, 0.86f);
+    box.setRadius(static_cast<float>(sbH * 0.5));
+    box.setGeometry(static_cast<float>(sbX), static_cast<float>(sbY), static_cast<float>(sbW), static_cast<float>(sbH));
+    box.paint(cr);
+  }
+  cairo_round_rect(cr, sbX, sbY, sbW, sbH, sbH * 0.5);
+  paint_src_glass_hi(app, cr, 0.18);
+  cairo_set_line_width(cr, 1.0);
+  cairo_stroke(cr);
+  {
+    const double midY = sbY + sbH * 0.5;
+    material_symbols_draw_glyph(cr, sbX + 16.0, midY, 16.0, "search", Theme::TextR, Theme::TextG, Theme::TextB,
+                                app.defaultAppPickerFilter.empty() ? 0.45 : 0.85);
+    const bool hasFilter = !app.defaultAppPickerFilter.empty();
+    const std::string& filterText = app.defaultAppPickerFilter;
+    const double textL = sbX + 34.0;
+    const double textR = sbX + sbW - (hasFilter ? 30.0 : 16.0);
+    m3::Label searchLbl;
+    searchLbl.setFontSize(12.0f);
+    searchLbl.setFontWeight(400);
+    if (!hasFilter) {
+      searchLbl.setColor(Theme::TextR, Theme::TextG, Theme::TextB, 0.45f);
+      da_paint_centered_label(cr, searchLbl, "Search all apps\u2026", textL, textR, midY);
+    } else {
+      searchLbl.setColor(Theme::TextR, Theme::TextG, Theme::TextB, 0.85f);
+      da_paint_centered_label(cr, searchLbl, filterText, textL, textR, midY);
+      material_symbols_draw_glyph(cr, sbX + sbW - 16.0, midY, 15.0, "close", Theme::TextR, Theme::TextG, Theme::TextB,
+                                  0.6);
+    }
+  }
+
+  // --- Rows: single-line app names only -----------------------------------
   const int selIdx = default_app_picker_selected_idx(app);
   const int hoverIdx = app.defaultAppPickerPopupHoverIdx;
   constexpr double kPadL = 16.0;
   constexpr double kIconColW = 24.0;
-  constexpr double kIconGap = 8.0;
+  constexpr double kIconGap = 10.0;
   constexpr double kTextSize = 13.0;
   constexpr double kGlyphPx = 20.0;
-  constexpr double kRightPad = 16.0;
+  constexpr double kRightPad = 32.0;
   const double textStartX = static_cast<double>(x) + kPadL + kIconColW + kIconGap;
   const double textMaxW = static_cast<double>(w) - kPadL - kIconColW - kIconGap - kRightPad;
 
   cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
   cairo_set_font_size(cr, kTextSize);
 
+  const int rowsY = y + kDefaultAppsSearchBarH;
+  const int rowsH = std::max(0, listH - kDefaultAppsSearchBarH);
   cairo_save(cr);
-  cairo_rectangle(cr, x, y, w, listH);
+  cairo_rectangle(cr, x, rowsY, w, rowsH);
   cairo_clip(cr);
   for (int i = 0; i < rowCount; ++i) {
-    const int ry = y + i * kDefaultAppsDdRowH - scrollPx;
-    if (ry + kDefaultAppsDdRowH <= y || ry >= y + listH) continue;
+    const int ry = rowsY + i * kDefaultAppsDdRowH - scrollPx;
+    if (ry + kDefaultAppsDdRowH <= rowsY || ry >= rowsY + rowsH) continue;
     if (i == hoverIdx) {
       cairo_rectangle(cr, x + kPadL, ry, w - kPadL - 1, kDefaultAppsDdRowH);
       paint_src_glass_hi(app, cr, 0.16);
@@ -301,10 +402,11 @@ static void settings_paint_default_app_picker_list(App& app, cairo_t* cr, int x,
     const double midY = static_cast<double>(ry) + static_cast<double>(kDefaultAppsDdRowH) * 0.5;
     const double rowAlpha = sel ? 1.0 : (i == hoverIdx ? 0.92 : 0.82);
 
+    double iconCx = static_cast<double>(x) + kPadL + kIconColW * 0.5;
     if (i == 0) {
-      material_symbols_draw_glyph(cr, static_cast<double>(x) + kPadL + kIconColW * 0.5, midY, kGlyphPx, "restart_alt",
-                                  Theme::TextR, Theme::TextG, Theme::TextB, rowAlpha);
-    } else {
+      material_symbols_draw_glyph(cr, iconCx, midY, kGlyphPx, "restart_alt", Theme::TextR, Theme::TextG, Theme::TextB,
+                                  rowAlpha);
+    } else if (static_cast<size_t>(i - 1) < app.defaultAppPickerEntries.size()) {
       const eh::app_drawer::DesktopEntry& e = app.defaultAppPickerEntries[static_cast<size_t>(i - 1)];
       std::string base = e.path;
       if (const size_t sl = base.rfind('/'); sl != std::string::npos) base = base.substr(sl + 1);
@@ -315,20 +417,20 @@ static void settings_paint_default_app_picker_list(App& app, cairo_t* cr, int x,
         const double ih = static_cast<double>(ie->height);
         const double sc = isz / std::max(1.0, std::max(iw, ih));
         cairo_save(cr);
-        cairo_translate(cr, static_cast<double>(x) + kPadL + (kIconColW - isz) * 0.5, midY - isz * 0.5);
+        cairo_translate(cr, iconCx - isz * 0.5, midY - isz * 0.5);
         cairo_scale(cr, sc, sc);
         cairo_set_source_surface(cr, ie->surface, 0, 0);
         cairo_paint(cr);
         cairo_restore(cr);
       } else {
-        material_symbols_draw_glyph(cr, static_cast<double>(x) + kPadL + kIconColW * 0.5, midY, kGlyphPx, "apps",
-                                    Theme::TextR, Theme::TextG, Theme::TextB, rowAlpha);
+        material_symbols_draw_glyph(cr, iconCx, midY, kGlyphPx, "apps", Theme::TextR, Theme::TextG, Theme::TextB,
+                                    rowAlpha);
       }
     }
 
     m3::Label txtLbl;
     txtLbl.setFontSize(static_cast<float>(kTextSize));
-    txtLbl.setFontWeight(sel ? 700 : 400);
+    txtLbl.setFontWeight(sel ? 700 : 500);
     txtLbl.setColor(Theme::TextR, Theme::TextG, Theme::TextB, static_cast<float>(rowAlpha));
     float txtTw, txtTh;
     const std::string& labelStr = app.defaultAppPickerComboLabels[static_cast<size_t>(i)];
@@ -341,6 +443,26 @@ static void settings_paint_default_app_picker_list(App& app, cairo_t* cr, int x,
       txtLbl.measureExtents(txtTw, txtTh);
     }
     txtLbl.paintAt(cr, static_cast<float>(textStartX), static_cast<float>(midY) - txtTh * 0.5f);
+
+    if (sel) {
+      material_symbols_draw_glyph(cr, static_cast<double>(x + w) - 14.0, midY, 17.0, "check", Theme::AccR, Theme::AccG,
+                                  Theme::AccB, 0.95);
+    }
+  }
+
+  // Empty strict category list, or no matches within the current picker search.
+  if (app.defaultAppPickerEntries.empty()) {
+    std::string msg;
+    if (app.defaultAppPickerFilter.empty()) {
+      msg = std::string("No dedicated ") +
+            eh::settings::default_apps::category_label(app.defaultAppPickerCategory) +
+            " apps found \u2014 type to search all apps.";
+    } else {
+      msg = "No apps match \u201c" + app.defaultAppPickerFilter + "\u201d";
+    }
+    default_apps_ellipsis_fit(cr, &msg, textMaxW + static_cast<double>(w) * 0.1);
+    settings_show_text(cr, static_cast<double>(x) + kPadL + 4.0, rowsY + kDefaultAppsDdRowH + 14.0, msg.c_str(), 12, 400,
+                       Theme::TextR, Theme::TextG, Theme::TextB, 0.55);
   }
   cairo_restore(cr);
 }
@@ -365,28 +487,45 @@ const std::string* default_apps_saved_field(const App& app, int r) {
 
 void settings_fill_default_app_picker(App& app) {
    
-  app.defaultAppPickerEntries = eh::app_drawer::copy_desktop_entries();
+  if (app.defaultAppPickerAll.empty()) {
+    app.defaultAppPickerAll = eh::app_drawer::copy_desktop_entries();
+    auto& a = app.defaultAppPickerAll;
+    a.erase(std::remove_if(a.begin(), a.end(),
+                           [](const eh::app_drawer::DesktopEntry& e) { return e.noDisplay || e.hidden; }),
+            a.end());
+    std::sort(a.begin(), a.end(), [](const eh::app_drawer::DesktopEntry& x, const eh::app_drawer::DesktopEntry& y) {
+      return x.name < y.name;
+    });
+  }
+
+  std::string needle = app.defaultAppPickerFilter;
+  std::transform(needle.begin(), needle.end(), needle.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
   auto& v = app.defaultAppPickerEntries;
-  v.erase(std::remove_if(v.begin(), v.end(),
-                         [](const eh::app_drawer::DesktopEntry& e) { return e.noDisplay || e.hidden; }),
-          v.end());
-  eh::settings::default_apps::filter_picker_entries_for_category(app.defaultAppPickerCategory, &v);
-  std::sort(v.begin(), v.end(), [](const eh::app_drawer::DesktopEntry& a, const eh::app_drawer::DesktopEntry& b) {
-    return a.name < b.name;
+  v = app.defaultAppPickerAll;
+  if (needle.empty()) {
+    eh::settings::default_apps::filter_picker_entries_for_category(app.defaultAppPickerCategory, &v);
+  } else {
+    eh::settings::default_apps::filter_picker_entries_for_search(needle, &v);
+  }
+  std::sort(v.begin(), v.end(), [](const eh::app_drawer::DesktopEntry& x, const eh::app_drawer::DesktopEntry& y) {
+    return x.name < y.name;
   });
+
   const int nPick = static_cast<int>(app.defaultAppPickerEntries.size());
   app.defaultAppPickerComboLabels.clear();
   app.defaultAppPickerComboLabels.reserve(static_cast<size_t>(nPick) + 1);
-  app.defaultAppPickerComboLabels.emplace_back("Use system default (clear stored choice)");
-  for (const auto& e : v) {
-    std::string base = e.path;
-    if (const size_t sl = base.rfind('/'); sl != std::string::npos) base = base.substr(sl + 1);
-    std::string line =
-        !e.name.empty() ? e.name : eh::settings::default_apps::friendly_line_for_desktop_id(base);
+  app.defaultAppPickerComboLabels.emplace_back("Use system default");
+  for (const auto& e : app.defaultAppPickerEntries) {
+    std::string idBase = e.path;
+    if (const size_t sl = idBase.rfind('/'); sl != std::string::npos) idBase = idBase.substr(sl + 1);
+    std::string line = !e.name.empty() ? e.name : eh::settings::default_apps::friendly_line_for_desktop_id(idBase);
     if (line.size() > 120) line.resize(117), line += "\u2026";
     app.defaultAppPickerComboLabels.push_back(std::move(line));
   }
   app.defaultAppPickerScrollPx = 0;
+  app.defaultAppPickerPopupHoverIdx = -1;
 }
 
 void default_app_picker_teardown_layer(App& app) {
@@ -442,10 +581,12 @@ bool default_app_picker_popup_geom(const App& app, int contentX, int contentW, i
     aw = app.defaultAppsPillRect[c][2];
     ah = app.defaultAppsPillRect[c][3];
   } else {
-    eh::settings::default_apps::default_apps_dropdown_rect(daLay, app.defaultAppPickerCategory, &ax, &ay, &aw, &ah);
+    const int vis = eh::settings::default_apps::visual_index_of_category(daLay, app.defaultAppPickerCategory);
+    eh::settings::default_apps::default_apps_dropdown_rect(daLay, vis, &ax, &ay, &aw, &ah);
   }
   const int nApps = static_cast<int>(app.defaultAppPickerEntries.size());
   const int nRows = nApps + 1;
+  const bool emptyStrict = nApps == 0;
   const int pickerRowH = kDefaultAppsDdRowH;
   const int minListW = 236;
   int listW = std::max(aw, minListW);
@@ -454,15 +595,17 @@ bool default_app_picker_popup_geom(const App& app, int contentX, int contentW, i
 
   const int ly = ay + ah + 2;
   constexpr int kBottomMargin = 8;
-  const int spaceBelow = std::max(0, app.height - kBottomMargin - ly);
+  const int spaceBelow = std::max(0, app.height - kBottomMargin - ly - kDefaultAppsSearchBarH);
   int maxRowsFit = (pickerRowH > 0) ? (spaceBelow / pickerRowH) : 10;
   maxRowsFit = std::max(1, maxRowsFit);
   constexpr int kDefaultAppPickerMaxVisRows = 10;
   int visRows = std::min({nRows, kDefaultAppPickerMaxVisRows, maxRowsFit});
   visRows = std::max(1, visRows);
-  int viewH = visRows * pickerRowH;
+  if (emptyStrict) visRows = std::max(visRows, 2);  // leave room for the empty-list hint
+  const int rowsArea = visRows * pickerRowH;
+  const int viewH = kDefaultAppsSearchBarH + rowsArea;
   const int totalH = nRows * pickerRowH;
-  const int maxScroll = std::max(0, totalH - viewH);
+  const int maxScroll = std::max(0, totalH - rowsArea);
   *out_lx = lx;
   *out_ly = ly;
   *out_lw = listW;
@@ -497,6 +640,16 @@ void paint_default_apps_tab(App& app, cairo_t* cr, int contentX, int contentW, d
   eh::settings::default_apps::compute_default_apps_layout(contentX, contentW, kContentTop,
                                                           settings_content_viewport_h(app), &daLay);
   app.defaultAppsPillRectValid = false;
+  app.defaultAppsPillRect.fill({0, 0, 0, 0});
+
+  // Cache the real system default per category once per session so pills can
+  // honestly show what's in effect (xdg-mime query is a cheap one-time shell-out).
+  for (int c = 0; c < eh::settings::default_apps::kNumCategories; ++c) {
+    const size_t ci = static_cast<size_t>(c);
+    if (app.defaultAppsSystemDefaultValid[ci]) continue;
+    app.defaultAppsSystemDefault[ci] = eh::settings::default_apps::query_effective_desktop_id(c);
+    app.defaultAppsSystemDefaultValid[ci] = true;
+  }
 
   const double s = daLay.ui_scale;
   const double winH = static_cast<double>(app.height);
@@ -513,65 +666,79 @@ void paint_default_apps_tab(App& app, cairo_t* cr, int contentX, int contentW, d
     const double titleLeft = iconCx + hdrIcon * 0.55 + 8.0 * s;
     const double titleFs = std::clamp(18.0 * std::min(s, 1.45), 14.0, 30.0);
     const double subFs = std::clamp(11.0 * std::min(s, 1.45), 10.0, 18.0);
-    settings_show_text(cr, titleLeft, hy + static_cast<double>(daLay.header_h) * 0.38, "Default Applications", titleFs, 400, Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
-    settings_show_text(cr, titleLeft, hy + static_cast<double>(daLay.header_h) * 0.72,
-                    "Configure default applications for file types and actions. Changes apply when you pick an app.", subFs, 400, Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
+    settings_show_text(cr, titleLeft, hy + static_cast<double>(daLay.header_h) * 0.34, "Default Applications",
+                       titleFs, 500, Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
+    settings_show_text(cr, titleLeft, hy + static_cast<double>(daLay.header_h) * 0.7,
+                       "Choose apps for file types and actions; changes apply immediately.", subFs, 400,
+                       Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
   }
 
-  fill_da_surface_card(app, cr, static_cast<double>(daLay.apps_x), static_cast<double>(daLay.apps_y),
-                       static_cast<double>(daLay.apps_w), static_cast<double>(daLay.apps_h), glassOv);
+  {
+    fill_da_surface_card(app, cr, static_cast<double>(daLay.apps_x), static_cast<double>(daLay.apps_y),
+                         static_cast<double>(daLay.apps_w), static_cast<double>(daLay.apps_h), glassOv);
 
-  const int innerLeft = daLay.apps_x + daLay.inner_pad;
-  const double catIconPx = std::clamp(winH * 0.04, 18.0, 40.0);
-  const double kCatIconSlotW = std::max(catIconPx + 10.0, 28.0 * s);
-  const double kCatIconLabelGap = std::max(8.0, 10.0 * s);
-  const double rowFont = std::clamp(13.0 * std::min(s, 1.5), 11.0, 22.0);
-  const double kPillPadLPaint = std::max(6.0, 9.0 * s);
-  const double kPillIconTextGapPaint = std::max(5.0, 7.0 * s);
-  const double kPillChevronInsetPaint = std::max(9.0, 12.0 * s);
-  const double pillIconDrawPx = default_apps_pill_icon_draw_px(catIconPx);
+    const int innerLeft = daLay.apps_x + daLay.inner_pad;
+    const double catIconPx = std::clamp(winH * 0.04, 18.0, 40.0);
+    const double kCatIconSlotW = std::max(catIconPx + 10.0, 28.0 * s);
+    const double kCatIconLabelGap = std::max(8.0, 10.0 * s);
+    const double rowFont = std::clamp(13.0 * std::min(s, 1.5), 11.0, 22.0);
+    const double kPillPadLPaint = std::max(6.0, 9.0 * s);
+    const double kPillIconTextGapPaint = std::max(5.0, 7.0 * s);
+    const double kPillChevronInsetPaint = std::max(9.0, 12.0 * s);
+    const double pillIconDrawPx = default_apps_pill_icon_draw_px(catIconPx);
 
-  for (int r = 0; r < eh::settings::default_apps::kNumCategories; ++r) {
-    const int rowTop = daLay.first_row_y + r * daLay.row_h;
-    if (r < eh::settings::default_apps::kNumCategories - 1) {
-      cairo_set_source_rgba(cr, Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
-      cairo_rectangle(cr, static_cast<double>(innerLeft), static_cast<double>(rowTop + daLay.row_h - 1),
-                      static_cast<double>(daLay.apps_w - 2 * daLay.inner_pad), 1.0);
-      cairo_fill(cr);
+    for (int v = 0; v < daLay.n_vis; ++v) {
+      const int cat = daLay.vis[static_cast<size_t>(v)];
+      const int rowTop = daLay.first_row_y + v * daLay.row_h;
+      if (v < daLay.n_vis - 1) {
+        cairo_set_source_rgba(cr, Theme::TextR, Theme::TextG, Theme::TextB, 0.5 * glassOv);
+        cairo_rectangle(cr, static_cast<double>(innerLeft), static_cast<double>(rowTop + daLay.row_h - 1),
+                        static_cast<double>(daLay.apps_w - 2 * daLay.inner_pad), 1.0);
+        cairo_fill(cr);
+      }
+
+      const double mid_y = static_cast<double>(rowTop) + static_cast<double>(daLay.row_h) * 0.5;
+      cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+      cairo_set_font_size(cr, rowFont);
+      cairo_font_extents_t fe_row{};
+      cairo_font_extents(cr, &fe_row);
+
+      const double row_text_baseline = mid_y - (fe_row.descent - fe_row.ascent) * 0.5;
+      const double shared_text_vc_y = row_text_baseline + (fe_row.descent - fe_row.ascent) * 0.5;
+
+      material_symbols_draw_glyph(cr, static_cast<double>(innerLeft) + kCatIconSlotW * 0.5, shared_text_vc_y,
+                                  catIconPx, eh::settings::default_apps::category_material_icon(cat), Theme::AccR,
+                                  Theme::AccG, Theme::AccB, 0.92 * glassOv);
+
+      settings_show_text(cr, static_cast<double>(innerLeft) + kCatIconSlotW + kCatIconLabelGap, row_text_baseline,
+                         eh::settings::default_apps::category_label(cat), rowFont, 400, Theme::TextR, Theme::TextG,
+                         Theme::TextB, 1.0 * glassOv);
+
+      int ddx = 0;
+      int ddy = 0;
+      int ddw = 0;
+      int ddh = 0;
+      std::string show;
+      default_apps_compute_pill_geometry(app, cr, daLay, v, cat, winH, &ddx, &ddy, &ddw, &ddh, &show);
+      app.defaultAppsPillRect[static_cast<size_t>(cat)][0] = ddx;
+      app.defaultAppsPillRect[static_cast<size_t>(cat)][1] = ddy;
+      app.defaultAppsPillRect[static_cast<size_t>(cat)][2] = ddw;
+      app.defaultAppsPillRect[static_cast<size_t>(cat)][3] = ddh;
+
+      const bool expanded = app.defaultAppPickerOpen && app.defaultAppPickerCategory == cat;
+      const std::string* saved = default_apps_saved_field(app, cat);
+      const eh::icons::IconEntry* pillIconEnt = nullptr;
+      if (saved && !saved->empty()) {
+        pillIconEnt = app.icons.app_icon(*saved);
+      } else {
+        const size_t ci = static_cast<size_t>(cat);
+        if (app.defaultAppsSystemDefaultValid[ci] && !app.defaultAppsSystemDefault[ci].empty())
+          pillIconEnt = app.icons.app_icon(app.defaultAppsSystemDefault[ci]);
+      }
+      settings_paint_default_apps_pill(app, cr, ddx, ddy, ddw, ddh, glassOv, show.c_str(), expanded, pillIconEnt,
+                                       rowFont, pillIconDrawPx, kPillPadLPaint, kPillIconTextGapPaint,
+                                       kPillChevronInsetPaint);
     }
-
-    const double mid_y = static_cast<double>(rowTop) + static_cast<double>(daLay.row_h) * 0.5;
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, rowFont);
-    cairo_font_extents_t fe_row{};
-    cairo_font_extents(cr, &fe_row);
-
-    const double row_text_baseline = mid_y - (fe_row.descent - fe_row.ascent) * 0.5;
-    const double shared_text_vc_y = row_text_baseline + (fe_row.descent - fe_row.ascent) * 0.5;
-
-    material_symbols_draw_glyph(cr, static_cast<double>(innerLeft) + kCatIconSlotW * 0.5, shared_text_vc_y,
-                                catIconPx, eh::settings::default_apps::category_material_icon(r), Theme::AccR,
-                                Theme::AccG, Theme::AccB, 0.92 * glassOv);
-
-    settings_show_text(cr, static_cast<double>(innerLeft) + kCatIconSlotW + kCatIconLabelGap, row_text_baseline, eh::settings::default_apps::category_label(r), rowFont, 400, Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
-
-    int ddx = 0;
-    int ddy = 0;
-    int ddw = 0;
-    int ddh = 0;
-    std::string show;
-    default_apps_compute_pill_geometry(app, cr, daLay, r, winH, &ddx, &ddy, &ddw, &ddh, &show);
-    app.defaultAppsPillRect[r][0] = ddx;
-    app.defaultAppsPillRect[r][1] = ddy;
-    app.defaultAppsPillRect[r][2] = ddw;
-    app.defaultAppsPillRect[r][3] = ddh;
-
-    const bool expanded = app.defaultAppPickerOpen && app.defaultAppPickerCategory == r;
-    const std::string& savedPill = *default_apps_saved_field(app, r);
-    const eh::icons::IconEntry* pillIconEnt = savedPill.empty() ? nullptr : app.icons.app_icon(savedPill);
-    settings_paint_default_apps_pill(app, cr, ddx, ddy, ddw, ddh, glassOv, show.c_str(), expanded, pillIconEnt,
-                                     rowFont, pillIconDrawPx, kPillPadLPaint, kPillIconTextGapPaint,
-                                     kPillChevronInsetPaint);
   }
   app.defaultAppsPillRectValid = true;
 }
@@ -599,6 +766,7 @@ bool settings_default_apps_consume_pointer_down(App& app, int contentX, int cont
   eh::settings::default_apps::DefaultAppsLayout daLay{};
   eh::settings::default_apps::compute_default_apps_layout(contentX, contentW, kContentTop,
                                                           settings_content_viewport_h(app), &daLay);
+
   const int row = default_apps_hit_pill_row(app, app.pointerX, app.pointerY, daLay);
   if (row >= 0) {
     if (app.defaultAppPickerOpen && app.defaultAppPickerCategory == row) {
@@ -608,6 +776,7 @@ bool settings_default_apps_consume_pointer_down(App& app, int contentX, int cont
       return true;
     }
     app.defaultAppPickerCategory = row;
+    app.defaultAppPickerFilter.clear();
     settings_fill_default_app_picker(app);
     app.defaultAppsDropdownHoverRow = -1;
     app.defaultAppPickerPopupHoverIdx = -1;

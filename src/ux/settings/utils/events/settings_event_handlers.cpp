@@ -54,6 +54,7 @@
 #include "ux/settings/settings_tab_sound/settings_tab_sound.hpp"
 #include "ux/settings/settings_tab_default_apps/settings_tab_default_apps.hpp"
 #include "ux/settings/data/default_apps/settings_default_apps.hpp"
+#include "ux/settings/data/default_apps/settings_default_apps_apply.hpp"
 #include "ux/settings/settings_tab_bing/settings_tab_bing.hpp"
 #include "ux/settings/settings_tab_network/settings_tab_network.hpp"
 #include "ux/settings/settings_tab_network/dialogs/wifi_password_prompt.hpp"
@@ -323,7 +324,8 @@ void settings_sound_vol_pw_apply_throttled(App& app, eh::audio::PipeWireService&
   constexpr std::uint64_t kMinIntervalMs = 16;
   const std::uint64_t now = eh::shell::now_mono_ms();
   if (app.soundVolPwLastApplyMonoMs != 0 && now - app.soundVolPwLastApplyMonoMs < kMinIntervalMs) return;
-  pw.set_node_volume(app.soundVolDragPwNodeId, norm_t);
+  const double scale = (app.settings.audioAllowOverAmp ? 150 : 100) / 100.0;
+  pw.set_node_volume(app.soundVolDragPwNodeId, std::clamp(norm_t, 0.0, 1.0) * scale);
   app.soundVolPwLastApplyMonoMs = now;
 }
 
@@ -333,7 +335,9 @@ void settings_sound_vol_pw_drag_commit_final(App& app) {
     return;
   }
   const double t = app.settingsSliderDragNormT;
-  if (t >= 0.0 && t <= 1.0) eh::audio::PipeWireService::instance().set_node_volume(app.soundVolDragPwNodeId, t);
+  const double scale = (app.settings.audioAllowOverAmp ? 150 : 100) / 100.0;
+  if (t >= 0.0 && t <= 1.0)
+    eh::audio::PipeWireService::instance().set_node_volume(app.soundVolDragPwNodeId, t * scale);
   app.soundVolDragPwNodeId = 0;
   app.soundVolPwLastApplyMonoMs = 0;
 }
@@ -366,6 +370,8 @@ void settings_close_non_default_app_dropdowns(App& app) {
   app.hyprlandBezierP1y = 0.1;
   app.hyprlandBezierP2x = 0.25;
   app.hyprlandBezierP2y = 1.0;
+  app.settingsKeyboardDdKind = -1;
+  app.settingsKeyboardDdHoverRow = -1;
 
 }
 
@@ -554,10 +560,10 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
   }
 
   if (app.pointerLeftDown && app.keyboardSliderDrag >= 0 && app.activeTab == 31) {
-    const int contentXlocal = 16 + 240 + 16;
-    const int contentWlocal = app.width - contentXlocal - 16;
-    int trX = contentXlocal + kCardPad;
-    int trW = contentWlocal - kCardPad - kCardPad - 52;
+    int tcx = 0, tcw = 0;
+    settings_content_column_geom(app, &tcx, &tcw);
+    int trX = 0, trW = 0;
+    keyboard_tab::repeat_slider_track_geom(tcx, tcw, &trX, &trW);
     app.settingsSliderDragNormT = slider_norm_from_x(app.pointerX, trX, trW);
     const int minV = app.keyboardSliderDrag == 0 ? 15 : 150;
     const int maxV = app.keyboardSliderDrag == 0 ? 50 : 1000;
@@ -865,6 +871,64 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       app.wallpaperModeDropdownHoverRow = -1;
       needDdDraw = true;
     }
+    if (app.activeTab == 30 && app.timeFormatDropdownOpen) {
+      int cbx, cby, cbw, cbh;
+      time_date_format_combo_geom(tcx, tcw, cbx, cby, cbw, cbh);
+      const int ly = cby + cbh + 2;
+      const double pyL = app.pointerY + settings_scroll_px(app);
+      const int nr =
+          settings_mode_dd_pointer_row(app.pointerX, pyL, cbx, ly, cbw, kSettingsDdRowH, kDateFormatCount);
+      if (nr != app.timeFormatDropdownHoverRow) {
+        app.timeFormatDropdownHoverRow = nr;
+        needDdDraw = true;
+      }
+    } else if (app.timeFormatDropdownHoverRow != -1) {
+      app.timeFormatDropdownHoverRow = -1;
+      needDdDraw = true;
+    }
+    if (app.activeTab == 30 && app.timeZonePickerOpen) {
+      if (time_zone_picker_consume_pointer_move(app)) needDdDraw = true;
+    }
+    if (app.activeTab == 31 && app.settingsKeyboardDdKind >= 0) {
+      const int rightRail = tcx + tcw - 32;
+      const int cbh = keyboard_tab::kComboH;
+      const int behaviorTop = keyboard_tab::behavior_card_top(app);
+      int cbx = rightRail - keyboard_tab::kComboW;
+      int cbw = keyboard_tab::kComboW;
+      if (app.settingsKeyboardDdKind == 4) {
+        cbx = tcx + 8 + kCardPad;
+      }
+      int ddY = 0;
+      int nItems = 0;
+      if (app.settingsKeyboardDdKind == 0) {
+        ddY = keyboard_tab::kBodyTop + 0 * kSliderRowH + 40 + cbh + 2;
+        nItems = static_cast<int>(app.settings.keyboardLayouts.size());
+      } else if (app.settingsKeyboardDdKind == 1) {
+        ddY = keyboard_tab::kBodyTop + 1 * kSliderRowH + 40 + cbh + 2;
+        nItems = kSwitchShortcutCount;
+      } else if (app.settingsKeyboardDdKind == 2) {
+        ddY = behaviorTop + 52 + 0 * kSliderRowH + 40 + cbh + 2;
+        nItems = kCapsLockCount;
+      } else if (app.settingsKeyboardDdKind == 3) {
+        ddY = behaviorTop + 52 + 1 * kSliderRowH + 40 + cbh + 2;
+        nItems = kComposeKeyCount;
+      } else if (app.settingsKeyboardDdKind == 4) {
+        const int n = static_cast<int>(app.settings.keyboardLayouts.size());
+        ddY = keyboard_tab::sources_card_top() + 52 + n * keyboard_tab::kSourcesRowH + 6 + 34 + 2;
+        nItems = static_cast<int>(keyboard_available_layouts(app).size());
+      }
+      // The keyboard popup is painted unclipped in screen coordinates.
+      const int ddScreenY = ddY - settings_scroll_px_int(app);
+      const int nr = settings_mode_dd_pointer_row(app.pointerX, app.pointerY, cbx, ddScreenY, cbw,
+                                                  kSettingsDdRowH, nItems);
+      if (nr != app.settingsKeyboardDdHoverRow) {
+        app.settingsKeyboardDdHoverRow = nr;
+        needDdDraw = true;
+      }
+    } else if (app.settingsKeyboardDdHoverRow != -1) {
+      app.settingsKeyboardDdHoverRow = -1;
+      needDdDraw = true;
+    }
     if (app.activeTab == 11 && app.taskbarWidthModeDropdownOpen) {
       const int cbx = tcx + 8 + tcw - 16 - kCardPad - kSettingsComboW;
       const int kVisCardTop = kContentTop + kDockChildTabH + 12;
@@ -922,7 +986,8 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       if (default_app_picker_popup_geom(app, tcx, tcw, &plx, &ply, &plw, &pvh, &prh, &pnRows, &pms)) {
         int hidx = -1;
         if (point_in_rect(app.pointerX, app.pointerY, plx, ply, plw, pvh)) {
-          const int rel = static_cast<int>(app.pointerY) - ply + app.defaultAppPickerScrollPx;
+          const int rel = static_cast<int>(app.pointerY) - (ply + default_app_picker_search_bar_h()) +
+                          app.defaultAppPickerScrollPx;
           hidx = rel / prh;
           if (hidx < 0 || hidx >= pnRows) hidx = -1;
         }
@@ -1411,6 +1476,36 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
   }
 }
 
+// Shared by click and keyboard handling of the default-apps picker rows.
+// idx 0 = "Use system default", idx >= 1 = app at defaultAppPickerEntries[idx-1].
+static void default_apps_pick_picker_row(App& app, int idx) {
+  if (idx < 0) return;
+  if (idx == 0) {
+    eh::settings::default_apps::restore_category_system_default(app.defaultAppPickerCategory);
+    eh::settings::default_apps::clear_stored_desktop_id(app.settings.defaultApps, app.defaultAppPickerCategory);
+    save_settings(app.settings);
+  } else if (static_cast<size_t>(idx - 1) < app.defaultAppPickerEntries.size()) {
+    const eh::app_drawer::DesktopEntry& e = app.defaultAppPickerEntries[static_cast<size_t>(idx - 1)];
+    std::string base = e.path;
+    if (const size_t sl = base.rfind('/'); sl != std::string::npos) base = base.substr(sl + 1);
+    eh::settings::default_apps::set_stored_desktop_id(app.settings.defaultApps, app.defaultAppPickerCategory,
+                                                      std::move(base));
+    save_settings(app.settings);
+  } else {
+    return;
+  }
+  app.defaultAppPickerOpen = false;
+  app.defaultAppPickerPopupHoverIdx = -1;
+  app.defaultAppPickerFilter.clear();
+  // Whatever we just changed (or reverted), the pill's cached "system default"
+  // is now stale — re-query it on the next paint.
+  if (idx == 0 || static_cast<size_t>(idx - 1) < app.defaultAppPickerEntries.size()) {
+    const size_t ci = static_cast<size_t>(app.defaultAppPickerCategory);
+    if (ci < app.defaultAppsSystemDefaultValid.size()) app.defaultAppsSystemDefaultValid[ci] = false;
+  }
+  draw(app);
+}
+
 void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t state,
                               uint32_t pointer_btn_serial) {
   if (!ptrSurf && !app.embedded) ptrSurf = app.seat.pointer_focus_surface();
@@ -1515,6 +1610,7 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
         debug_log("settings", "%s", buf);
       }
       save_settings(app.settings);
+      if (app.activeTab == 31 && app.keyboardSliderDrag >= 0) keyboard_push_to_compositor(app);
     }
     if (app.activeTab == 7 && app.monitorsCanvasDragIdx >= 0) {
       const size_t mix = static_cast<size_t>(app.monitorsCanvasDragIdx);
@@ -1787,23 +1883,11 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
       return;
     }
     if (point_in_rect(app.pointerX, app.pointerY, lx, ly, lw, vh)) {
-      const int relY = static_cast<int>(app.pointerY) - ly + app.defaultAppPickerScrollPx;
+      const int relY = static_cast<int>(app.pointerY) - (ly + default_app_picker_search_bar_h()) +
+                       app.defaultAppPickerScrollPx;
       const int idx = relY / rh;
       if (idx >= 0 && idx < nRows) {
-        if (idx == 0) {
-          eh::settings::default_apps::clear_stored_desktop_id(app.settings.defaultApps, app.defaultAppPickerCategory);
-          save_settings(app.settings);
-        } else {
-          const eh::app_drawer::DesktopEntry& e = app.defaultAppPickerEntries[static_cast<size_t>(idx - 1)];
-          std::string base = e.path;
-          if (const size_t sl = base.rfind('/'); sl != std::string::npos) base = base.substr(sl + 1);
-          eh::settings::default_apps::set_stored_desktop_id(app.settings.defaultApps, app.defaultAppPickerCategory,
-                                                            std::move(base));
-          save_settings(app.settings);
-        }
-        app.defaultAppPickerOpen = false;
-        app.defaultAppPickerPopupHoverIdx = -1;
-        draw(app);
+        default_apps_pick_picker_row(app, idx);
         return;
       }
     }
@@ -1821,6 +1905,7 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
         return;
       }
       app.defaultAppPickerCategory = r;
+      app.defaultAppPickerFilter.clear();
       settings_fill_default_app_picker(app);
       app.defaultAppPickerPopupHoverIdx = -1;
       draw(app);
@@ -2244,7 +2329,10 @@ void on_settings_keyboard(App& app, const eh::wayland::WaylandSeat::KeyboardEven
 
   // Accounts tab text entry
   if (app.activeTab == 46 && app.accountsActiveField != AccountsField::None) {
-    if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED) return;
+    if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED &&
+        ev.state != WL_KEYBOARD_KEY_STATE_REPEATED)
+      return;
+    const bool repeated = (ev.state == WL_KEYBOARD_KEY_STATE_REPEATED);
     auto& buf = [&]() -> std::string& {
       switch (app.accountsActiveField) {
         case AccountsField::PwNew: return app.accountsPwNew;
@@ -2253,23 +2341,49 @@ void on_settings_keyboard(App& app, const eh::wayland::WaylandSeat::KeyboardEven
         case AccountsField::CuFullName: return app.accountsCuFullName;
         case AccountsField::CuPassword: return app.accountsCuPassword;
         case AccountsField::CuConfirm: return app.accountsCuConfirm;
+        case AccountsField::UserFullName: return app.accountsUserFullName;
         case AccountsField::Hostname: return app.accountsHostnameEdit;
         default: return app.accountsPwNew;
       }
     }();
-    if (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter || ev.sym == XKB_KEY_Escape) {
+    if (!repeated &&
+        (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter || ev.sym == XKB_KEY_Escape)) {
+      const AccountsField field = app.accountsActiveField;
       app.accountsActiveField = AccountsField::None;
+      if (ev.sym != XKB_KEY_Escape) {
+        // Enter submits the focused form.
+        switch (field) {
+          case AccountsField::PwNew:
+          case AccountsField::PwConfirm:
+            accounts_action_change_password(app);
+            return;
+          case AccountsField::CuUsername:
+          case AccountsField::CuFullName:
+          case AccountsField::CuPassword:
+          case AccountsField::CuConfirm:
+            accounts_action_create_user(app);
+            return;
+          case AccountsField::UserFullName:
+            accounts_action_set_fullname(app);
+            return;
+          case AccountsField::Hostname:
+            accounts_action_set_hostname(app);
+            return;
+          default:
+            break;
+        }
+      }
       draw(app);
       return;
     }
-    if (ev.sym == XKB_KEY_Tab) {
+    if (!repeated && ev.sym == XKB_KEY_Tab) {
       int next = static_cast<int>(app.accountsActiveField) + 1;
       if (next > static_cast<int>(AccountsField::Hostname)) next = 1;
       app.accountsActiveField = static_cast<AccountsField>(next);
       draw(app);
       return;
     }
-    if (ev.sym == XKB_KEY_BackSpace) {
+    if (ev.sym == XKB_KEY_BackSpace || ev.sym == XKB_KEY_Delete) {
       if (!buf.empty()) buf.pop_back();
       draw(app);
       return;
@@ -2277,7 +2391,7 @@ void on_settings_keyboard(App& app, const eh::wayland::WaylandSeat::KeyboardEven
     if (ev.utf8_len > 0) {
       for (int i = 0; i < ev.utf8_len; ++i) {
         char c = ev.utf8[i];
-        if (c >= 32 && c < 127) buf += c;
+        if (c >= 32 && c < 127 && buf.size() < 256) buf += c;
       }
       draw(app);
     }
@@ -2331,6 +2445,101 @@ void on_settings_keyboard(App& app, const eh::wayland::WaylandSeat::KeyboardEven
     if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED) return;
     settings_autostart_consume_key(app, ev.sym, ev.state, ev.utf8.data(), ev.utf8_len);
     return;
+  }
+
+  // Time tab: timezone picker keys + custom strftime field.
+  if (app.activeTab == 30) {
+    if (settings_time_consume_key(app, ev.sym, ev.state, ev.utf8.data(), ev.utf8_len)) return;
+  }
+
+  // Default apps tab: picker popup keys + tab-body search field.
+  if (app.activeTab == 10) {
+    xkb_state* xkb = app.seat.xkb_state_ptr();
+    const bool ctrl = xkb && xkb_state_mod_name_is_active(xkb, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
+
+    if (app.defaultAppPickerOpen) {
+      if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED && ev.state != WL_KEYBOARD_KEY_STATE_REPEATED) return;
+      const xkb_keysym_t sym = ev.sym;
+      const int nRows = static_cast<int>(app.defaultAppPickerComboLabels.size());
+
+      if (sym == XKB_KEY_Escape) {
+        app.defaultAppPickerOpen = false;
+        app.defaultAppPickerPopupHoverIdx = -1;
+        app.defaultAppPickerFilter.clear();
+        draw(app);
+        return;
+      }
+      if (sym == XKB_KEY_Up || sym == XKB_KEY_Down) {
+        int hv = app.defaultAppPickerPopupHoverIdx;
+        if (sym == XKB_KEY_Up) {
+          hv = (hv <= 0) ? nRows - 1 : hv - 1;
+        } else {
+          hv = (hv < 0 || hv >= nRows - 1) ? 0 : hv + 1;
+        }
+        app.defaultAppPickerPopupHoverIdx = hv;
+        int tcx = 0;
+        int tcw = 0;
+        settings_content_column_geom(app, &tcx, &tcw);
+        int lx = 0;
+        int ly = 0;
+        int lw = 0;
+        int vh = 0;
+        int rh = 0;
+        int nr = 0;
+        int ms = 0;
+        if (default_app_picker_popup_geom(app, tcx, tcw, &lx, &ly, &lw, &vh, &rh, &nr, &ms)) {
+          const int rowsView = std::max(0, vh - default_app_picker_search_bar_h());
+          const int rowTop = hv * rh;
+          const int rowBottom = rowTop + rh;
+          const int visTop = app.defaultAppPickerScrollPx;
+          const int visBottom = visTop + rowsView;
+          if (rowTop < visTop) {
+            app.defaultAppPickerScrollPx = rowTop;
+          } else if (rowBottom > visBottom && rowsView > 0) {
+            app.defaultAppPickerScrollPx = std::max(0, rowBottom - rowsView);
+          }
+          app.defaultAppPickerScrollPx = std::clamp(app.defaultAppPickerScrollPx, 0, ms);
+        }
+        draw(app);
+        return;
+      }
+      if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        if (app.defaultAppPickerPopupHoverIdx >= 0) default_apps_pick_picker_row(app, app.defaultAppPickerPopupHoverIdx);
+        return;
+      }
+      if (ctrl && app.clipboard.is_available() && (sym == XKB_KEY_v || sym == XKB_KEY_V) && app.wl.display()) {
+        std::string pasted = app.clipboard.read_selection_text(app.wl.display());
+        pasted.erase(std::remove(pasted.begin(), pasted.end(), '\r'), pasted.end());
+        pasted.erase(std::remove(pasted.begin(), pasted.end(), '\n'), pasted.end());
+        if (!pasted.empty()) {
+          if (app.defaultAppPickerFilter.size() + pasted.size() > 48) pasted.resize(48 - app.defaultAppPickerFilter.size());
+          app.defaultAppPickerFilter += pasted;
+          settings_fill_default_app_picker(app);
+          draw(app);
+        }
+        return;
+      }
+      if (sym == XKB_KEY_BackSpace) {
+        if (app.defaultAppPickerFilter.empty()) {
+          app.defaultAppPickerOpen = false;
+          app.defaultAppPickerPopupHoverIdx = -1;
+          draw(app);
+          return;
+        }
+        while (!app.defaultAppPickerFilter.empty() && (app.defaultAppPickerFilter.back() & 0xC0) == 0x80)
+          app.defaultAppPickerFilter.pop_back();
+        if (!app.defaultAppPickerFilter.empty()) app.defaultAppPickerFilter.pop_back();
+        settings_fill_default_app_picker(app);
+        draw(app);
+        return;
+      }
+      if (ev.utf8_len > 0 && app.defaultAppPickerFilter.size() < 48) {
+        app.defaultAppPickerFilter.append(ev.utf8.data(), static_cast<size_t>(ev.utf8_len));
+        settings_fill_default_app_picker(app);
+        draw(app);
+      }
+      return;
+    }
   }
 
   if (!app.widgetPickerOpen) return;
@@ -2434,7 +2643,9 @@ bool embed_try_keyboard(std::uint32_t keycode, std::uint32_t state, xkb_state* x
     return true;
   }
 
-  if (!g_embed->widgetPickerOpen && !wifi_password_prompt_visible(*g_embed) && !keyring_prompt_visible(*g_embed)) return false;
+  if (!g_embed->widgetPickerOpen && !wifi_password_prompt_visible(*g_embed) && !keyring_prompt_visible(*g_embed) &&
+      !g_embed->defaultAppPickerOpen && !g_embed->timeZonePickerOpen && !g_embed->timeCustomFormatActive)
+    return false;
 
   eh::wayland::WaylandSeat::KeyboardEvent ev{};
   ev.keycode = keycode;

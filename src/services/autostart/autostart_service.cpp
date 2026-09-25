@@ -347,6 +347,8 @@ std::vector<AutostartUiEntry> get_autostart_ui_entries() {
     u.stem = stem_from_path(e.desktopPath);
     u.name = e.info.name.empty() ? u.stem : e.info.name;
     u.icon = e.info.icon;
+    u.exec = e.info.exec;
+    u.runInTerminal = e.info.terminal;
     u.desktopPath = e.desktopPath;
     u.enabled = e.effectiveEnabled;
     u.delaySec = e.delaySec;
@@ -362,6 +364,8 @@ std::vector<AutostartUiEntry> get_autostart_ui_entries() {
         u.enabled = userEnabled;
         if (!userInfo->name.empty()) u.name = userInfo->name;
         if (!userInfo->icon.empty()) u.icon = userInfo->icon;
+        if (!userInfo->exec.empty()) u.exec = userInfo->exec;
+        u.runInTerminal = userInfo->terminal;
         u.delaySec = userInfo->autostartDelaySec;
       }
     } else {
@@ -444,7 +448,7 @@ bool remove_autostart_override(const std::string& stem) {
 
 bool create_autostart_entry(const std::string& stem, const std::string& name,
                             const std::string& exec, const std::string& icon,
-                            int delaySec) {
+                            int delaySec, bool runInTerminal) {
   if (stem.empty() || name.empty() || exec.empty()) return false;
 
   const std::string dir = user_autostart_dir();
@@ -460,6 +464,7 @@ bool create_autostart_entry(const std::string& stem, const std::string& name,
   f << "Name=" << name << "\n";
   if (!icon.empty()) f << "Icon=" << icon << "\n";
   f << "Exec=" << exec << "\n";
+  if (runInTerminal) f << "Terminal=true\n";
   f << "Hidden=false\n";
   f << "X-GNOME-Autostart-enabled=true\n";
   if (delaySec > 0) {
@@ -473,7 +478,7 @@ bool create_autostart_entry(const std::string& stem, const std::string& name,
 
 bool edit_autostart_entry(const std::string& stem, const std::string& name,
                           const std::string& exec, const std::string& icon,
-                          int delaySec) {
+                          int delaySec, bool runInTerminal) {
   if (stem.empty()) return false;
 
   const std::string dir = user_autostart_dir();
@@ -491,6 +496,7 @@ bool edit_autostart_entry(const std::string& stem, const std::string& name,
   f << "Name=" << (name.empty() ? stem : name) << "\n";
   if (!icon.empty()) f << "Icon=" << icon << "\n";
   if (!exec.empty()) f << "Exec=" << exec << "\n";
+  if (runInTerminal) f << "Terminal=true\n";
   f << "Hidden=false\n";
   f << "X-GNOME-Autostart-enabled=true\n";
   if (delaySec > 0) {

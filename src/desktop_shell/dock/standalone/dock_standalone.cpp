@@ -8,6 +8,7 @@
 
 #include "desktop_shell/Overview/overview_host.hpp"
 #include "desktop_shell/dashboard/dashboard_dispatch.hpp"
+#include "desktop_shell/controlcenter/input/control_center_bus_hook.hpp"
 #include "desktop_shell/shared/popup/session/session.hpp"
 #include "desktop_shell/widgets/start_menu/start_menu.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
@@ -241,6 +242,13 @@ int run_dock_standalone() {
       ipc_ok = ipc.subscribe("config.applied") && ipc.subscribe("command.request");
     }
   }
+
+  // Control Centre child -> supervisor commands (DND / nightlight / color
+  // scheme toggles from the PearCenter compact popup). Mirrors the taskbar
+  // nightlight pattern: publish `command.request`, the supervisor self-client
+  // applies it (it owns gamma + the config snapshot).
+  eh::shell::dock::control_center::control_center_set_bus_publish_fn(
+      [&ipc](const std::string& payload) { (void)ipc.publish("command.request", payload); });
 
   dock_write_pid_file(::getpid());
   dock_boot_step("pid file written, entering event loop");

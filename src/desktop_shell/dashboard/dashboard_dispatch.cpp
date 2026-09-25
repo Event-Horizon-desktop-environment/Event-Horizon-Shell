@@ -102,25 +102,6 @@ void start_drag(DockApp& app, const DashboardHit& h) {
   drag_move(app);
 }
 
-void step_month(DockApp& app, int delta) {
-  auto& d = app.dash;
-  if (d.calYear == 0 || d.calMonth == 0) {
-    const auto today = std::chrono::year_month_day{
-        std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now())};
-    d.calYear = static_cast<int>(today.year());
-    d.calMonth = static_cast<int>(static_cast<unsigned>(today.month()));
-  }
-  int m = d.calMonth - 1 + delta;
-  int y = d.calYear;
-  y += m / 12;
-  m %= 12;
-  if (m < 0) { m += 12; --y; }
-  d.calMonth = m + 1;
-  d.calYear = y;
-  d.dirty = true;
-  dashboard_changed(app);
-}
-
 void toggle_network(DockApp& app) {
   auto& d = app.dash;
   if (!d.netExpanded) (void)hooks::control_center_wifi_scan(true);
@@ -271,22 +252,6 @@ void dashboard_pointer_press(DockApp& app, std::uint32_t serial) {
     case DashCardRole::MediaNext:
       if (app.mpris) app.mpris->next();
       break;
-
-    case DashCardRole::CalPrev:
-      step_month(app, -1);
-      break;
-    case DashCardRole::CalNext:
-      step_month(app, +1);
-      break;
-    case DashCardRole::CalToday: {
-      const auto today = std::chrono::year_month_day{
-          std::chrono::floor<std::chrono::days>(std::chrono::system_clock::now())};
-      d.calYear = static_cast<int>(today.year());
-      d.calMonth = static_cast<int>(static_cast<unsigned>(today.month()));
-      d.dirty = true;
-      dashboard_changed(app);
-      break;
-    }
 
     case DashCardRole::Body:
     default:

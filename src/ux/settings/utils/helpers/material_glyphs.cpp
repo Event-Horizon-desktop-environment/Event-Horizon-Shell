@@ -28,7 +28,7 @@ const char* dock_widget_material_ligature(const std::string& id) {
   if (id == "media_compact") return "music_video";
   if (id == "workspaces") return "view_module";
   if (id == "world_clock") return "public";
-  if (id == "control_center") return "tune";
+  if (id == "control_center" || id == "pear_center") return "tune";
   if (id == "notifications") return "notifications";
   if (id == "spacer" || eh::config::widget_implementation_type(id) == "spacer") return "horizontal_rule";
   if (id == "trash" || eh::config::widget_implementation_type(id) == "trash") return "delete";

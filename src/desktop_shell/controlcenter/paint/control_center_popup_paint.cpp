@@ -1,5 +1,8 @@
 #include "desktop_shell/controlcenter/paint/control_center_popup_paint.hpp"
 
+#include "desktop_shell/controlcenter/paint/control_center_pear_paint.hpp"
+#include "desktop_shell/controlcenter/state/control_center_pear_config.hpp"
+
 #include "desktop_shell/controlcenter/paint/control_center_paint.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_slider_metrics.hpp"
@@ -99,6 +102,11 @@ void control_center_popup_paint(eh::shell::dock::control_center::ControlCenterSt
                                 const std::string& ccWidgetId,
                                 eh::icons::IconCache& icons,
                                 const std::vector<std::string>& pinnedApps) {
+  // PearCenter compact layout path (default ON; per-instance opt-out via pear_layout="0").
+  if (ccl::pear_layout_enabled(scPopupOv, ccWidgetId)) {
+    pear_center_paint(state, cr, popupW, scPopupOv, mpris, ccWidgetId);
+    return;
+  }
   (void)popupH;
   ccl::CcTimer tAll("paint", 8000);
   const double W = static_cast<double>(popupW);

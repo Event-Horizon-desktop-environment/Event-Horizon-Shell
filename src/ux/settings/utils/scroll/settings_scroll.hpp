@@ -7,6 +7,8 @@ void settings_clamp_panel_scroll_px(App& app);
 void settings_clamp_taskbar_scroll_px(App& app);
 void settings_clamp_sidebar_scroll_px(App& app);
 void settings_clamp_autostart_scroll_px(App& app);
+void settings_clamp_accounts_scroll_px(App& app);
+void settings_clamp_time_scroll_px(App& app);
 void settings_apply_wheel_scroll_delta(App& app, double delta_px);
 
 // Single source of truth.

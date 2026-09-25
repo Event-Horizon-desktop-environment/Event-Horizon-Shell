@@ -22,6 +22,7 @@
 #include "ux/settings/data/settings_desktop_widgets_data.hpp"
 #include "ux/settings/data/mango/settings_mango_data.hpp"
 #include "ux/settings/data/hyprland/settings_hyprland_data.hpp"
+#include "ux/settings/data/default_apps/settings_default_apps.hpp"
 #include "services/audio/pipewire_service.hpp"
 #include "desktop_shell/widgets/app_drawer/list/desktop_list.hpp"
 #include "wl/core/protocols.hpp"
@@ -144,7 +145,9 @@ struct Settings {
   int dashboardMarginX = 14;
   int dashboardMarginTop = 12;
   int dashboardMarginBottom = 14;
-  int dashboardMaxWidth = 1800;
+  int dashboardMaxWidth = 0;
+  bool dashboardHoverReveal = false;
+  int dashboardConfigVersion = 1;
   std::vector<std::string> dashboardWidgets{};
 
   bool wallpaperEnabled = false;
@@ -313,6 +316,7 @@ struct Settings {
   int audioEngineQuantum = 0;        // 0 = Auto/unset
   int audioEngineForceQuantum = 0;   // 0 = Auto/unset
   int audioCompatPcmFormat = 0;
+  bool audioAllowOverAmp = false;    // sliders may exceed 100% (up to 150%)
 };
 
 struct SidebarItem {
@@ -446,6 +450,10 @@ struct App {
 
   std::array<std::array<int, 4>, 9> defaultAppsPillRect{};
   bool defaultAppsPillRectValid = false;
+  std::string defaultAppPickerFilter;                                 // picker popup search filter
+  std::vector<eh::app_drawer::DesktopEntry> defaultAppPickerAll{};    // all apps (search runs across everything)
+  std::array<std::string, eh::settings::default_apps::kNumCategories> defaultAppsSystemDefault{};
+  std::array<bool, eh::settings::default_apps::kNumCategories> defaultAppsSystemDefaultValid{};
 
   wl_surface* defaultAppPickerXdgWlSurface = nullptr;
   xdg_surface* defaultAppPickerXdgChildSurface = nullptr;
@@ -611,6 +619,24 @@ struct App {
   int dashboardSliderDrag = -1;
   bool timeFormatDropdownOpen = false;
   int timeFormatDropdownHoverRow = -1;
+  bool timeZonePickerOpen = false;
+  std::string timeZoneFilter;
+  int timeZoneHoverRow = -1;
+  int timeZoneScrollPx = 0;
+  std::vector<std::string> timeZoneList;  // cached IANA zones
+  bool timeZoneListReady = false;
+  bool timeCustomFormatActive = false;  // custom strftime field focused
+  std::string timeManualDate;             // YYYY-MM-DD editor (NTP off)
+  std::string timeManualTime;             // HH:MM[:SS] editor (NTP off)
+  int timeManualActive = 0;               // 0=none, 1=date field, 2=time field
+  std::string timeManualMsg;
+  bool timeManualErr = false;
+  std::string timeZoneMsg;                // timezone card status
+  bool timeZoneErr = false;
+  bool timeNtpQueried = false;
+  bool timeNtpOn = false;
+  bool timeNtpSynced = false;
+  std::string timeNtpMsg;
   bool powerBtnDropdownOpen = false;
   int powerBtnDropdownHoverRow = -1;
   bool lidCloseDropdownOpen = false;
@@ -618,6 +644,9 @@ struct App {
   int settingsKeyboardDdKind = -1; // 0=layout, 1=shortcut, 2=caps, 3=compose
   int settingsKeyboardDdHoverRow = -1;
   int keyboardSliderDrag = -1;
+  std::string keyboardPendingLocale; // staged system locale, applied by button
+  std::string keyboardStatusMsg;
+  bool keyboardStatusErr = false;
   bool draggingPanelTopGap = false;
   bool draggingPanelHeight = false;
   bool draggingPanelRadius = false;
@@ -730,6 +759,20 @@ struct App {
   int settingsBluetoothHoverRow = -1;
   int settingsAccountsScrollPx = 0;
   AccountsField accountsActiveField = AccountsField::None;
+  std::string accountsSelectedUser; // username selected in USERS card (empty = current user)
+  bool accountsCuAdmin = false;     // "make administrator" for the create-user form
+  std::string accountsUserFullName; // edit buffer: selected user's full name
+  std::string accountsDeleteArm;    // username armed for two-step delete confirm
+  std::string accountsProfileMsg;
+  bool accountsProfileErr = false;
+  std::string accountsUsersMsg;
+  bool accountsUsersErr = false;
+  std::string accountsCuMsg;
+  bool accountsCuErr = false;
+  std::string accountsHnMsg;
+  bool accountsHnErr = false;
+  std::string accountsLoginMsg;
+  bool accountsLoginErr = false;
 
   // Autostart / Startup Applications tab
   std::vector<eh::autostart::AutostartUiEntry> autostartEntries;
@@ -742,6 +785,12 @@ struct App {
   std::string autostartEditName;
   std::string autostartEditExec;
   std::string autostartEditIcon;
+  std::string autostartEditDelayText;
+  bool autostartEditTerminal = false;
+  bool autostartEditIsOverride = false;
+  std::string autostartFormError;
+  std::string autostartStatusMsg;
+  long long autostartStatusMsgUntilMs = 0;
   int autostartEditDelay = 0;
   AutostartField autostartActiveField = AutostartField::None;
   int autostartDeleteConfirmRow = -1;
@@ -757,7 +806,8 @@ struct App {
   std::string accountsCuPassword;
   std::string accountsCuConfirm;
   std::string accountsHostnameEdit;
-  std::string accountsStatusMsg;
+  std::string accountsStatusMsg; // password card status
+  bool accountsStatusErr = false;
 
   m3::Button testNotifBtn;
 

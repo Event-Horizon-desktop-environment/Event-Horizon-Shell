@@ -368,6 +368,8 @@ Settings load_settings() {
   s.dashboardMarginTop = std::clamp(sc.dashboard.marginTop, 0, 200);
   s.dashboardMarginBottom = std::clamp(sc.dashboard.marginBottom, 0, 200);
   s.dashboardMaxWidth = std::clamp(sc.dashboard.maxWidth, 0, 7680);
+  s.dashboardHoverReveal = sc.dashboard.hoverReveal;
+  s.dashboardConfigVersion = std::clamp(sc.dashboard.configVersion, 0, 99);
   // Cards → picker tokens: "id" for span 1, "id:span" otherwise. An empty
   // list in TOML means "defaults", so mirror that here.
   s.dashboardWidgets.clear();
@@ -624,6 +626,7 @@ Settings load_settings() {
   s.audioEngineQuantum = sc.audio.engine_quantum;
   s.audioEngineForceQuantum = sc.audio.engine_force_quantum;
   s.audioCompatPcmFormat = sc.audio.compat_pcm_format;
+  s.audioAllowOverAmp = sc.audio.allow_over_amplification;
 
   load_desktop_widgets_from_file(s);
   debug_log("settings", "load_settings: desktop_widgets=%zu keyb_layout=%s tuned_profile=%s epp=%d avatar=%s",
@@ -906,6 +909,7 @@ eh::config::ShellConfig settings_to_shell_config(const Settings& s) {
   sc.audio.engine_quantum = s.audioEngineQuantum;
   sc.audio.engine_force_quantum = s.audioEngineForceQuantum;
   sc.audio.compat_pcm_format = s.audioCompatPcmFormat;
+  sc.audio.allow_over_amplification = s.audioAllowOverAmp;
   // `[dashboard]` — always write back (the TOML writer emits the block), so a
   // save from Settings can never clobber a hand-edited [dashboard] section.
   sc.dashboard.enabled = s.dashboardEnabled;
@@ -916,6 +920,8 @@ eh::config::ShellConfig settings_to_shell_config(const Settings& s) {
   sc.dashboard.marginTop = std::clamp(s.dashboardMarginTop, 0, 200);
   sc.dashboard.marginBottom = std::clamp(s.dashboardMarginBottom, 0, 200);
   sc.dashboard.maxWidth = std::clamp(s.dashboardMaxWidth, 0, 7680);
+  sc.dashboard.hoverReveal = s.dashboardHoverReveal;
+  sc.dashboard.configVersion = std::clamp(s.dashboardConfigVersion, 0, 99);
   sc.dashboard.cards.clear();
   for (const std::string& tok : s.dashboardWidgets) {
     if (tok.empty()) continue;

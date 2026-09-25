@@ -108,6 +108,8 @@
 #include "desktop_shell/common/fs/shell_paths.hpp"
 #include "desktop_shell/shared/popup/geometry/layout.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_anim.hpp"
+#include "desktop_shell/controlcenter/layout/control_center_pear_layout.hpp"
+#include "desktop_shell/controlcenter/state/control_center_pear_config.hpp"
 #include "desktop_shell/dock/paint/dock_strip_geometry.hpp"
 #include "desktop_shell/shared/widgets/workspace_strip.hpp"
 #include "desktop_shell/spotlight/search/spotlight_query.hpp"
@@ -536,8 +538,8 @@ void popup_draw_surface(DockApp& app) {
     return;
   }
   if (app.popupKind == DockApp::PopupKind::ControlCenter) {
-    const std::string ccId = dock_first_control_center_widget_id(app.settings);
-    const std::string wid = ccId.empty() ? std::string("control_center") : ccId;
+    std::string wid = dock_active_control_center_widget_id(app);
+    if (wid.empty()) wid = "control_center";
     control_center_popup_paint(app.ccState, cr, app.popupW, app.popupH, scPopupOv, app.mpris.get(), wid, app.icons, app.settings.pinnedApps);
     cairo_restore(cr);
     popup_finish_draw(app, true, true, true);
@@ -2641,7 +2643,7 @@ void dock_handle_timer(DockApp& app) {
     drewDock = true;
     drew = true;
   }
-  const std::string ccId = dock_first_control_center_widget_id(app.settings);
+  const std::string ccId = dock_active_control_center_widget_id(app);
   if (!ccId.empty()) {
     const auto& sc = eh::config::shell_config_snapshot();
     if (eh::shell::dock_slot_hooks::control_center_tick_signature_changed(app.dockControlCenterTickSignature, sc, ccId)) {
@@ -2653,7 +2655,24 @@ void dock_handle_timer(DockApp& app) {
   eh::shell::dashboard::dashboard_timer_tick(app);
 
   if (drewDock) dock_draw(app);
-  if (drew && app.popupOpen && app.popupSurface) {
+  bool drewPopup = drew;
+  if (drewPopup && app.popupOpen && app.popupSurface &&
+      app.popupKind == DockApp::PopupKind::ControlCenter) {
+    // PearCenter compact popup: only repaint on painted-state changes. The
+    // bar timer fires every 400ms and any dock widget change (clock, BT,
+    // MPRIS position, …) would otherwise repaint the whole popup, which
+    // reads as flicker. Hover/drag dispatches repaint explicitly.
+    const auto& sc = eh::config::shell_config_snapshot();
+    if (!ccId.empty() && eh::shell::dock::control_center::pear_layout_enabled(sc, ccId) &&
+        !app.ccState.audioDragActive && !app.ccState.inputDragActive &&
+        !app.ccState.mixerDragActive && !app.ccState.pearBriDragActive &&
+        !eh::shell::dock::control_center::pear_popup_signature_changed(
+            app.ccState, sc, ccId, app.mpris.get(),
+            static_cast<double>(app.popupW > 0 ? app.popupW : 360))) {
+      drewPopup = false;
+    }
+  }
+  if (drewPopup && app.popupOpen && app.popupSurface) {
     popup_draw_surface(app);
     wl_display_flush(app.display);
   }

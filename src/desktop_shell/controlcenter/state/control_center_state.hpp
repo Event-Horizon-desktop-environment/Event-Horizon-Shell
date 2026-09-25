@@ -40,6 +40,20 @@ enum class CcHoverTarget : uint8_t {
   MediaNext,
   MediaCard,
   WeatherCard,
+  // PearCenter compact layout targets.
+  SettingsRow,      // SectionButtons LongButton[2] -> open System Settings
+  DndCard,          // DndButton -> toggle Do Not Disturb
+  DeviceLinkCard,   // Device-link quick toggle -> run configured device command
+  NightColorCard,   // Night Color quick toggle -> toggle night light
+  ColorSchemeCard,  // Theme quick toggle (icon only) -> swap light/dark scheme
+  CameraCard,       // Camera quick toggle -> screenshot region selection
+  CmdCard1,         // CommandRun 1 -> spawn custom shell command
+  CmdCard2,         // CommandRun 2 -> spawn custom shell command
+  VolumeCard,       // Volume slider card (mute on icon, drag value)
+  InputCard,        // Input slider card (mute on icon, drag value)
+  BrightnessCard,   // Brightness slider card
+  NetworksBack,     // SectionNetworks header back arrow
+  WifiToggle,       // SectionNetworks Wi-Fi enable checkbox
 };
 
 struct ControlCenterState {
@@ -65,6 +79,11 @@ struct ControlCenterState {
   int inputLastAppliedPct = -1;
   uint64_t inputLastApplyMs = 0;
   uint64_t inputIgnoreStateUntilMs = 0;
+
+  // PearCenter brightness drag state (kept separate so the input-audio row
+  // can keep using inputDragActive).
+  bool pearBriDragActive = false;
+  double pearBriDragT = -1.0;
 
   // Mixer drag state
   bool mixerDragActive = false;
@@ -106,6 +125,11 @@ struct ControlCenterState {
   bool outputDevicesExpanded = false;
   bool inputDevicesExpanded = false;
   bool weatherExpanded = false;
+
+  // PearCenter compact layout: SectionNetworks full-overlay page (covers wrapper, z=999).
+  // When true, paint draws the networks page instead of Section A+B and hit/
+  // dispatch route to NetworksBack/WifiToggle/NetworkRow.
+  bool networksOverlay = false;
 
   // Animation states for network
   uint64_t netAnimStartMs = 0;

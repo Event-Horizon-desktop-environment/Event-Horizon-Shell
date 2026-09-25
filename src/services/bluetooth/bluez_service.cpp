@@ -1,7 +1,7 @@
 #include "services/bluetooth/bluez_service.hpp"
 
 #include "configuration/shell_config.hpp"
-#include "platform/rfkill_helper.h"
+#include "platform/radio_block.h"
 
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IConnection.h>
@@ -484,13 +484,14 @@ void BluezService::refresh_locked() {
     }
   }
 
-  // rfkill caching: only re-read from sysfs every 2 seconds
+  // radio-block cache: only re-read from sysfs every 2 seconds
   {
     auto now = std::chrono::steady_clock::now();
     if (now - lastRfkillCheck_ > std::chrono::seconds(2)) {
       lastRfkillCheck_ = now;
-      cachedSoftBlocked_ = isRfkillSoftBlocked(RfkillDeviceType::Bluetooth);
-      cachedHardBlocked_ = isRfkillHardBlocked(RfkillDeviceType::Bluetooth);
+      const auto radio = eh::platform::radioBlockStatus(eh::platform::RadioKind::Bluetooth);
+      cachedSoftBlocked_ = radio.softBlocked;
+      cachedHardBlocked_ = radio.hardBlocked;
     }
     snap_.rfkillSoftBlocked = cachedSoftBlocked_;
     snap_.rfkillHardBlocked = cachedHardBlocked_;
