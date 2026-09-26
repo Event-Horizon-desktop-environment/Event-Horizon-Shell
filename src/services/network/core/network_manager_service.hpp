@@ -26,7 +26,7 @@ public:
   void set_change_callback(ChangeCallback cb);
 
   Snapshot snapshot() const;
-  const NetworkState& state() const;
+  NetworkState state() const;
   void refresh();
   void request_scan();
   bool activate_ap(const AccessPoint& ap);

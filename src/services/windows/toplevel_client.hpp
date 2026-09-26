@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -36,7 +37,7 @@ public:
 
   void set_change_handler(ChangeHandler h) { onChanged_ = std::move(h); }
 
-  [[nodiscard]] const std::vector<ToplevelRecord>& list() const { return list_; }
+  [[nodiscard]] std::vector<ToplevelRecord> list() const;
   [[nodiscard]] const ToplevelRecord* find(std::uint64_t id) const;
 
   // Passthrough for the component's poll loop.
@@ -44,7 +45,12 @@ public:
   void on_fd_ready(int fd) { ipc_->on_fd_ready(fd); }
 
 private:
+  struct PendingEvent {
+    std::string topic;
+    std::string payload;
+  };
   void handle_event(std::string topic, std::string payload, std::vector<int> fds);
+  void dispatch_event(std::string topic, std::string payload);
   void apply_record(const ToplevelRecord& rec, bool create);
   void remove_record(std::uint64_t id);
   void notify() {
@@ -52,8 +58,11 @@ private:
   }
 
   std::unique_ptr<eh::ipc::IpcClient> ipc_;
+  mutable std::recursive_mutex mu_;
   std::vector<ToplevelRecord> list_;
   ChangeHandler onChanged_;
+  bool syncing_ = false;
+  std::vector<PendingEvent> pending_;
 };
 
 } // namespace eh::windows

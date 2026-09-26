@@ -54,10 +54,44 @@ static std::string ssid_from_byte_array(const std::vector<uint8_t>& bytes) {
   std::string out;
   out.reserve(bytes.size());
   for (auto b : bytes) {
-    if (b >= 32 && b < 127) out.push_back(static_cast<char>(b));
-    else out.push_back('.');
+    out.push_back(b == 0 ? '.' : static_cast<char>(b));
   }
   return out;
+}
+
+static bool is_uuid_token(const std::string& line, size_t pos) {
+  if (pos + 36 > line.size()) return false;
+  for (size_t k = 0; k < 36; ++k) {
+    const char c = line[pos + k];
+    if (k == 8 || k == 13 || k == 18 || k == 23) {
+      if (c != '-') return false;
+    } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool split_vpn_line(const std::string& line, std::string& name, std::string& uuid,
+                           std::string& type, std::string& tail) {
+  for (size_t i = 0; i + 36 <= line.size(); ++i) {
+    if (!is_uuid_token(line, i)) continue;
+    if (i > 0 && line[i - 1] != ':') continue;
+    if (i + 36 < line.size() && line[i + 36] != ':') continue;
+    uuid = line.substr(i, 36);
+    name = (i == 0) ? std::string{} : line.substr(0, i - 1);
+    std::string rest = (i + 36 < line.size()) ? line.substr(i + 37) : std::string{};
+    const auto c = rest.find(':');
+    if (c == std::string::npos) {
+      type = rest;
+      tail.clear();
+    } else {
+      type = rest.substr(0, c);
+      tail = rest.substr(c + 1);
+    }
+    return true;
+  }
+  return false;
 }
 
 static std::string prop_string(sdbus::IProxy& proxy, const char* iface, const char* prop) {
@@ -211,7 +245,7 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
           state.interfaceName = prop_string(*devProxy, kNmDeviceInterface, "Interface");
           state.macAddress = prop_string(*devProxy, kNmDeviceInterface, "HwAddress");
 
-          const std::string ip4Path = prop_string(*devProxy, kNmDeviceInterface, "Ip4Config");
+          const std::string ip4Path = static_cast<std::string>(prop_objpath(*devProxy, kNmDeviceInterface, "Ip4Config"));
           if (!ip4Path.empty()) {
             try {
               auto ip4Proxy = sdbus::createProxy(bus, sdbus::ServiceName{kNmBusName}, sdbus::ObjectPath{ip4Path});
@@ -264,7 +298,7 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
               } catch (const sdbus::Error&) {}
             }
 
-            const std::string ip6Path = prop_string(*devProxy, kNmDeviceInterface, "Ip6Config");
+            const std::string ip6Path = static_cast<std::string>(prop_objpath(*devProxy, kNmDeviceInterface, "Ip6Config"));
             if (!ip6Path.empty()) {
               try {
                 auto ip6Proxy = sdbus::createProxy(bus, sdbus::ServiceName{kNmBusName}, sdbus::ObjectPath{ip6Path});
@@ -283,7 +317,7 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
           }
 
           if (devType == kNmDeviceTypeWifi) {
-            const std::string apPath = prop_string(*devProxy, kNmWirelessInterface, "ActiveAccessPoint");
+            const std::string apPath = static_cast<std::string>(prop_objpath(*devProxy, kNmWirelessInterface, "ActiveAccessPoint"));
             if (!apPath.empty()) {
               try {
                 auto apProxy = sdbus::createProxy(bus, sdbus::ServiceName{kNmBusName}, sdbus::ObjectPath{apPath});
@@ -333,7 +367,7 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
               state.kind = NetworkConnectivity::Wireless;
               state.interfaceName = prop_string(*dev2Proxy, kNmDeviceInterface, "Interface");
               state.macAddress = prop_string(*dev2Proxy, kNmDeviceInterface, "HwAddress");
-              const std::string apPath = prop_string(*dev2Proxy, kNmWirelessInterface, "ActiveAccessPoint");
+              const std::string apPath = static_cast<std::string>(prop_objpath(*dev2Proxy, kNmWirelessInterface, "ActiveAccessPoint"));
               if (!apPath.empty()) {
                 try {
                   auto ap2Proxy = sdbus::createProxy(bus, sdbus::ServiceName{kNmBusName}, sdbus::ObjectPath{apPath});
@@ -378,14 +412,14 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
           state.mtu = prop_uint(*devProxy, kNmDeviceInterface, "Mtu");
           state.deviceState = prop_uint(*devProxy, kNmDeviceInterface, "State");
           state.metered = prop_uint(*devProxy, kNmDeviceInterface, "Metered");
-          state.activeConnectionPath = prop_string(*devProxy, kNmDeviceInterface, "ActiveConnection");
+          state.activeConnectionPath = static_cast<std::string>(prop_objpath(*devProxy, kNmDeviceInterface, "ActiveConnection"));
 
           if (state.interfaceName.empty())
             state.interfaceName = prop_string(*devProxy, kNmDeviceInterface, "Interface");
           if (state.macAddress.empty())
             state.macAddress = prop_string(*devProxy, kNmDeviceInterface, "HwAddress");
 
-          const std::string ip4Path = prop_string(*devProxy, kNmDeviceInterface, "Ip4Config");
+          const std::string ip4Path = static_cast<std::string>(prop_objpath(*devProxy, kNmDeviceInterface, "Ip4Config"));
           if (!ip4Path.empty()) {
             try {
               auto ip4ExtProxy = sdbus::createProxy(bus, sdbus::ServiceName{kNmBusName}, sdbus::ObjectPath{ip4Path});
@@ -406,7 +440,7 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
             } catch (const sdbus::Error&) {}
           }
 
-          const std::string ip6Path = prop_string(*devProxy, kNmDeviceInterface, "Ip6Config");
+          const std::string ip6Path = static_cast<std::string>(prop_objpath(*devProxy, kNmDeviceInterface, "Ip6Config"));
           if (!ip6Path.empty()) {
             try {
               auto ip6Proxy = sdbus::createProxy(bus, sdbus::ServiceName{kNmBusName}, sdbus::ObjectPath{ip6Path});
@@ -473,6 +507,11 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
         }
       } catch (const sdbus::Error&) {}
     }
+    if (!state.ssid.empty()) {
+      for (auto& ap : state.accessPoints) {
+        if (ap.ssid == state.ssid) ap.active = true;
+      }
+    }
     std::sort(state.accessPoints.begin(), state.accessPoints.end(),
       [](const AccessPointInfo& a, const AccessPointInfo& b) {
         if (a.active != b.active) return a.active;
@@ -522,6 +561,10 @@ static void do_refresh(sdbus::IConnection& bus, sdbus::IProxy& nmProxy,
     }
   } catch (...) {}
   savedLoaded = true;
+  state.savedNetworks.clear();
+  for (const auto& [ssid, path] : savedConns) {
+    if (!ssid.empty()) state.savedNetworks.push_back(ssid);
+  }
 }
 
 struct NmResult {
@@ -639,50 +682,40 @@ static void do_refresh_vpn(std::vector<VpnConnectionInfo>& out) {
   out.clear();
   // Get active VPN/WireGuard connections: NAME:UUID:TYPE:STATE
   std::set<std::string> activeUuids;
-  std::string activeOut = nmcli_exec("nmcli -t -f NAME,UUID,TYPE,STATE connection show --active 2>/dev/null");
-  if (!activeOut.empty()) {
+  NmResult activeRes = nmcli_run("nmcli -t -f NAME,UUID,TYPE,STATE connection show --active 2>/dev/null");
+  if (activeRes.rc == 0 && !activeRes.out.empty()) {
     size_t pos = 0;
-    while (pos < activeOut.size()) {
-      size_t nl = activeOut.find('\n', pos);
-      std::string line = activeOut.substr(pos, nl - pos);
-      pos = (nl == std::string::npos) ? activeOut.size() : nl + 1;
+    while (pos < activeRes.out.size()) {
+      size_t nl = activeRes.out.find('\n', pos);
+      std::string line = activeRes.out.substr(pos, nl - pos);
+      pos = (nl == std::string::npos) ? activeRes.out.size() : nl + 1;
       if (line.empty()) continue;
-      // NAME:UUID:TYPE:STATE
-      auto c1 = line.find(':');
-      if (c1 == std::string::npos) continue;
-      auto c2 = line.find(':', c1 + 1);
-      if (c2 == std::string::npos) continue;
-      auto c3 = line.find(':', c2 + 1);
-      if (c3 == std::string::npos) continue;
-      std::string type = line.substr(c2 + 1, c3 - c2 - 1);
+      std::string name, uuid, type, tail;
+      if (!split_vpn_line(line, name, uuid, type, tail)) continue;
       if (type == "vpn" || type == "wireguard") {
-        activeUuids.insert(line.substr(c1 + 1, c2 - c1 - 1));
+        activeUuids.insert(uuid);
       }
     }
   }
 
   // Get all saved connections: NAME:UUID:TYPE:AUTOCONNECT
-  std::string allOut = nmcli_exec("nmcli -t -f NAME,UUID,TYPE,AUTOCONNECT connection show 2>/dev/null");
-  if (!allOut.empty()) {
+  NmResult allRes = nmcli_run("nmcli -t -f NAME,UUID,TYPE,AUTOCONNECT connection show 2>/dev/null");
+  if (allRes.rc != 0) return;
+  if (!allRes.out.empty()) {
     size_t pos = 0;
-    while (pos < allOut.size()) {
-      size_t nl = allOut.find('\n', pos);
-      std::string line = allOut.substr(pos, nl - pos);
-      pos = (nl == std::string::npos) ? allOut.size() : nl + 1;
+    while (pos < allRes.out.size()) {
+      size_t nl = allRes.out.find('\n', pos);
+      std::string line = allRes.out.substr(pos, nl - pos);
+      pos = (nl == std::string::npos) ? allRes.out.size() : nl + 1;
       if (line.empty()) continue;
-      auto c1 = line.find(':');
-      if (c1 == std::string::npos) continue;
-      auto c2 = line.find(':', c1 + 1);
-      if (c2 == std::string::npos) continue;
-      auto c3 = line.find(':', c2 + 1);
-      if (c3 == std::string::npos) continue;
-      std::string type = line.substr(c2 + 1, c3 - c2 - 1);
+      std::string name, uuid, type, tail;
+      if (!split_vpn_line(line, name, uuid, type, tail)) continue;
       if (type != "vpn" && type != "wireguard") continue;
       VpnConnectionInfo vpn;
-      vpn.uuid = line.substr(c1 + 1, c2 - c1 - 1);
-      vpn.name = line.substr(0, c1);
+      vpn.uuid = uuid;
+      vpn.name = name;
       vpn.type = type;
-      vpn.autoconnect = (line.substr(c3 + 1) == "yes");
+      vpn.autoconnect = (tail == "yes");
       vpn.active = activeUuids.contains(vpn.uuid);
       out.push_back(std::move(vpn));
     }
@@ -970,12 +1003,13 @@ Snapshot NetworkManagerService::snapshot() const {
     s.aps.push_back(std::move(nap));
   }
 
-  s.saved_ssids.reserve(s.saved_ssids.size());
+  s.saved_ssids.clear();
+  for (const auto& ssid : st.savedNetworks) s.saved_ssids.push_back(ssid);
 
   return s;
 }
 
-const NetworkState& NetworkManagerService::state() const {
+NetworkState NetworkManagerService::state() const {
    
   std::lock_guard lk(d->stateMtx);
   return d->state;
@@ -1096,10 +1130,22 @@ void NetworkManagerService::disconnect() {
     try {
       const auto activeConns = nmProxy->getProperty("ActiveConnections")
         .onInterface(kNmInterface).get<std::vector<sdbus::ObjectPath>>();
-      if (!activeConns.empty()) {
+      std::string target;
+      for (const auto& ac : activeConns) {
+        try {
+          auto acProxy = sdbus::createProxy(*bus, sdbus::ServiceName{kNmBusName}, ac);
+          if (acProxy->getProperty("Type").onInterface(kNmActiveConnIface).get<std::string>() ==
+              "802-11-wireless") {
+            target = static_cast<std::string>(ac);
+            break;
+          }
+        } catch (const sdbus::Error&) {}
+      }
+      if (target.empty() && !activeConns.empty()) target = static_cast<std::string>(activeConns[0]);
+      if (!target.empty()) {
         nmProxy->callMethod("DeactivateConnection")
           .onInterface(kNmInterface)
-          .withArguments(activeConns[0]);
+          .withArguments(sdbus::ObjectPath{target});
       }
     } catch (const std::exception& e) {
       std::cerr << "[nm] disconnect failed: " << e.what() << '\n';
@@ -1151,8 +1197,10 @@ void NetworkManagerService::forget_ssid(const std::string& ssid) {
 
 bool NetworkManagerService::has_saved_connection(const std::string& ssid) const {
    
-  (void)ssid;
-  return false;
+  if (ssid.empty()) return false;
+  std::lock_guard lk(d->stateMtx);
+  const auto& nets = d->state.savedNetworks;
+  return std::find(nets.begin(), nets.end(), ssid) != nets.end();
 }
 
 // VPN (nmcli-based).
@@ -1240,7 +1288,7 @@ bool NetworkManagerService::addWireguardConnection(const WireGuardConfig& cfg, s
   std::string tmpPath = dir + "/eh_wg_" + std::to_string(static_cast<long>(getpid())) + "_" +
                         std::to_string(static_cast<long>(time(nullptr))) + ".conf";
 
-  int fd = open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  int fd = open(tmpPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
   if (fd < 0) {
     err = "Cannot create temporary config file";
     return false;

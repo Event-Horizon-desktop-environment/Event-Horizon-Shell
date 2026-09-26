@@ -15,6 +15,12 @@ void registry_global(void* data, wl_registry* registry, uint32_t name, const cha
     tracker.toplevelManager = static_cast<zwlr_foreign_toplevel_manager_v1*>(
         wl_registry_bind(registry, name, &zwlr_foreign_toplevel_manager_v1_interface,
                          std::min<uint32_t>(version, 3)));
+    /* Attach inside the registry callback: the compositor answers the bind with a `toplevel`
+       event per already-mapped window, and the bind request is not on the wire until the next
+       flush, so the listener is guaranteed to be installed before that batch is dispatched.
+       Attaching after the roundtrip below drops every window mapped before this process
+       started, leaving only windows that appear later. */
+    if (tracker.toplevelManager) tracker.toplevels.attach(tracker.toplevelManager, tracker.display);
     return;
   }
   if (std::string_view(interface) == ext_foreign_toplevel_list_v1_interface.name) {
@@ -40,6 +46,9 @@ const wl_registry_listener g_registry_listener = {
 bool toplevel_tracker_init(ToplevelTracker& tracker, wl_display* display, std::function<void()> visual_dirty) {
   tracker.display = display;
   tracker.compositorKind = detect_compositor_kind();
+  /* Installed before the roundtrip so the initial toplevel batch, which now arrives with the
+     listener already attached, requests a redraw instead of being silently absorbed. */
+  tracker.toplevels.set_visual_dirty_hook(visual_dirty);
   tracker.registry = wl_display_get_registry(display);
   if (!tracker.registry) return false;
   wl_registry_add_listener(tracker.registry, &g_registry_listener, &tracker);
@@ -55,8 +64,6 @@ bool toplevel_tracker_init(ToplevelTracker& tracker, wl_display* display, std::f
   }
 
   std::function<void()> dirty = std::move(visual_dirty);
-  tracker.toplevels.set_visual_dirty_hook(dirty);
-  if (tracker.toplevelManager) tracker.toplevels.attach(tracker.toplevelManager, display);
   if (tracker.extToplevelList) {
     tracker.extToplevels.bind(tracker.extToplevelList, display);
     tracker.extToplevels.set_changed_cb(dirty);
@@ -65,8 +72,8 @@ bool toplevel_tracker_init(ToplevelTracker& tracker, wl_display* display, std::f
   wl_display_flush(display);
   // Non-blocking: the compositor only emits foreign-toplevel events when a window maps,
   // so a blocking dispatch on an empty desktop stalls the whole session boot
-  // until the user opens the first window. The main poll loop delivers the
-  // initial snapshot (if any) asynchronously instead.
+  // until the user opens the first window. The initial snapshot is already
+  // in by the roundtrip above; this only drains anything queued since.
   (void)wl_display_dispatch_pending(display);
   tracker.ready = true;
   return true;

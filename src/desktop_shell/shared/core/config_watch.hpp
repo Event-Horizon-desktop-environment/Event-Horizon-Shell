@@ -1,7 +1,10 @@
 #pragma once
 
 #include <array>
+#include <cerrno>
 #include <concepts>
+#include <cstring>
+#include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,7 +24,16 @@ inline int open_state_inotify() {
   int fd = inotify_init1(IN_CLOEXEC | IN_NONBLOCK);
   if (fd < 0) return -1;
 
-  inotify_add_watch(fd, stateDir.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
+  int watchErr = 0;
+  int watchErrno = 0;
+  auto watch = [&](const char* path, uint32_t mask) {
+    if (inotify_add_watch(fd, path, mask) < 0) {
+      ++watchErr;
+      watchErrno = errno;
+    }
+  };
+
+  watch(stateDir.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
 
   // Watch all per-component config directories.
   const std::string_view comps[] = {
@@ -33,18 +45,23 @@ inline int open_state_inotify() {
   for (auto c : comps) {
     const std::string d = stateDir + "/" + std::string(c);
     (void)mkdir(d.c_str(), 0755);
-    inotify_add_watch(fd, d.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
+    watch(d.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
   }
 
   const std::string declarativeDir = eh::config::declarative_config_dir();
   if (!declarativeDir.empty())
-    inotify_add_watch(fd, declarativeDir.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
+    watch(declarativeDir.c_str(), IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_DELETE);
 
   if (const char* home = std::getenv("HOME")) {
-    inotify_add_watch(fd, (std::string(home) + "/.config").c_str(), IN_CLOSE_WRITE);
-    inotify_add_watch(fd, (std::string(home) + "/.config/dconf").c_str(), IN_CLOSE_WRITE);
-    inotify_add_watch(fd, (std::string(home) + "/.config/gtk-4.0").c_str(), IN_CLOSE_WRITE);
-    inotify_add_watch(fd, (std::string(home) + "/.config/gtk-3.0").c_str(), IN_CLOSE_WRITE);
+    watch((std::string(home) + "/.config").c_str(), IN_CLOSE_WRITE);
+    watch((std::string(home) + "/.config/dconf").c_str(), IN_CLOSE_WRITE);
+    watch((std::string(home) + "/.config/gtk-4.0").c_str(), IN_CLOSE_WRITE);
+    watch((std::string(home) + "/.config/gtk-3.0").c_str(), IN_CLOSE_WRITE);
+  }
+
+  if (watchErr > 0) {
+    std::cerr << "[settings-inotify] " << watchErr << " watch(es) failed ("
+              << std::strerror(watchErrno) << "); some settings changes may be missed\n";
   }
 
   return fd;

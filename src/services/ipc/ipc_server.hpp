@@ -5,6 +5,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -78,8 +79,8 @@ private:
   std::unordered_map<std::string, IpcHandler> handlers_;
 
   mutable std::mutex busMtx_;
-  std::unordered_set<int> pending_;  // accepted, awaiting first byte
-  std::unordered_map<int, std::unique_ptr<Client>> clients_;
+  std::unordered_map<int, std::chrono::steady_clock::time_point> pending_;
+  std::unordered_map<int, std::shared_ptr<Client>> clients_;
   std::unordered_map<std::string, std::unordered_set<int>> subscriptions_;
   uint64_t nextRequestId_ = 1;
 };

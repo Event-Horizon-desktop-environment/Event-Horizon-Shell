@@ -5,8 +5,10 @@
 #include "services/mpris/mpris_player.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <string>
 
 #include "m3/core/primitives/box.hpp"
 #include <cairo.h>
@@ -16,6 +18,9 @@
 namespace eh::shell::dock::popup::media_player {
 namespace {
 
+// ════════════════════════════════════════════════════════════════════════════
+// iOS-style now-playing card (400x196): art + scrolling title/artist, wave
+// bars, seekbar with elapsed/remaining stamps, 5 transport controls.
 // ════════════════════════════════════════════════════════════════════════════
 
 void rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
@@ -46,165 +51,124 @@ void fill_rounded_rect(cairo_t* cr,
                 static_cast<unsigned long long>(secs));
 }
 
-int measure_one_line_h(cairo_t* cr, const char* fd_str) {
-  auto* l  = pango_cairo_create_layout(cr);
-  auto* fd = pango_font_description_from_string(fd_str);
-  pango_layout_set_font_description(l, fd);
-  pango_layout_set_text(l, "Ay", -1);
-  int h = 0;
-  pango_layout_get_pixel_size(l, nullptr, &h);
-  pango_font_description_free(fd);
-  g_object_unref(l);
-  return h;
+// Triangle-wave marquee offset: rests at 0, traverses `range` and back.
+double marquee_triangle_offset(double range_px, double tsec, double period_sec) {
+  if (range_px <= 0.5 || period_sec <= 0.0) return 0.0;
+  const double u = std::fmod(tsec / period_sec, 1.0);
+  if (u < 0.0) return 0.0;
+  const double tri = u < 0.5 ? (u * 2.0) : (2.0 - u * 2.0);
+  return tri * range_px;
 }
 
-int measure_text_h(cairo_t* cr,
-                   double max_w, const char* text,
-                   const char* fd_str, int max_lines) {
+double marquee_now_sec() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+int natural_text_width_px(cairo_t* cr, const char* text, const char* fd_str) {
   auto* l  = pango_cairo_create_layout(cr);
   auto* fd = pango_font_description_from_string(fd_str);
   pango_layout_set_font_description(l, fd);
   pango_font_description_free(fd);
   pango_layout_set_text(l, text, -1);
-  pango_layout_set_width(l, static_cast<int>(max_w * PANGO_SCALE));
-  pango_layout_set_wrap(l, PANGO_WRAP_WORD_CHAR);
-  pango_layout_set_ellipsize(l, PANGO_ELLIPSIZE_END);
-  if (max_lines > 0) {
-    int one = measure_one_line_h(cr, fd_str);
-    pango_layout_set_height(l, max_lines * one * PANGO_SCALE);
-  }
-  int h = 0;
-  pango_layout_get_pixel_size(l, nullptr, &h);
+  int w = 0;
+  pango_layout_get_pixel_size(l, &w, nullptr);
   g_object_unref(l);
-  return h;
+  return w;
 }
 
-int draw_text(cairo_t* cr,
-              double x, double y, double max_w,
-              const char* text, const char* fd_str,
-              PangoAlignment align, int max_lines,
-              double r, double g, double b, double a) {
+// Single-line text that scrolls when wider than `max_w`. Reports scrolling
+// through the shared marquee flag so timer drivers keep repainting.
+void draw_scrolled_line(cairo_t* cr, double x, double y, double max_w,
+                        const std::string& text, const char* fd_str,
+                        double r, double g, double b, double a,
+                        double tsec, double period_sec) {
+  const int nat_w = natural_text_width_px(cr, text.c_str(), fd_str);
   auto* l  = pango_cairo_create_layout(cr);
   auto* fd = pango_font_description_from_string(fd_str);
   pango_layout_set_font_description(l, fd);
   pango_font_description_free(fd);
-  pango_layout_set_text(l, text, -1);
-  pango_layout_set_width(l, static_cast<int>(max_w * PANGO_SCALE));
-  pango_layout_set_wrap(l, PANGO_WRAP_WORD_CHAR);
-  pango_layout_set_ellipsize(l, PANGO_ELLIPSIZE_END);
-  pango_layout_set_alignment(l, align);
-  if (max_lines > 0) {
-    int one = measure_one_line_h(cr, fd_str);
-    pango_layout_set_height(l, max_lines * one * PANGO_SCALE);
-  }
-  int pw = 0, ph = 0;
-  pango_layout_get_pixel_size(l, &pw, &ph);
+  pango_layout_set_text(l, text.c_str(), -1);
+  int line_h = 0;
+  pango_layout_get_pixel_size(l, nullptr, &line_h);
   cairo_set_source_rgba(cr, r, g, b, a);
-  cairo_move_to(cr, x, y);
-  pango_cairo_show_layout(cr, l);
+  if (static_cast<double>(nat_w) > max_w + 0.5) {
+    media_popup_marquee_state() = true;
+    const double range = static_cast<double>(nat_w) - max_w;
+    const double off = marquee_triangle_offset(range, tsec, period_sec);
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y - 2.0, max_w, static_cast<double>(line_h) + 4.0);
+    cairo_clip(cr);
+    cairo_move_to(cr, x - off, y);
+    pango_cairo_show_layout(cr, l);
+    cairo_restore(cr);
+  } else {
+    cairo_move_to(cr, x, y);
+    pango_cairo_show_layout(cr, l);
+  }
   g_object_unref(l);
-  return ph;
 }
 
-void draw_art_ring(cairo_t* cr, double cx, double cy, double r,
-                   double ar, double ag, double ab) {
-  cairo_save(cr);
-  cairo_new_path(cr);
-  cairo_arc(cr, cx, cy, r + 4.0, 0, 2 * M_PI);
-  cairo_set_source_rgba(cr, ar, ag, ab, 0.18);
-  cairo_set_line_width(cr, 7.0);
-  cairo_stroke(cr);
-  cairo_new_path(cr);
-  cairo_arc(cr, cx, cy, r + 1.0, 0, 2 * M_PI);
-  cairo_set_source_rgba(cr, ar, ag, ab, 0.60);
-  cairo_set_line_width(cr, 2.0);
-  cairo_stroke(cr);
-  cairo_restore(cr);
-}
-
-} // anonymous namespace (paint-local helpers above; shared geometry below)
+} // anonymous namespace
 
 // Shared paint/hit geometry (single source; also used by
 // media_player_popup.cpp click handling — see Docs/hit-testing.md).
-// Constants (matching DesktopMediaPlayerWidget)
 // ════════════════════════════════════════════════════════════════════════════
 
-constexpr double kW = 340.0;
-constexpr double kH = 420.0;
+constexpr double kW = 400.0;
+constexpr double kH = 188.0;
 
-constexpr double kOuterR      = 22.0;
-constexpr double kOuterMargin = 14.0;
+constexpr double kOuterR = 28.0;
+constexpr double kPad    = 20.0;
 
-constexpr double kInnerX = kOuterMargin;
-constexpr double kInnerY = kOuterMargin;
-constexpr double kInnerW = kW - 2.0 * kOuterMargin;
-constexpr double kInnerH = kH - 2.0 * kOuterMargin;
-constexpr double kInnerR = 18.0;
+constexpr double kArtS = 64.0;
+constexpr double kArtX = kPad;
+constexpr double kArtY = kPad;
+constexpr double kArtR = 12.0;
 
-constexpr double kColW    = kInnerW - 28.0;
-constexpr double kColPadX = 14.0;
-constexpr double kColX    = kInnerX + kColPadX;
+constexpr double kTextX = kArtX + kArtS + 14.0;   // 98
+constexpr double kTextX1 = kW - kPad;             // 380
+constexpr double kTextW  = kTextX1 - kTextX;      // 282
 
-constexpr double kContentTopPad    =  8.0;
-constexpr double kContentBottomPad = 10.0;
+constexpr double kTitleY  = 28.0;
+constexpr double kArtistY = 56.0;
 
-constexpr double kCloseBtnSize = 32.0;
-constexpr double kCloseBtnIcon = 18.0;
-constexpr double kCloseBtnMarg =  8.0;
-constexpr double kCloseBtnCx = kInnerX + kInnerW - kCloseBtnMarg - kCloseBtnSize / 2.0;
-constexpr double kCloseBtnCy = kInnerY + kCloseBtnMarg + kCloseBtnSize / 2.0;
+constexpr double kSeekX0 = kPad;
+constexpr double kSeekX1 = kW - kPad;
+constexpr double kSeekW  = kSeekX1 - kSeekX0;     // 360
+constexpr double kBarY   = 102.0;
+constexpr double kBarH   = 4.0;
+constexpr double kKnobR  = 5.0;
+constexpr double kSeekTop = 92.0;
+constexpr double kSeekBot = 112.0;
 
-constexpr double kArtSize = std::clamp(kColW * 0.52, 80.0, 220.0);
-constexpr double kArtR    = kArtSize / 2.0;
-constexpr double kArtTop  = kInnerY + kContentTopPad;
-constexpr double kArtCy   = kArtTop + kArtR;
+constexpr double kStampsY = 114.0;
 
-constexpr double kBoost    = 1.24;
-constexpr double kBtnSmall = 42.0 * kBoost;
-constexpr double kBtnPlay  = 52.0 * kBoost;
-constexpr double kBtnGap   = 14.0 * kBoost;
+constexpr double kCtrlCy = 154.0;
+constexpr double kShuffleCx = 80.0;
+constexpr double kPrevCx    = 136.0;
+constexpr double kPlayCx    = 200.0;
+constexpr double kNextCx    = 264.0;
+constexpr double kRepeatCx  = 320.0;
+constexpr double kBtnHitR   = 20.0;
+constexpr double kPlayHitR  = 24.0;
 
-constexpr double kSeekAreaH = 22.0;
-constexpr double kBarH      =  4.0;
-constexpr double kThumbR    =  4.0;
-
-constexpr double kSpacing = 3.0;
+constexpr double kMarqueePeriodSec = 9.0;
 
 // Hover part enum.
 
-enum class MediaHover : int { None = 0, Close, Prev, Play, Next, Seekbar };
+enum class MediaHover : int { None = 0, Close, Shuffle, Prev, Play, Next, Repeat, Seekbar };
 
 struct Layout {
-  double titleY  = 0;
-  double artistY = 0;
-  double albumY  = 0;
-  double seekY   = 0;
-  double stampsY = 0;
-  double ctrlY   = 0;
+  double titleY  = kTitleY;
+  double artistY = kArtistY;
+  double seekY   = kSeekTop;
+  double stampsY = kStampsY;
+  double ctrlY   = kCtrlCy;
 };
 
 
-inline Layout compute_layout(int titleH, int artistH, int albumH,
-                      bool hasArtist, bool hasAlbum) {
-  Layout L;
-  const double artBottom = kArtTop + kArtSize;
-
-  L.titleY  = artBottom + kSpacing;
-  L.artistY = L.titleY + titleH + kSpacing;
-  L.albumY  = L.artistY + (hasArtist ? artistH : 0) + kSpacing;
-
-  if (!hasArtist && !hasAlbum)
-    L.seekY = L.titleY + titleH + kSpacing;
-  else if (!hasAlbum)
-    L.seekY = L.artistY + artistH + kSpacing;
-  else
-    L.seekY = L.albumY + albumH + kSpacing;
-
-  L.seekY   += 1.0;
-  L.stampsY  = L.seekY + kSeekAreaH + kSpacing;
-  L.ctrlY    = L.stampsY + 13.0 + kSpacing - 2.0;
-
-  return L;
+inline Layout compute_layout() {
+  return Layout{};
 }
 
 
@@ -215,30 +179,21 @@ inline bool hit_circle(double px, double py, double cx, double cy, double r) {
 
 
 inline MediaHover compute_hover(double px, double py,
-                          double seekY, double ctrlY,
+                          const Layout&,
                           bool active,
                           bool canPrev, bool canNext,
                           bool canPlay, bool canPause,
                           const std::string& playbackStatus) {
-  if (hit_circle(px, py, kCloseBtnCx, kCloseBtnCy, kCloseBtnSize / 2.0))
-    return MediaHover::Close;
+  (void)canPrev; (void)canNext; (void)canPlay; (void)canPause; (void)playbackStatus;
   if (!active) return MediaHover::None;
 
-  const double totalW  = kBtnSmall + kBtnGap + kBtnPlay + kBtnGap + kBtnSmall;
-  const double cLeft   = (kW - totalW) / 2.0;
-  const double ccy     = ctrlY + kBtnPlay / 2.0;
-  const double prevCx  = cLeft + kBtnSmall / 2.0;
-  const double playCx  = cLeft + kBtnSmall + kBtnGap + kBtnPlay / 2.0;
-  const double nextCx  = cLeft + kBtnSmall + kBtnGap + kBtnPlay + kBtnGap + kBtnSmall / 2.0;
+  if (hit_circle(px, py, kPlayCx, kCtrlCy, kPlayHitR)) return MediaHover::Play;
+  if (hit_circle(px, py, kPrevCx, kCtrlCy, kBtnHitR)) return MediaHover::Prev;
+  if (hit_circle(px, py, kNextCx, kCtrlCy, kBtnHitR)) return MediaHover::Next;
+  if (hit_circle(px, py, kShuffleCx, kCtrlCy, kBtnHitR)) return MediaHover::Shuffle;
+  if (hit_circle(px, py, kRepeatCx, kCtrlCy, kBtnHitR)) return MediaHover::Repeat;
 
-  (void)canPrev; (void)canNext; (void)canPlay; (void)canPause; (void)playbackStatus;
-
-  if (hit_circle(px, py, playCx, ccy, kBtnPlay / 2.0)) return MediaHover::Play;
-  if (hit_circle(px, py, prevCx, ccy, kBtnSmall / 2.0)) return MediaHover::Prev;
-  if (hit_circle(px, py, nextCx, ccy, kBtnSmall / 2.0)) return MediaHover::Next;
-
-  if (py >= seekY && py < seekY + kSeekAreaH &&
-      px >= kColX && px <= kColX + kColW)
+  if (py >= kSeekTop && py < kSeekBot && px >= kSeekX0 && px <= kSeekX1)
     return MediaHover::Seekbar;
 
   return MediaHover::None;
@@ -254,12 +209,12 @@ void dock_media_player_popup_paint(const A& app, cairo_t* cr, const eh::config::
 
   cairo_save(cr);
 
-  // Layer 1 — Outer card
+  // Layer 1 — Outer card (dark glass).
   {
-    const float outerAlpha = static_cast<float>(0.78 * sc.appearance.overlayOpacityWidgetCard);
+    const float outerAlpha = static_cast<float>(0.92 * sc.appearance.overlayOpacityWidgetCard);
     m3::Box box;
-    box.setColor(static_cast<float>(mc.dockFillR * 0.35), static_cast<float>(mc.dockFillG * 0.35),
-                 static_cast<float>(mc.dockFillB * 0.35), outerAlpha);
+    box.setColor(static_cast<float>(mc.dockFillR * 0.30), static_cast<float>(mc.dockFillG * 0.30),
+                 static_cast<float>(mc.dockFillB * 0.30), outerAlpha);
     box.setRadius(static_cast<float>(kOuterR));
     box.setGeometry(0, 0, kW, kH);
     box.setGlassy(true);
@@ -267,25 +222,14 @@ void dock_media_player_popup_paint(const A& app, cairo_t* cr, const eh::config::
   }
 
   rounded_rect(cr, 0.5, 0.5, kW - 1.0, kH - 1.0, kOuterR);
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.14);
   cairo_set_line_width(cr, 1.0);
   cairo_stroke(cr);
 
-  // Layer 2 — Inner card (glassy Tahoe frosted surface)
-  {
-    m3::Box inner;
-    inner.setColor(static_cast<float>(mc.dockFillR * 1.15), static_cast<float>(mc.dockFillG * 1.15),
-                   static_cast<float>(mc.dockFillB * 1.15), 0.55f);
-    inner.setRadius(static_cast<float>(kInnerR));
-    inner.setGeometry(static_cast<float>(kInnerX), static_cast<float>(kInnerY),
-                      static_cast<float>(kInnerW), static_cast<float>(kInnerH));
-    inner.setGlassy(true);
-    inner.paint(cr);
-  }
+  // Determine active state + snapshot. Marquee starts settled each frame;
+  // draw_scrolled_line re-arms it when text actually overflows.
+  media_popup_marquee_state() = false;
 
-  const double cx = kW / 2.0;
-
-  // Determine active state + snapshot
   const bool onPopup = (app.pointerSurface == app.popupSurface);
   const double px = onPopup ? app.pointerX : -1.0;
   const double py = onPopup ? app.pointerY : -1.0;
@@ -300,248 +244,140 @@ void dock_media_player_popup_paint(const A& app, cairo_t* cr, const eh::config::
 
   const std::string title_m  = realActive ? (snap.title.empty() ? "Unknown Track" : snap.title) : std::string{};
   const std::string artist_m = realActive ? snap.artist : std::string{};
-  const std::string album_m  = realActive ? snap.album  : std::string{};
   const std::string playStatus = realActive ? snap.playback_status : std::string{};
   const bool canPrev  = realActive && snap.can_go_previous;
   const bool canNext  = realActive && snap.can_go_next;
   const bool canPlay  = realActive && snap.can_play;
   const bool canPause = realActive && snap.can_pause;
+  const bool playing  = (playStatus == "Playing");
+  const bool shuffleOn = realActive && snap.shuffle;
+  const std::string loopMode = realActive ? snap.loop_status : std::string{};
+  const bool loopOn = (loopMode == "Track" || loopMode == "Playlist");
 
-  // Close button
-  const MediaHover hover = compute_hover(px, py, 0, 0, realActive, canPrev, canNext, canPlay, canPause, playStatus);
+  const Layout L = compute_layout();
 
-  const double closeBtnA = (hover == MediaHover::Close) ? 0.25 : 0.12;
-  {
-    m3::Box closeBox;
-    closeBox.setColor(static_cast<float>(mc.outlineR), static_cast<float>(mc.outlineG),
-                      static_cast<float>(mc.outlineB), static_cast<float>(closeBtnA));
-    closeBox.setRadius(static_cast<float>(kCloseBtnSize / 2.0));
-    closeBox.setGeometry(static_cast<float>(kCloseBtnCx - kCloseBtnSize / 2.0),
-                         static_cast<float>(kCloseBtnCy - kCloseBtnSize / 2.0),
-                         static_cast<float>(kCloseBtnSize), static_cast<float>(kCloseBtnSize));
-    closeBox.setGlassy(true);
-    closeBox.paint(cr);
-  }
-  const double closeIconA = (hover == MediaHover::Close) ? 0.90 : 0.70;
-  eh::shell::draw_material_glyph(cr, kCloseBtnCx, kCloseBtnCy,
-                                  kCloseBtnIcon, "close",
-                                  mc.textR, mc.textG, mc.textB, closeIconA);
+  // Cache for click handler.
+  const_cast<A&>(app).mediaPopupCacheSeekY = L.seekY;
+  const_cast<A&>(app).mediaPopupCacheCtrlY = L.ctrlY;
 
-  // Idle state
+  const MediaHover realHover = compute_hover(px, py, L,
+                                              realActive, canPrev, canNext, canPlay, canPause, playStatus);
+  const bool seekHover = (realHover == MediaHover::Seekbar);
+
+  // Idle state.
   if (!realActive) {
-    cairo_new_path(cr);
-    cairo_arc(cr, cx, kArtCy, kArtR, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 0.12, 0.14, 0.16, 1.0);
-    cairo_fill(cr);
-    eh::shell::draw_material_glyph(cr, cx, kArtCy, 48.0, "music_note",
-                                    mc.outlineR, mc.outlineG, mc.outlineB, 0.30);
-    draw_text(cr, kColX, kArtTop + kArtSize + kSpacing, kColW,
-              "No media playing", "Sans DemiBold 15",
-              PANGO_ALIGN_CENTER, 1,
-              mc.textR, mc.textG, mc.textB, 0.92);
+    fill_rounded_rect(cr, kArtX, kArtY, kArtS, kArtS, kArtR, 0.12, 0.14, 0.16, 1.0);
+    eh::shell::draw_material_glyph(cr, kArtX + kArtS * 0.5, kArtY + kArtS * 0.5, 28.0, "music_note",
+                                    0.70, 0.75, 0.80, 0.60);
+    auto* l  = pango_cairo_create_layout(cr);
+    auto* fd = pango_font_description_from_string("Inter 15");
+    pango_layout_set_font_description(l, fd);
+    pango_font_description_free(fd);
+    pango_layout_set_text(l, "No media playing", -1);
+    int tw = 0, th = 0;
+    pango_layout_get_pixel_size(l, &tw, &th);
+    cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.85);
+    cairo_move_to(cr, (kW - static_cast<double>(tw)) * 0.5, 108.0);
+    pango_cairo_show_layout(cr, l);
+    g_object_unref(l);
     cairo_restore(cr);
     return;
   }
 
-  // Album art
-  bool drewArt = false;
+  // Album art (rounded square; dim placeholder when missing).
   if (snap.art && cairo_surface_status(snap.art.get()) == CAIRO_STATUS_SUCCESS) {
     const int iw = cairo_image_surface_get_width(snap.art.get());
     const int ih = cairo_image_surface_get_height(snap.art.get());
     if (iw > 0 && ih > 0) {
-      const double s2 = std::min(kArtSize / static_cast<double>(iw),
-                                  kArtSize / static_cast<double>(ih));
+      const double s2 = std::max(kArtS / static_cast<double>(iw),
+                                 kArtS / static_cast<double>(ih));
       cairo_save(cr);
-      cairo_new_path(cr);
-      cairo_arc(cr, cx, kArtCy, kArtR, 0, 2 * M_PI);
+      rounded_rect(cr, kArtX, kArtY, kArtS, kArtS, kArtR);
       cairo_clip(cr);
-      cairo_translate(cr, cx - (iw * s2) / 2.0, kArtCy - (ih * s2) / 2.0);
+      cairo_translate(cr, kArtX + (kArtS - iw * s2) * 0.5, kArtY + (kArtS - ih * s2) * 0.5);
       cairo_scale(cr, s2, s2);
       cairo_set_source_surface(cr, snap.art.get(), 0, 0);
       cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
       cairo_paint(cr);
       cairo_restore(cr);
-      drewArt = true;
+    } else {
+      fill_rounded_rect(cr, kArtX, kArtY, kArtS, kArtS, kArtR, 0.12, 0.14, 0.16, 1.0);
     }
+  } else {
+    fill_rounded_rect(cr, kArtX, kArtY, kArtS, kArtS, kArtR, 0.12, 0.14, 0.16, 1.0);
+    eh::shell::draw_material_glyph(cr, kArtX + kArtS * 0.5, kArtY + kArtS * 0.5, 28.0, "music_note",
+                                    0.70, 0.75, 0.80, 0.60);
   }
-  if (!drewArt) {
-    cairo_new_path(cr);
-    cairo_arc(cr, cx, kArtCy, kArtR, 0, 2 * M_PI);
-    cairo_set_source_rgba(cr, 0.12, 0.14, 0.16, 1.0);
-    cairo_fill(cr);
-    eh::shell::draw_material_glyph(cr, cx, kArtCy, 48.0, "music_note",
-                                    mc.outlineR, mc.outlineG, mc.outlineB, 0.40);
-  }
-  draw_art_ring(cr, cx, kArtCy, kArtR, mc.accentR, mc.accentG, mc.accentB);
 
-  // Measure text
-  const int titleH  = measure_text_h(cr, kColW, title_m.c_str(),  "Sans DemiBold 15", 2);
-  const int artistH = artist_m.empty() ? 0 : measure_text_h(cr, kColW, artist_m.c_str(), "Sans 13", 1);
-  const int albumH  = album_m.empty()  ? 0 : measure_text_h(cr, kColW, album_m.c_str(),  "Sans 11", 1);
-
-  const auto L = compute_layout(titleH, artistH, albumH,
-                                 !artist_m.empty(), !album_m.empty());
-
-  // Cache for click handler
-  const_cast<A&>(app).mediaPopupCacheSeekY = L.seekY;
-  const_cast<A&>(app).mediaPopupCacheCtrlY = L.ctrlY;
-
-  // Recompute hover with cached layout
-  // (We need a real compute_hover with the layout values, but the function
-  //  above only uses ctrlY/seekY from the computed layout, so we call again)
-  // Actually compute_hover needs seekY and ctrlY. Let's compute a local one.
-  const MediaHover realHover = compute_hover(px, py, L.seekY, L.ctrlY,
-                                              realActive, canPrev, canNext, canPlay, canPause, playStatus);
-
-  const bool seekHover = (realHover == MediaHover::Seekbar);
-  const bool prevHover = (realHover == MediaHover::Prev);
-  const bool playHover = (realHover == MediaHover::Play);
-  const bool nextHover = (realHover == MediaHover::Next);
-
-  // Title
-  draw_text(cr, kColX, L.titleY, kColW,
-            title_m.c_str(), "Sans DemiBold 15",
-            PANGO_ALIGN_CENTER, 2,
-            mc.textR, mc.textG, mc.textB, 0.92);
-
-  // Artist
+  // Title + artist (scroll when overflowing).
+  const double tsec = marquee_now_sec();
+  draw_scrolled_line(cr, kTextX, L.titleY, kTextW, title_m, "Inter Bold 18",
+                     mc.textR, mc.textG, mc.textB, 0.95, tsec, kMarqueePeriodSec);
   if (!artist_m.empty())
-    draw_text(cr, kColX, L.artistY, kColW,
-              artist_m.c_str(), "Sans 13",
-              PANGO_ALIGN_CENTER, 1,
-              mc.textR, mc.textG, mc.textB, 0.75);
+    draw_scrolled_line(cr, kTextX, L.artistY, kTextW, artist_m, "Inter 14",
+                       mc.textR, mc.textG, mc.textB, 0.62, tsec + 2.7, kMarqueePeriodSec);
 
-  // Album
-  if (!album_m.empty())
-    draw_text(cr, kColX, L.albumY, kColW,
-              album_m.c_str(), "Sans 11",
-              PANGO_ALIGN_CENTER, 1,
-              mc.textR, mc.textG, mc.textB, 0.55);
-
-  // Seek bar
+  // Seek bar.
   double pct = 0.0;
   if (snap.duration_us > 0)
     pct = std::clamp(static_cast<double>(snap.position_us) /
                      static_cast<double>(snap.duration_us), 0.0, 1.0);
-
-  const double barY   = L.seekY + (kSeekAreaH - kBarH) / 2.0;
-  const double barW   = kColW;
-  const double fillW  = barW * pct;
-  const double thumbX = kColX + fillW;
-
-  // Track with glassy inner design (Tahoe frosted)
-  {
-    m3::Box track;
-    track.setColor(static_cast<float>(mc.outlineR), static_cast<float>(mc.outlineG),
-                   static_cast<float>(mc.outlineB), seekHover ? 0.28f : 0.18f);
-    track.setRadius(static_cast<float>(kBarH / 2.0));
-    track.setGeometry(static_cast<float>(kColX), static_cast<float>(barY),
-                      static_cast<float>(barW), static_cast<float>(kBarH));
-    track.setGlassy(true);
-    track.paint(cr);
-  }
-  if (fillW > 0.5) {
-    cairo_save(cr);
-    cairo_rectangle(cr, kColX, barY - 1.0, fillW, kBarH + 2.0);
-    cairo_clip(cr);
-    fill_rounded_rect(cr, kColX, barY, barW, kBarH, kBarH / 2.0,
-                      mc.accentR, mc.accentG, mc.accentB, seekHover ? 1.0 : 0.90);
-    cairo_restore(cr);
-  }
-  const double thumbR = seekHover ? kThumbR + 2.0 : kThumbR;
-  const double thumbOuterA = seekHover ? 1.0 : 0.85;
+  const double barY = kBarY;
+  const double fillW = kSeekW * pct;
+  const double thumbX = kSeekX0 + fillW;
+  fill_rounded_rect(cr, kSeekX0, barY, kSeekW, kBarH, kBarH / 2.0, 1.0, 1.0, 1.0, 0.22);
+  if (fillW > 0.5)
+    fill_rounded_rect(cr, kSeekX0, barY, fillW, kBarH, kBarH / 2.0, 1.0, 1.0, 1.0,
+                      seekHover ? 1.0 : 0.95);
   cairo_new_path(cr);
-  cairo_arc(cr, thumbX, barY + kBarH / 2.0, thumbR, 0, 2 * M_PI);
-  cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, thumbOuterA);
-  cairo_fill(cr);
-  cairo_new_path(cr);
-  cairo_arc(cr, thumbX, barY + kBarH / 2.0, thumbR - 2.0, 0, 2 * M_PI);
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, seekHover ? 0.95 : 0.85);
+  cairo_arc(cr, thumbX, barY + kBarH / 2.0, kKnobR, 0, 2 * M_PI);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, seekHover ? 1.0 : 0.95);
   cairo_fill(cr);
 
-  // Timestamps
-  char startBuf[24] = "0:00", endBuf[24] = "0:00";
+  // Timestamps: elapsed left, remaining right.
+  char startBuf[24] = "0:00", remainBuf[32] = "-0:00";
   format_time_us(startBuf, sizeof(startBuf), snap.position_us);
-  format_time_us(endBuf,   sizeof(endBuf),   snap.duration_us);
-  const double stampA = 0.50;
-
-  draw_text(cr, kColX, L.stampsY, kColW / 2.0,
-            startBuf, "Sans 11", PANGO_ALIGN_LEFT, 1,
-            mc.textR, mc.textG, mc.textB, stampA);
-
   {
-    auto* tl  = pango_cairo_create_layout(cr);
-    auto* tfd = pango_font_description_from_string("Sans 11");
-    pango_layout_set_font_description(tl, tfd);
-    pango_font_description_free(tfd);
-    pango_layout_set_text(tl, endBuf, -1);
+    int64_t remain_us = 0;
+    if (snap.duration_us > 0)
+      remain_us = std::max<int64_t>(0, snap.duration_us - snap.position_us);
+    char tmp[24] = "0:00";
+    format_time_us(tmp, sizeof(tmp), remain_us);
+    std::snprintf(remainBuf, sizeof(remainBuf), "-%s", tmp);
+  }
+  {
+    auto* l  = pango_cairo_create_layout(cr);
+    auto* fd = pango_font_description_from_string("Inter 11");
+    pango_layout_set_font_description(l, fd);
+    pango_font_description_free(fd);
+    pango_layout_set_text(l, startBuf, -1);
+    cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.55);
+    cairo_move_to(cr, kSeekX0, L.stampsY);
+    pango_cairo_show_layout(cr, l);
+    pango_layout_set_text(l, remainBuf, -1);
     int tw = 0;
-    pango_layout_get_pixel_size(tl, &tw, nullptr);
-    g_object_unref(tl);
-    draw_text(cr, kColX + barW - static_cast<double>(tw), L.stampsY, barW,
-              endBuf, "Sans 11", PANGO_ALIGN_LEFT, 1,
-              mc.textR, mc.textG, mc.textB, stampA);
+    pango_layout_get_pixel_size(l, &tw, nullptr);
+    cairo_move_to(cr, kSeekX1 - static_cast<double>(tw), L.stampsY);
+    pango_cairo_show_layout(cr, l);
+    g_object_unref(l);
   }
 
-  // Transport controls
-  const double totalCtrlW = kBtnSmall + kBtnGap + kBtnPlay + kBtnGap + kBtnSmall;
-  const double cLeft      = (kW - totalCtrlW) / 2.0;
-  const double ccy        = L.ctrlY + kBtnPlay / 2.0;
-  const double prevCx     = cLeft + kBtnSmall / 2.0;
-  const double playCx     = cLeft + kBtnSmall + kBtnGap + kBtnPlay / 2.0;
-  const double nextCx     = cLeft + kBtnSmall + kBtnGap + kBtnPlay + kBtnGap + kBtnSmall / 2.0;
-
-  // Prev (glassy Tahoe button)
-  {
-    const double prevBgA = canPrev ? (prevHover ? 0.30 : 0.15) : 0.06;
-    m3::Box b;
-    b.setColor(static_cast<float>(mc.outlineR), static_cast<float>(mc.outlineG),
-               static_cast<float>(mc.outlineB), static_cast<float>(prevBgA));
-    b.setRadius(static_cast<float>(kBtnSmall / 2.0));
-    b.setGeometry(static_cast<float>(prevCx - kBtnSmall / 2.0), static_cast<float>(ccy - kBtnSmall / 2.0),
-                  static_cast<float>(kBtnSmall), static_cast<float>(kBtnSmall));
-    b.setGlassy(true);
-    b.paint(cr);
-  }
-  const double prevIconA = canPrev ? (prevHover ? 1.0 : 0.85) : 0.30;
-  eh::shell::draw_material_glyph(cr, prevCx, ccy, 22.0 * kBoost, "skip_previous",
-                                  mc.textR, mc.textG, mc.textB, prevIconA);
-
-  // Play/Pause (glassy on accent)
-  {
-    const bool playing   = (playStatus == "Playing");
-    const double playAlpha = (playing || canPlay || canPause) ? (playHover ? 1.0 : 0.95) : 0.30;
-    m3::Box b;
-    b.setColor(static_cast<float>(mc.accentR), static_cast<float>(mc.accentG),
-               static_cast<float>(mc.accentB), static_cast<float>(playAlpha));
-    b.setRadius(static_cast<float>(kBtnPlay / 2.0));
-    b.setGeometry(static_cast<float>(playCx - kBtnPlay / 2.0), static_cast<float>(ccy - kBtnPlay / 2.0),
-                  static_cast<float>(kBtnPlay), static_cast<float>(kBtnPlay));
-    b.setGlassy(true);
-    b.paint(cr);
-  }
-  {
-    const bool playing   = (playStatus == "Playing");
-    eh::shell::draw_material_glyph(cr, playCx, ccy, 28.0 * kBoost,
-                                    playing ? "pause" : "play_arrow",
-                                    mc.dockFillR, mc.dockFillG, mc.dockFillB, playHover ? 1.0 : 0.95);
-  }
-
-  // Next (glassy)
-  {
-    const double nextBgA = canNext ? (nextHover ? 0.30 : 0.15) : 0.06;
-    m3::Box b;
-    b.setColor(static_cast<float>(mc.outlineR), static_cast<float>(mc.outlineG),
-               static_cast<float>(mc.outlineB), static_cast<float>(nextBgA));
-    b.setRadius(static_cast<float>(kBtnSmall / 2.0));
-    b.setGeometry(static_cast<float>(nextCx - kBtnSmall / 2.0), static_cast<float>(ccy - kBtnSmall / 2.0),
-                  static_cast<float>(kBtnSmall), static_cast<float>(kBtnSmall));
-    b.setGlassy(true);
-    b.paint(cr);
-  }
-  const double nextIconA = canNext ? (nextHover ? 1.0 : 0.85) : 0.30;
-  eh::shell::draw_material_glyph(cr, nextCx, ccy, 22.0 * kBoost, "skip_next",
-                                  mc.textR, mc.textG, mc.textB, nextIconA);
+  // Transport controls: shuffle / prev / play / next / repeat.
+  const double shuffleA = shuffleOn ? 1.0 : 0.45;
+  eh::shell::draw_material_glyph(cr, kShuffleCx, kCtrlCy, 26.0, "shuffle",
+                                  1.0, 1.0, 1.0, shuffleA);
+  const double prevA = canPrev ? 1.0 : 0.30;
+  eh::shell::draw_material_glyph(cr, kPrevCx, kCtrlCy, 30.0, "skip_previous",
+                                  1.0, 1.0, 1.0, prevA);
+  eh::shell::draw_material_glyph(cr, kPlayCx, kCtrlCy, 40.0,
+                                  playing ? "pause" : "play_arrow",
+                                  1.0, 1.0, 1.0, (canPlay || canPause || playing) ? 1.0 : 0.30);
+  const double nextA = canNext ? 1.0 : 0.30;
+  eh::shell::draw_material_glyph(cr, kNextCx, kCtrlCy, 30.0, "skip_next",
+                                  1.0, 1.0, 1.0, nextA);
+  eh::shell::draw_material_glyph(cr, kRepeatCx, kCtrlCy, 26.0,
+                                  loopMode == "Track" ? "repeat_one" : "repeat",
+                                  1.0, 1.0, 1.0, loopOn ? 1.0 : 0.45);
 
   cairo_restore(cr);
 }

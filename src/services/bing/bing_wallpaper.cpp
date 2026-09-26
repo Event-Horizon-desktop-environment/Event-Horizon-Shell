@@ -6,6 +6,8 @@
 
 #include <curl/curl.h>
 #include <sys/eventfd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -103,8 +105,17 @@ bool curl_download_file(const std::string& url, const std::string& dest_path) {
     static std::once_flag s_init;
     std::call_once(s_init, [] { (void)curl_global_init(CURL_GLOBAL_DEFAULT); });
 
-    FILE* f = ::fopen(dest_path.c_str(), "wb");
+    struct stat st{};
+    if (::lstat(dest_path.c_str(), &st) == 0 && S_ISLNK(st.st_mode)) ::unlink(dest_path.c_str());
+    const int fd = ::open(dest_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        std::cerr << "[bing-wallpaper][dl] cannot open " << dest_path
+                  << " errno=" << errno << "\n";
+        return false;
+    }
+    FILE* f = ::fdopen(fd, "wb");
     if (!f) {
+        ::close(fd);
         std::cerr << "[bing-wallpaper][dl] cannot open " << dest_path
                   << " errno=" << errno << "\n";
         return false;
@@ -358,14 +369,26 @@ void save_cache_impl(const std::string& cache_path,
             {"local_path", e.local_path}
         });
     }
-    std::ofstream f(cache_path);
-    if (f) {
+    const std::string tmp = cache_path + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) {
+            std::cerr << "[bing-wallpaper][cache] save failed: " << cache_path << "\n";
+            return;
+        }
         f << j.dump(2);
-        std::cerr << "[bing-wallpaper][cache] saved " << items.size()
-                  << " entries → " << cache_path << "\n";
-    } else {
-        std::cerr << "[bing-wallpaper][cache] save failed: " << cache_path << "\n";
+        f.flush();
     }
+    std::error_code fec;
+    fs::rename(tmp, cache_path, fec);
+    if (fec) {
+        std::error_code uec;
+        fs::remove(tmp, uec);
+        std::cerr << "[bing-wallpaper][cache] save failed: " << cache_path << "\n";
+        return;
+    }
+    std::cerr << "[bing-wallpaper][cache] saved " << items.size()
+              << " entries → " << cache_path << "\n";
 }
 
 // List local wallpapers — mirrors BingWallpaper.py local_filenames().
@@ -387,7 +410,9 @@ std::string current_ym() {
      
     const std::time_t now = std::time(nullptr);
     char buf[8];
-    std::strftime(buf, sizeof(buf), "%Y-%m", std::localtime(&now));
+    struct tm t{};
+    ::localtime_r(&now, &t);
+    std::strftime(buf, sizeof(buf), "%Y-%m", &t);
     return buf;
 }
 
@@ -395,13 +420,16 @@ std::string last_month_ym() {
      
     // subtract one month: go to first day of this month, subtract one day
     std::time_t now = std::time(nullptr);
-    struct tm t = *std::localtime(&now);
+    struct tm t{};
+    ::localtime_r(&now, &t);
     t.tm_mday = 1;
     t.tm_hour = 0; t.tm_min = 0; t.tm_sec = 0;
     std::time_t first = std::mktime(&t);
-    first -= 86400; // one day back
+    first -= 86400;
     char buf[8];
-    std::strftime(buf, sizeof(buf), "%Y-%m", std::localtime(&first));
+    struct tm lt{};
+    ::localtime_r(&first, &lt);
+    std::strftime(buf, sizeof(buf), "%Y-%m", &lt);
     return buf;
 }
 
@@ -453,6 +481,7 @@ void BingWallpaperService::init() {
 
 void BingWallpaperService::ping_wake() {
      
+    std::lock_guard<std::mutex> lk(m_wake_mu);
     if (m_wake_fd < 0) return;
     const std::uint64_t one = 1;
     (void)::write(m_wake_fd, &one, sizeof(one));
@@ -460,9 +489,14 @@ void BingWallpaperService::ping_wake() {
 
 void BingWallpaperService::drain_wake() {
      
-    if (m_wake_fd < 0) return;
+    int fd = -1;
+    {
+      std::lock_guard<std::mutex> lk(m_wake_mu);
+      fd = m_wake_fd;
+    }
+    if (fd < 0) return;
     std::uint64_t v = 0;
-    while (::read(m_wake_fd, &v, sizeof(v)) > 0) {}
+    while (::read(fd, &v, sizeof(v)) > 0) {}
     std::vector<std::function<void()>> cbs;
     {
         std::lock_guard<std::mutex> lk(m_wake_mu);
@@ -621,9 +655,14 @@ void BingWallpaperService::do_download(const std::string& dir,
     // Always fetch the latest README for user-initiated downloads so that
     // newly-published wallpapers within the current month are not missed.
     const std::string md = fetch_readme();
+    bool fetchFailed = false;
     if (!md.empty()) {
         items = parse_wallpapers(md, dir);
         save_cache(cache_path, items);
+    } else {
+        fetchFailed = true;
+        std::vector<WallpaperEntry> cached;
+        if (load_cache(cache_path, cached, dir)) items = std::move(cached);
     }
 
     const auto selected  = filter_entries(items, filter, custom_month);
@@ -663,10 +702,11 @@ void BingWallpaperService::do_download(const std::string& dir,
     // Immediately publish done if nothing to do
     if (total == 0) {
         DoneResult done;
-        done.ok         = true;
+        done.ok         = !fetchFailed;
         done.downloaded = 0;
         done.skipped    = already;
         done.failed     = 0;
+        if (fetchFailed && found == 0) done.error_msg = "Failed to fetch README";
         std::lock_guard<std::mutex> lk(m_result_mu);
         m_done_result = done;
         return;
@@ -763,7 +803,7 @@ bool BingWallpaperService::check_updates_async(const std::string& download_dir) 
      
     {
         std::lock_guard<std::mutex> lk(m_state_mu);
-        if (m_checking || m_downloading) return false;
+        if (m_checking || m_downloading || m_daily) return false;
         m_checking = true;
     }
     const std::string dir = download_dir.empty() ? default_download_dir() : download_dir;
@@ -788,7 +828,7 @@ bool BingWallpaperService::download_async(const std::string& download_dir,
      
     {
         std::lock_guard<std::mutex> lk(m_state_mu);
-        if (m_downloading || m_checking) return false;
+        if (m_downloading || m_checking || m_daily) return false;
         m_downloading = true;
     }
     const std::string dir = download_dir.empty() ? default_download_dir() : download_dir;
@@ -807,7 +847,7 @@ bool BingWallpaperService::daily_async(const std::string& download_dir, bool use
      
     {
         std::lock_guard<std::mutex> lk(m_state_mu);
-        if (m_daily) return false;
+        if (m_daily || m_downloading || m_checking) return false;
         m_daily = true;
     }
     const std::string dir = download_dir.empty() ? default_download_dir() : download_dir;

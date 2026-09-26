@@ -56,7 +56,7 @@ It's one command from start to finish.
 EventHorizon --version
 ```
 
-Should print something like `Event Horizon 0.9.5-beta1`.
+Should print something like `Event Horizon 0.9.6-beta2`.
 
 ## 5. Run it once, manually, before configuring autostart
 

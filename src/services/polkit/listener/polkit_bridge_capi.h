@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 void eh_polkit_bridge_begin_prompt(const char* action_id, const char* message, const char* cookie);
-void eh_polkit_bridge_end_prompt(void);
+void eh_polkit_bridge_end_prompt(int gained_authorization);
 
 void eh_polkit_bridge_show_error_line(const char* text);
 void eh_polkit_bridge_show_info_line(const char* text);

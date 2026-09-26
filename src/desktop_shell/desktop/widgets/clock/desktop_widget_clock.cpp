@@ -13,6 +13,9 @@
 
 #include <pango/pangocairo.h>
 
+#include "desktop_shell/shared/paint/glass_card_style.hpp"
+#include "desktop_shell/shared/core/cairo_helpers.hpp"
+
 namespace eh::shell::desktop {
 namespace {
 
@@ -52,10 +55,7 @@ void append_date_formatted(std::ostringstream& os, const std::tm& tm, int dateFo
 DesktopClockWidget::DesktopClockWidget(std::string timeFormat, bool showSeconds, bool showDate, int fontSize)
     : m_format(std::move(timeFormat)), m_showsSeconds(showSeconds), m_showsDate(showDate), m_fontSize(fontSize) {}
 
-void DesktopClockWidget::create() {
-   
-  m_lastText.clear();
-}
+void DesktopClockWidget::create() {}
 
 static std::string build_clock_text(const eh::config::ShellConfig& sc, const std::string& perWidgetFormat) {
    
@@ -80,8 +80,12 @@ static std::string build_clock_text(const eh::config::ShellConfig& sc, const std
   {
     const std::string& tz = sc.time.timezone;
     if (!tz.empty()) {
-      // Thread-safe timezone lookup using std::chrono instead of setenv("TZ").
-      const auto* tzDb = std::chrono::locate_zone(tz);
+      const std::chrono::time_zone* tzDb = nullptr;
+      try {
+        tzDb = std::chrono::locate_zone(tz);
+      } catch (...) {
+        tzDb = nullptr;
+      }
       if (tzDb != nullptr) {
         const auto zt = std::chrono::zoned_time(tzDb, std::chrono::system_clock::from_time_t(now));
         const auto lt = zt.get_local_time();
@@ -121,53 +125,79 @@ static std::string build_clock_text(const eh::config::ShellConfig& sc, const std
 }
 
 void DesktopClockWidget::paint(cairo_t* cr, const eh::config::ShellConfig& sc) {
-   
-  const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
+  const double us = dock_ui_scale(sc.dock);
   const auto& mc = eh::config::derived_chrome_colors(sc.appearance);
   const std::string text = build_clock_text(sc, m_format);
-  m_lastText = text;
 
-  const double fontPx = static_cast<double>(m_fontSize > 0 ? m_fontSize : 14.0 * us);
+  std::string timeText = text;
+  std::string dateText;
+  if (const size_t nl = text.find('\n'); nl != std::string::npos) {
+    timeText = text.substr(0, nl);
+    dateText = text.substr(nl + 1);
+  }
+
+  const double timePx = static_cast<double>(m_fontSize > 0 ? m_fontSize : 64);
+  const double datePx = timePx * 0.30;
+  const double pad = 20.0 * us;
+
+  auto make_line = [&](const std::string& s, const char* fd_str) {
+    auto* l = pango_cairo_create_layout(cr);
+    auto* fd = pango_font_description_from_string(fd_str);
+    pango_layout_set_font_description(l, fd);
+    pango_font_description_free(fd);
+    pango_layout_set_text(l, s.c_str(), -1);
+    return l;
+  };
+  char timeFd[64], dateFd[64];
+  std::snprintf(timeFd, sizeof(timeFd), "Inter Light %.0f", timePx);
+  std::snprintf(dateFd, sizeof(dateFd), "Inter %.0f", datePx);
+
+  auto* timeLayout = make_line(timeText, timeFd);
+  int timeW = 0, timeH = 0;
+  pango_layout_get_pixel_size(timeLayout, &timeW, &timeH);
+  int dateW = 0, dateH = 0;
+  PangoLayout* dateLayout = nullptr;
+  if (!dateText.empty()) {
+    dateLayout = make_line(dateText, dateFd);
+    pango_layout_get_pixel_size(dateLayout, &dateW, &dateH);
+  }
+
+  const double contentW = static_cast<double>(std::max(timeW, dateW));
+  const double contentH = static_cast<double>(timeH) + (dateLayout ? (8.0 * us + dateH) : 0);
+  m_width = static_cast<int>(std::ceil(contentW + pad * 2.0));
+  m_height = static_cast<int>(std::ceil(contentH + pad * 2.0));
 
   cairo_save(cr);
 
-  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, fontPx);
-  cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.92);
+  {
+    eh::shell::shared::rounded_rect(cr, 0, 0, static_cast<double>(m_width),
+                                    static_cast<double>(m_height), 26.0 * us);
+    const double a = 0.92 * sc.appearance.overlayOpacityWidgetCard;
+    cairo_set_source_rgba(cr, mc.dockFillR * 0.30, mc.dockFillG * 0.30, mc.dockFillB * 0.30, a);
+    cairo_fill_preserve(cr);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.14);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+  }
 
-  cairo_text_extents_t te;
-  cairo_text_extents(cr, text.c_str(), &te);
+  auto show_shadowed = [&](PangoLayout* l, double x, double y, double r, double g, double b,
+                           double a) {
+    cairo_save(cr);
+    cairo_move_to(cr, x + 1.0, y + 1.0);
+    cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.25);
+    pango_cairo_show_layout(cr, l);
+    cairo_restore(cr);
+    cairo_move_to(cr, x, y);
+    cairo_set_source_rgba(cr, r, g, b, a);
+    pango_cairo_show_layout(cr, l);
+  };
 
-  const int newlines = static_cast<int>(std::count(text.begin(), text.end(), '\n'));
-  const double lineH = fontPx * 1.2;
-  m_width = static_cast<int>(std::ceil(te.width + 8.0 * us));
-  m_height = static_cast<int>(std::ceil(lineH * (newlines + 1) + 8.0 * us));
-
-  auto layout = pango_cairo_create_layout(cr);
-  PangoFontDescription* desc = pango_font_description_from_string("Inter");
-  pango_font_description_set_weight(desc, PANGO_WEIGHT_BOLD);
-  pango_font_description_set_absolute_size(desc, fontPx * PANGO_SCALE);
-  pango_layout_set_font_description(layout, desc);
-  pango_font_description_free(desc);
-  pango_layout_set_text(layout, text.c_str(), -1);
-  pango_layout_set_alignment(layout, PANGO_ALIGN_CENTER);
-
-  int layoutW = 0, layoutH = 0;
-  pango_layout_get_pixel_size(layout, &layoutW, &layoutH);
-
-  m_width = std::max(m_width, layoutW + static_cast<int>(12.0 * us));
-  m_height = std::max(m_height, layoutH + static_cast<int>(12.0 * us));
-
-  cairo_save(cr);
-  cairo_move_to(cr, 7.0 * us, 7.0 * us);
-  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.35);
-  pango_cairo_show_layout(cr, layout);
-  cairo_restore(cr);
-
-  cairo_move_to(cr, 6.0 * us, 6.0 * us);
-  cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.92);
-  pango_cairo_show_layout(cr, layout);
-  g_object_unref(layout);
+  show_shadowed(timeLayout, pad, pad, 1.0, 1.0, 1.0, 0.95);
+  g_object_unref(timeLayout);
+  if (dateLayout) {
+    show_shadowed(dateLayout, pad, pad + timeH + 8.0 * us, 1.0, 1.0, 1.0, 0.62);
+    g_object_unref(dateLayout);
+  }
 
   cairo_restore(cr);
 }

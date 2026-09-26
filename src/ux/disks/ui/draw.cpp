@@ -1,763 +1,793 @@
-#include "../app.hpp"
+#include "ux/disks/app.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
-#include <string>
-#include <vector>
 
-#include <cairo/cairo.h>
-
-#include "../manager.hpp"
-#include "../drive.hpp"
-#include "../block.hpp"
+#include "ux/disks/block.hpp"
+#include "ux/disks/dialogs/benchmark_dialog.hpp"
+#include "ux/disks/dialogs/create_partition_dialog.hpp"
+#include "ux/disks/dialogs/format_disk_dialog.hpp"
+#include "ux/disks/dialogs/format_volume_dialog.hpp"
+#include "ux/disks/dialogs/image_dialog.hpp"
+#include "ux/disks/dialogs/mount_options_dialog.hpp"
+#include "ux/disks/dialogs/resize_dialog.hpp"
+#include "ux/disks/dialogs/smart_dialog.hpp"
+#include "ux/disks/dialogs/unlock_dialog.hpp"
+#include "ux/disks/drive.hpp"
+#include "ux/disks/jobs.hpp"
+#include "ux/disks/manager.hpp"
+#include "ux/disks/ui/icons.hpp"
+#include "ux/disks/ui/layout.hpp"
+#include "ux/disks/ui/theme.hpp"
+#include "ux/disks/ui/widgets.hpp"
 
 namespace eh::disks {
+namespace W = widgets;
+namespace T = theme;
+namespace L = layout;
 
-// Header.
+static W::RGB txt(const AppState& a) { return {a.textR, a.textG, a.textB}; }
+static W::RGB sec(const AppState& a) { return {a.textSecR, a.textSecG, a.textSecB}; }
+static W::RGB out(const AppState& a) { return {a.outlineR, a.outlineG, a.outlineB}; }
 
-void draw_header(AppState& app, cairo_t* cr, int w) {
-  int y = 0;
-  set_rgba(cr, app.surfaceR, app.surfaceG, app.surfaceB, 0.85);
-  cairo_rectangle(cr, 0, y, w, kHeaderH);
-  cairo_fill(cr);
-
-  set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-  cairo_set_line_width(cr, 1);
-  cairo_move_to(cr, 0, kHeaderH - 0.5);
-  cairo_line_to(cr, w, kHeaderH - 0.5);
-  cairo_stroke(cr);
-
-  // Hamburger menu
-  {
-    int bx = 12, by = (kHeaderH - 18) / 2;
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_set_line_width(cr, 2);
-    for (int i = 0; i < 3; ++i) {
-      cairo_move_to(cr, bx, by + 4 + i * 6);
-      cairo_line_to(cr, bx + 16, by + 4 + i * 6);
-    }
-    cairo_stroke(cr);
-  }
-
-  // Title
-  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, 16);
-  set_rgb(cr, app.textR, app.textG, app.textB);
-  cairo_move_to(cr, 44, (kHeaderH + 6) / 2);
-  cairo_show_text(cr, "Disks");
-
-  // Button positions
-  int btn_x = w - 12;
-
-  // ▸ Menu ⋮ button
-  {
-    int bw = 36;
-    btn_x -= bw;
-    bool hover = app.headerMenuHover;
-    if (hover) {
-      set_rgb(cr, 0.22, 0.22, 0.24);
-      draw_rounded_rect(cr, btn_x, (kHeaderH - kBtnH) / 2, bw, kBtnH, 6);
-      cairo_fill(cr);
-    }
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_set_font_size(cr, 20);
-    cairo_move_to(cr, btn_x + 10, (kHeaderH + 7) / 2);
-    cairo_show_text(cr, "⋮");
-    app.headerMenuX = btn_x;
-  }
-
-  // ▸ Create Disk Image button
-  {
-    int bw = 120;
-    btn_x -= bw + 6;
-    bool hover = app.headerCreateHover;
-    if (hover) {
-      set_rgba(cr, app.accentR, app.accentG, app.accentB, 0.15);
-      draw_rounded_rect(cr, btn_x, (kHeaderH - kBtnH) / 2, bw, kBtnH, 6);
-      cairo_fill(cr);
-    }
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_set_font_size(cr, 12);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_move_to(cr, btn_x + 10, (kHeaderH + 4) / 2);
-    cairo_show_text(cr, "Create");
-    app.headerCreateX = btn_x;
-  }
-
-  // ▸ Attach Disk Image button
-  {
-    int bw = 100;
-    btn_x -= bw + 6;
-    bool hover = app.headerAttachHover;
-    if (hover) {
-      set_rgba(cr, app.accentR, app.accentG, app.accentB, 0.15);
-      draw_rounded_rect(cr, btn_x, (kHeaderH - kBtnH) / 2, bw, kBtnH, 6);
-      cairo_fill(cr);
-    }
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_set_font_size(cr, 12);
-    cairo_move_to(cr, btn_x + 10, (kHeaderH + 4) / 2);
-    cairo_show_text(cr, "Attach");
-    app.headerAttachX = btn_x;
+// Icon button: hover/active bg + bundled SVG tinted, text glyph fallback.
+static void svg_btn(AppState& app, cairo_t* cr, double x, double y, double s,
+                    cairo_surface_t* svg, const char* fallback, bool hover, bool active,
+                    bool disabled, bool danger = false) {
+  if (hover && !disabled)
+    W::fill_rounded(cr, x, y, s, s, 8, {1, 1, 1, 0.08});
+  else if (active)
+    W::fill_rounded(cr, x, y, s, s, 8,
+                    {app.accentR, app.accentG, app.accentB, 0.22});
+  W::RGB fg = danger ? W::RGB{0.95, 0.55, 0.55} : W::RGB{app.textR, app.textG, app.textB};
+  if (disabled) fg = sec(app);
+  if (svg) {
+    icons::paint_svg(cr, svg, x + (s - 18) / 2.0, y + (s - 18) / 2.0, 18,
+                     {fg.r, fg.g, fg.b});
+  } else {
+    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 16);
+    std::string g(fallback);
+    cairo_text_extents_t te;
+    cairo_text_extents(cr, g.c_str(), &te);
+    W::RGB c = fg;
+    cairo_set_source_rgb(cr, c.r, c.g, c.b);
+    cairo_move_to(cr, x + (s - te.width) / 2 - te.x_bearing,
+                  y + (s - te.height) / 2 + te.height);
+    cairo_show_text(cr, g.c_str());
   }
 }
 
-// Sidebar.
+// ---- header ----
 
-void draw_sidebar(AppState& app, cairo_t* cr, int w, int view_h) {
-  int y = kHeaderH;
-  int sh = view_h - kHeaderH;
+static void paint_header(AppState& app, cairo_t* cr, const L::Layout& lo,
+                         const std::vector<std::shared_ptr<Drive>>& drives) {
+  // Bar
+  W::fill_rounded(cr, 0, 0, lo.W, T::kHeaderH, 0, {app.surfaceR, app.surfaceG,
+                                                   app.surfaceB, 1.0});
+  W::hairline_h(cr, 0, lo.W, T::kHeaderH - 1, out(app));
+  // Menu button
+  svg_btn(app, cr, lo.btn_menu.x, lo.btn_menu.y, lo.btn_menu.w, app.svg.menu, "☰",
+          app.hov_menu_btn, false, false);
+  // Title + count
+  W::text(cr, "Disks", lo.btn_menu.x + lo.btn_menu.w + 10, 32, 16, txt(app), 1);
+  {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%zu", drives.size());
+    double tw = W::text_w(cr, buf, 11, 1) + 14;
+    W::fill_rounded(cr, lo.btn_menu.x + lo.btn_menu.w + 10 + W::text_w(cr, "Disks", 16, 1) + 8,
+                    13, tw, 18, 9, {app.accentR, app.accentG, app.accentB, 0.25});
+    W::text(cr, buf, lo.btn_menu.x + lo.btn_menu.w + 10 + W::text_w(cr, "Disks", 16, 1) + 8 + 7,
+            26, 11, txt(app), 1);
+  }
+  // Search field
+  {
+    auto r = lo.search_field;
+    bool focused = app.search.focused;
+    W::fill_rounded(cr, r.x, r.y, r.w, r.h, 8,
+                    focused ? W::RGBA{app.accentR, app.accentG, app.accentB, 0.14}
+                            : W::RGBA{1, 1, 1, 0.05});
+    W::stroke_rounded(cr, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 8,
+                      focused ? W::RGB{app.accentR, app.accentG, app.accentB}
+                              : out(app));
+    if (app.svg.search)
+      icons::paint_svg(cr, app.svg.search, r.x + 9, r.y + (r.h - 15) / 2.0, 15,
+                       {sec(app).r, sec(app).g, sec(app).b});
+    else
+      W::text(cr, "⌕", r.x + 10, r.y + 22, 14, sec(app), 0);
+    std::string shown = app.search.text.empty() && !focused ? "Search drives & volumes"
+                                                            : app.search.text;
+    W::RGB c = app.search.text.empty() && !focused ? sec(app) : txt(app);
+    W::text_ellipsis(cr, shown, r.x + 30, r.y + 22, 13, c, 0, r.w - 36);
+    if (focused) {
+      // caret
+      double tw = W::text_w(cr, app.search.text.substr(0, app.search.cursor).c_str(),
+                            13, 0);
+      double cx = r.x + 30 + tw;
+      cairo_set_source_rgb(cr, app.accentR, app.accentG, app.accentB);
+      cairo_set_line_width(cr, 1.5);
+      cairo_move_to(cr, cx, r.y + 8);
+      cairo_line_to(cr, cx, r.y + r.h - 8);
+      cairo_stroke(cr);
+    }
+  }
+  // Job pill
+  if (lo.job_pill.w > 0) {
+    auto act = JobTracker::instance().active();
+    std::string lbl = act.empty() ? "Working…" : act[0]->label;
+    if (lbl.size() > 22) lbl = lbl.substr(0, 22) + "…";
+    W::fill_rounded(cr, lo.job_pill.x, lo.job_pill.y, lo.job_pill.w, lo.job_pill.h, 14,
+                    {app.accentR, app.accentG, app.accentB, 0.18});
+    W::spinner(cr, lo.job_pill.x + 14, lo.job_pill.y + 14, 7,
+               {app.accentR, app.accentG, app.accentB}, app.spinner_phase);
+    W::text_ellipsis(cr, lbl, lo.job_pill.x + 26, lo.job_pill.y + 18, 11, txt(app), 0,
+                     lo.job_pill.w - 32);
+  }
+  // Right buttons
+  W::pill_button(cr, app, lo.btn_attach.x, lo.btn_attach.y, lo.btn_attach.w,
+                 lo.btn_attach.h, "Attach", app.hov_attach, false, false, false,
+                 false);
+  W::pill_button(cr, app, lo.btn_benchmark.x, lo.btn_benchmark.y, lo.btn_benchmark.w,
+                 lo.btn_benchmark.h, "Benchmark", app.hov_bench, false, false, false,
+                 false);
+  svg_btn(app, cr, lo.btn_headermenu.x, lo.btn_headermenu.y, lo.btn_headermenu.w,
+          app.svg.more, "⋮", app.hov_headermenu,
+          app.menu.open && app.menu.kind == MenuKind::Main, false);
+}
 
-  set_rgba(cr, app.surfaceR, app.surfaceG, app.surfaceB, 0.85);
-  cairo_rectangle(cr, 0, y, w, sh);
-  cairo_fill(cr);
+// ---- sidebar ----
 
-  set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-  cairo_set_line_width(cr, 1);
-  cairo_move_to(cr, w - 0.5, y);
-  cairo_line_to(cr, w - 0.5, y + sh);
-  cairo_stroke(cr);
-
-  auto drives = Manager::instance().get_drives();
-  int item_h = kSidebarRowH;
-  int total_h = static_cast<int>(drives.size()) * item_h;
+static void paint_sidebar(AppState& app, cairo_t* cr, const L::Layout& lo,
+                          const std::vector<std::shared_ptr<Drive>>& drives) {
+  W::fill_rounded(cr, lo.sidebar.x, lo.sidebar.y, lo.sidebar.w, lo.sidebar.h, 0,
+                  {app.surfaceR, app.surfaceG, app.surfaceB, 1.0});
+  // Right divider
+  W::hairline_v(cr, lo.sidebar.x + lo.sidebar.w - 1, lo.sidebar.y,
+                lo.sidebar.y + lo.sidebar.h, out(app));
+  // Section header
+  W::text(cr, "DRIVES", lo.sidebar.x + 16, lo.sidebar.y + 20, 11, sec(app), 1);
+  W::text_right(cr, std::to_string(drives.size()) + (drives.size() == 1 ? " disk" : " disks"),
+                lo.sidebar.x + lo.sidebar.w - 16, lo.sidebar.y + 20, 11, sec(app), 0);
+  // Sort hint
+  W::text(cr, app.search.text.empty() ? "Internal · Removable · Images"
+                                      : "Filtered results",
+          lo.sidebar.x + 16, lo.sidebar.y + 38, 11, sec(app), 0);
 
   cairo_save(cr);
-  cairo_rectangle(cr, 0, y, w, sh);
+  cairo_rectangle(cr, lo.sidebar_list.x, lo.sidebar_list.y, lo.sidebar_list.w,
+                  lo.sidebar_list.h);
   cairo_clip(cr);
-
-  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-  cairo_set_font_size(cr, 11);
-
-  for (size_t i = 0; i < drives.size(); ++i) {
-    int iy = y + static_cast<int>(i) * item_h - app.sidebarScroll;
-    if (iy + item_h < y || iy > y + sh) continue;
-
-    bool sel = static_cast<int>(i) == app.selected_drive;
-    bool hover = static_cast<int>(i) == app.sidebarHover;
-
-    // Row background
-    if (sel || hover) {
-      if (sel)
-        set_rgba(cr, app.accentR, app.accentG, app.accentB, sel ? 0.25 : 0.12);
-      else
-        set_rgba(cr, 1, 1, 1, 0.06);
-      draw_rounded_rect(cr, 4, iy + 2, w - 8, item_h - 4, 6);
-      cairo_fill(cr);
-    }
-
+  for (size_t i = 0; i < drives.size() && i < lo.drive_rows.size(); ++i) {
+    auto r = lo.drive_rows[i];
+    if (r.y + r.h < lo.sidebar_list.y || r.y > lo.sidebar_list.y + lo.sidebar_list.h)
+      continue;
+    bool sel = int(i) == app.selected_drive;
+    bool hov = int(i) == app.hov_drive;
+    if (sel)
+      W::fill_rounded(cr, r.x, r.y, r.w, r.h, 10,
+                      {app.accentR, app.accentG, app.accentB, 0.20});
+    else if (hov)
+      W::fill_rounded(cr, r.x, r.y, r.w, r.h, 10, {1, 1, 1, 0.05});
+    if (sel)
+      W::stroke_rounded(cr, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 10,
+                        {app.accentR, app.accentG, app.accentB});
     auto& d = drives[i];
-    std::string model = d->get_model();
-    if (model.empty()) model = d->get_description();
-    std::string sub = size_str(d->get_size()) + "  " + d->get_serial();
+    // Icon tile
+    double ix = r.x + 10, iy = r.y + (r.h - 36) / 2;
+    W::fill_rounded(cr, ix, iy, 36, 36, 9, {1, 1, 1, sel ? 0.10 : 0.05});
+    const auto* icon = app.icons.tray_icon(drive_icon_name(d), 48);
+    if (icon && icon->surface)
+      draw_icon_surface(cr, icon, int(ix) + 2, int(iy) + 2, 32);
+    else {
+      auto* ds = icons::drive_svg(app.svg, *d);
+      if (ds)
+        icons::paint_svg(cr, ds, ix + 4, iy + 4, 28,
+                         {app.accentR, app.accentG, app.accentB});
+      else
+        W::text(cr, d->is_removable() ? "▤" : "◉", ix + 9, iy + 25, 18,
+                {app.accentR, app.accentG, app.accentB}, 0);
+    }
+    // Texts
+    double tx = ix + 44;
+    double maxw = r.x + r.w - 34 - tx;
+    W::text_ellipsis(cr, drive_display_name(d), tx, r.y + 24, 13, txt(app), 1, maxw);
+    W::text_ellipsis(cr, drive_subtitle(d), tx, r.y + 42, 11, sec(app), 0, maxw);
+    // Status: SMART fail / job spinner / mounted dot
+    bool failing = d->smart_supported() && d->smart_failing();
+    auto job = JobTracker::instance().for_block("");
+    if (failing) {
+      cairo_set_source_rgb(cr, 0.92, 0.30, 0.30);
+      cairo_arc(cr, r.x + r.w - 44, r.y + 16, 4, 0, 2 * M_PI);
+      cairo_fill(cr);
+      W::text(cr, "Failing", r.x + r.w - 36, r.y + 20, 10, {0.92, 0.45, 0.45}, 1);
+    }
+    // Row menu button
+    auto mb = lo.drive_row_menu_btn[i];
+    if (hov || sel)
+      svg_btn(app, cr, mb.x, mb.y, mb.w, app.svg.more, "⋮",
+              app.hov_drive_menu_btn == int(i), false, false);
+  }
+  cairo_restore(cr);
+  // Scrollbar
+  int total = int(drives.size()) * T::kSidebarRowH;
+  int view = lo.sidebar_list.h;
+  if (total > view && view > 0) {
+    int sh = std::max(view * view / total, 24);
+    int sy = lo.sidebar_list.y +
+             (view - sh) * app.sidebarScroll / (total - view);
+    W::fill_rounded(cr, lo.sidebar.x + lo.sidebar.w - 8, sy, 4, sh, 2,
+                    {1, 1, 1, 0.25});
+  }
+  if (drives.empty()) {
+    W::text(cr, "No drives match", lo.sidebar.x + 16, lo.sidebar.y + 80, 12, sec(app), 0);
+  }
+}
 
-    // Drive icon — centred vertically in the taller row
-    {
-      const auto* icon = app.icons.tray_icon(drive_icon_name(d));
-      if (icon && icon->surface) {
-        draw_icon_surface(cr, icon, 12, iy + 20, 24);
-      } else {
-        bool is_removable = d->is_removable();
-        set_rgb(cr, is_removable ? 0.85 : app.accentR,
-                is_removable ? 0.85 : app.accentG,
-                is_removable ? 0.40 : app.accentB);
-        cairo_set_line_width(cr, 2);
-        cairo_new_sub_path(cr);
-        cairo_arc(cr, 24, iy + 32, 7, 0, 2 * M_PI);
+// ---- drive card ----
+
+static void paint_drive_card(AppState& app, cairo_t* cr, const L::Layout& lo,
+                             const std::shared_ptr<Drive>& drive) {
+  if (!drive) return;
+  W::card(cr, app, lo.drive_card.x, lo.drive_card.y, lo.drive_card.w, lo.drive_card.h);
+  // Icon
+  W::fill_rounded(cr, lo.drive_icon.x, lo.drive_icon.y, lo.drive_icon.w,
+                  lo.drive_icon.h, 11, {1, 1, 1, 0.05});
+  const auto* icon = app.icons.tray_icon(drive_icon_name(drive), 96);
+  if (icon && icon->surface)
+    draw_icon_surface(cr, icon, lo.drive_icon.x + 4, lo.drive_icon.y + 4, 40);
+  else {
+    auto* ds = icons::drive_svg(app.svg, *drive);
+    if (ds)
+      icons::paint_svg(cr, ds, lo.drive_icon.x + 8, lo.drive_icon.y + 8, 32,
+                       {app.accentR, app.accentG, app.accentB});
+    else
+      W::text(cr, "◉", lo.drive_icon.x + 12, lo.drive_icon.y + 33, 22,
+              {app.accentR, app.accentG, app.accentB}, 0);
+  }
+  double tx = lo.drive_icon.x + lo.drive_icon.w + 12;
+  double maxw = lo.btn_power.x - 8 - tx;
+  W::text_ellipsis(cr, drive_display_name(drive), tx, lo.drive_card.y + 30, T::kFsTitle,
+                   txt(app), 1, maxw);
+  // Sub: size • serial • firmware (GParted device info parity)
+  std::string sub = size_str_full(drive->get_size());
+  if (!drive->get_serial().empty()) sub += "  ·  " + drive->get_serial();
+  if (!drive->get_firmware_version().empty())
+    sub += "  ·  FW " + drive->get_firmware_version();
+  W::text_ellipsis(cr, sub, tx, lo.drive_card.y + 50, 12, sec(app), 0, maxw);
+  std::string sub2;
+  if (!drive->get_media().empty()) sub2 += drive->get_media() + "  ·  ";
+  sub2 += drive->is_removable() ? "Removable" : "Internal";
+  if (drive->is_loop() && !drive->loop_file().empty()) sub2 += "  ·  " + drive->loop_file();
+  W::text_ellipsis(cr, sub2, tx, lo.drive_card.y + 66, 11, sec(app), 0, maxw);
+  // Action buttons
+  svg_btn(app, cr, lo.btn_power.x, lo.btn_power.y, 32, app.svg.power, "⏻",
+          app.hov_power, false, false, true);
+  svg_btn(app, cr, lo.btn_eject.x, lo.btn_eject.y, 32, app.svg.eject, "⏏",
+          app.hov_eject, false, !drive->is_ejectable() && !drive->is_removable());
+  svg_btn(app, cr, lo.btn_settings.x, lo.btn_settings.y, 32, app.svg.settings, "⚙",
+          app.hov_settings, false, false);
+  svg_btn(app, cr, lo.btn_drive_menu.x, lo.btn_drive_menu.y, 32, app.svg.more, "⋮",
+          app.hov_drivemenu, app.menu.open && app.menu.kind == MenuKind::Drive, false);
+  // SMART banner (Disks 51 assessment)
+  {
+    auto r = lo.smart_banner;
+    bool sup = drive->smart_supported();
+    bool warn = false;
+    std::string a = sup ? drive->smart_one_liner_assessment(&warn) : "SMART not available";
+    W::RGBA bg = !sup ? W::RGBA{1, 1, 1, 0.04}
+                : warn ? W::RGBA{0.85, 0.30, 0.30, 0.14}
+                       : W::RGBA{0.30, 0.68, 0.42, 0.12};
+    W::fill_rounded(cr, r.x, r.y, r.w, r.h, 8, bg);
+    W::text(cr, sup ? (warn ? "●" : "●") : "○", r.x + 10, r.y + 19, 12,
+            !sup ? sec(app) : warn ? W::RGB{0.92, 0.35, 0.35} : W::RGB{0.35, 0.75, 0.45},
+            0);
+    W::text_ellipsis(cr, a, r.x + 26, r.y + 19, 12, txt(app), 0, r.w - 200);
+    // Right side: power-on hours + temp when available
+    std::string extra;
+    if (sup) {
+      auto hrs = drive->smart_power_on_hours();
+      auto tmp = drive->smart_temperature();
+      if (hrs >= 0) extra += std::to_string(hrs) + " h  ·  ";
+      if (tmp >= 0) extra += std::to_string(int(tmp)) + "°C";
+    }
+    if (!extra.empty()) W::text_right(cr, extra, r.x + r.w - 10, r.y + 19, 11, sec(app), 0);
+  }
+}
+
+// ---- volume bar (Disks 51 proportional, GParted-correct) ----
+
+static void paint_volumes(AppState& app, cairo_t* cr, const L::Layout& lo,
+                          const std::shared_ptr<Drive>& drive,
+                          const std::vector<std::shared_ptr<Block>>& blocks) {
+  W::section_label(cr, app, lo.vol_section.x + T::kCardPad, lo.vol_section.y + 16,
+                   "Volumes");
+  {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%zu", blocks.size());
+    W::text(cr, buf, lo.vol_section.x + T::kCardPad +
+                        W::text_w(cr, "Volumes", T::kFsSection, 1) + 8,
+            lo.vol_section.y + 16, 12, sec(app), 0);
+  }
+  W::pill_button(cr, app, lo.btn_add_part.x, lo.btn_add_part.y, lo.btn_add_part.w,
+                 lo.btn_add_part.h, "＋ Add Partition", app.hov_add_part, false, false,
+                 false, blocks.empty() && !drive);
+  // Bar track
+  auto bar = lo.vol_bar;
+  W::fill_rounded(cr, bar.x, bar.y, bar.w, bar.h, T::kVolBarRadius, {1, 1, 1, 0.06});
+  if (blocks.empty()) {
+    W::text(cr, drive ? "Empty disk — no partitions" : "No drive selected",
+            bar.x + 12, bar.y + 23, 12, sec(app), 0);
+  }
+  // Segments — strictly proportional, free hatched (no boosting).
+  for (size_t i = 0; i < lo.vol_segs.size(); ++i) {
+    auto& s = lo.vol_segs[i];
+    double gx = T::kVolBarGap / 2.0;
+    double px = s.rect.x + (i == 0 ? 0 : gx);
+    double pw = s.sw - (i == 0 ? gx : gx * 2) - (i + 1 == lo.vol_segs.size() ? 0 : 0);
+    if (pw < 1) continue;
+    bool sel = false;
+    if (!s.is_free && s.block) {
+      for (size_t bi = 0; bi < blocks.size(); ++bi)
+        if (blocks[bi] == s.block && int(bi) == app.selected_block) sel = true;
+    }
+    bool hov = int(i) == app.hov_volseg;
+    cairo_save(cr);
+    // Clip to bar rounded shape for first/last
+    W::fill_rounded(cr, bar.x, bar.y, bar.w, bar.h, T::kVolBarRadius, {0, 0, 0, 0});
+    cairo_clip(cr);
+    if (s.is_free) {
+      W::hatch_rect(cr, px, bar.y + 1, pw, bar.h - 2, {1, 1, 1, 0.05},
+                    {app.outlineR, app.outlineG, app.outlineB});
+    } else {
+      W::RGB c = W::fs_color(s.block->get_fstype(), s.block->get_fsusage());
+      double bright = sel ? 1.15 : hov ? 1.10 : 1.0;
+      cairo_set_source_rgb(cr, std::min(1.0, c.r * bright), std::min(1.0, c.g * bright),
+                           std::min(1.0, c.b * bright));
+      // Used-portion overlay for mounted filesystems (Disks 51 allocation bar).
+      cairo_rectangle(cr, px, bar.y + 1, pw, bar.h - 2);
+      cairo_fill(cr);
+      if (s.block->is_mounted()) {
+        uint64_t tot = s.block->get_fs_total_bytes();
+        uint64_t used = s.block->get_fs_used_bytes();
+        if (tot > 0) {
+          double f = double(used) / double(tot);
+          cairo_set_source_rgba(cr, 0, 0, 0, 0.35);
+          cairo_rectangle(cr, px, bar.y + 1, pw * f, bar.h - 2);
+          cairo_fill(cr);
+        }
+      }
+      if (s.block->is_encrypted()) {
+        // LUKS diagonal stripe hint
+        cairo_set_source_rgba(cr, 1, 1, 1, 0.10);
+        cairo_set_line_width(cr, 1);
+        for (double d = 0; d < pw + bar.h; d += 6) {
+          cairo_move_to(cr, px + d, bar.y + bar.h);
+          cairo_line_to(cr, px + d + 4, bar.y);
+        }
         cairo_stroke(cr);
       }
     }
-
-    // Model name
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_set_font_size(cr, 12);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_move_to(cr, 42, iy + 26);
-    cairo_show_text(cr, model.c_str());
-
-    // Size & serial
-    set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-    cairo_set_font_size(cr, 10);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_move_to(cr, 42, iy + 50);
-    cairo_show_text(cr, sub.c_str());
-
-    // SMART warning indicator
-    if (d->smart_supported() && d->smart_failing()) {
-      set_rgb(cr, 0.95, 0.30, 0.30);
-      cairo_arc(cr, w - 18, iy + 20, 5, 0, 2 * M_PI);
-      cairo_fill(cr);
+    cairo_restore(cr);
+    // Selection outline
+    if (sel) {
+      cairo_set_source_rgb(cr, 1, 1, 1);
+      cairo_set_line_width(cr, 2);
+      cairo_rectangle(cr, px + 1, bar.y + 2, pw - 2, bar.h - 4);
+      cairo_stroke(cr);
+    } else if (hov) {
+      cairo_set_source_rgba(cr, 1, 1, 1, 0.35);
+      cairo_set_line_width(cr, 1);
+      cairo_rectangle(cr, px + 0.5, bar.y + 1.5, pw - 1, bar.h - 3);
+      cairo_stroke(cr);
     }
-
-    // Hamburger menu button on each drive row.
-    {
-      bool btn_hover = static_cast<int>(i) == app.sidebarDriveBtnHover;
-      int bw = 20;
-      int bx = w - 28;
-      int by = iy + (item_h - bw) / 2;
-      if (btn_hover) {
-        set_rgba(cr, 1, 1, 1, 0.1);
-        draw_rounded_rect(cr, bx, by, bw, bw, 4);
-        cairo_fill(cr);
-      }
-      set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-      cairo_set_font_size(cr, 14);
-      cairo_move_to(cr, bx + 4, by + 16);
-      cairo_show_text(cr, "⋮");
+    // Dividers
+    if (i + 1 < lo.vol_segs.size()) {
+      cairo_set_source_rgba(cr, 0, 0, 0, 0.55);
+      cairo_set_line_width(cr, 1);
+      cairo_move_to(cr, s.rect.x + s.sw + 0.5, bar.y + 3);
+      cairo_line_to(cr, s.rect.x + s.sw + 0.5, bar.y + bar.h - 3);
+      cairo_stroke(cr);
     }
-
-    // Row divider
-    set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-    cairo_set_line_width(cr, 1);
-    cairo_move_to(cr, 8, iy + item_h - 0.5);
-    cairo_line_to(cr, w - 8, iy + item_h - 0.5);
-    cairo_stroke(cr);
   }
-
-  cairo_restore(cr);
-
-  // Scrollbar
-  if (total_h > sh) {
-    int scroll_h = std::max(sh * sh / total_h, 20);
-    int scroll_y = y + (sh - scroll_h) * app.sidebarScroll / (total_h - sh);
-    set_rgba(cr, 1, 1, 1, 0.3);
-    draw_rounded_rect(cr, w - 6, scroll_y, 4, scroll_h, 2);
-    cairo_fill(cr);
+  W::stroke_rounded(cr, bar.x + 0.5, bar.y + 0.5, bar.w - 1, bar.h - 1,
+                    T::kVolBarRadius, out(app));
+  // Legend: selected / hovered segment identity (pixel-clean single line)
+  {
+    std::string legend;
+    if (app.hov_volseg >= 0 && app.hov_volseg < int(lo.vol_segs.size())) {
+      auto& s = lo.vol_segs[size_t(app.hov_volseg)];
+      legend = s.is_free ? ("Free space — " + size_str(uint64_t(s.sw / bar.w *
+                                                                (drive ? drive->get_size() : 1))))
+                         : (block_short_name(s.block) + " — " + size_str(s.block->get_size()) +
+                            " · " + block_fs_label(s.block));
+    } else if (app.selected_block >= 0 && app.selected_block < int(blocks.size())) {
+      auto& b = blocks[size_t(app.selected_block)];
+      legend = block_short_name(b) + " — " + size_str(b->get_size()) + " · " +
+               block_fs_label(b);
+      std::string m = block_mount_str(b);
+      if (!m.empty()) legend += " · " + m;
+    } else if (drive) {
+      uint64_t used = 0;
+      for (auto& b : blocks) used += b->get_size();
+      uint64_t free = drive->get_size() > used ? drive->get_size() - used : 0;
+      legend = size_str(free) + " free of " + size_str(drive->get_size());
+    }
+    W::text_ellipsis(cr, legend, bar.x + 2, bar.y + bar.h + 15, 11, sec(app), 0,
+                     bar.w);
   }
 }
 
-// Partition bar.
+// ---- block rows (Disks 51 rows + GParted density) ----
 
-void draw_partition_bar(AppState& app, cairo_t* cr,
-                         const std::vector<std::shared_ptr<Block>>& blocks_orig,
-                         int x, int y, int w,
-                         uint64_t drive_size) {
-  (void)app;
-  if (blocks_orig.empty() || w < 10) return;
-
-  // Sort by partition offset (copies are cheap, these are shared_ptr)
-  auto blocks = blocks_orig;
-  std::sort(blocks.begin(), blocks.end(), [](auto& a, auto& b) {
-    return a->get_partition_offset() < b->get_partition_offset();
-  });
-
-  // Find the total span: from 0 to the end of the last partition (or drive size)
-  uint64_t total_span = 0;
-  for (auto& b : blocks) {
-    uint64_t end = b->get_partition_offset() + b->get_size();
-    if (end > total_span) total_span = end;
-  }
-  if (total_span == 0) return;
-  if (drive_size > 0 && drive_size > total_span) total_span = drive_size;
-
-  // Build segments: partition blocks interleaved with free-space gaps
-  struct Seg { uint64_t start, end; std::shared_ptr<Block> block; };
-  std::vector<Seg> segs;
-  uint64_t pos = 0;
-  for (auto& b : blocks) {
-    uint64_t offset = b->get_partition_offset();
-    uint64_t sz = b->get_size();
-    if (offset > pos) {
-      segs.push_back({pos, offset, nullptr});
-    }
-    segs.push_back({std::max(pos, offset), offset + sz, b});
-    pos = std::max(pos, offset + sz);
-  }
-  // Trailing free space
-  if (pos < total_span) {
-    segs.push_back({pos, total_span, nullptr});
-  }
-
-  static const double kColors[7][3] = {
-    {0.30, 0.55, 0.85},
-    {0.35, 0.75, 0.45},
-    {0.85, 0.75, 0.30},
-    {0.85, 0.50, 0.20},
-    {0.80, 0.30, 0.30},
-    {0.60, 0.35, 0.75},
-    {0.60, 0.50, 0.35},
-  };
-  static const double kFreeColor[3] = {0.40, 0.40, 0.42};
-
-  int bar_h = 28;
+static void paint_table(AppState& app, cairo_t* cr, const L::Layout& lo,
+                        const std::vector<std::shared_ptr<Block>>&) {
+  // Head
+  W::text(cr, "PARTITION", lo.table_head.x + 16, lo.table_head.y + 19, T::kFsTableHead,
+          sec(app), 1);
+  W::text(cr, "CONTENTS", lo.table_head.x + 176, lo.table_head.y + 19, T::kFsTableHead,
+          sec(app), 1);
+  W::text_right(cr, "SIZE", lo.table_head.x + lo.table_head.w - 200,
+                lo.table_head.y + 19, T::kFsTableHead, sec(app), 1);
+  W::hairline_h(cr, lo.table_head.x, lo.table_head.x + lo.table_head.w,
+                lo.table_head.y + lo.table_head.h - 1, out(app));
 
   cairo_save(cr);
-  cairo_rectangle(cr, x, y, w, bar_h);
+  // Clip rows to content viewport (below header, above job/status bars).
+  int clip_y0 = lo.content.y;
+  int clip_y1 = lo.H - T::kStatusH -
+                (JobTracker::instance().has_active() ? T::kJobBarH : 0);
+  cairo_rectangle(cr, lo.content.x, clip_y0, lo.content.w, clip_y1 - clip_y0);
   cairo_clip(cr);
 
-  // Sequential layout: each segment placed end-to-end, minimum 30px,
-  // no overlap.  Positions are proportional but small segments get
-  // boosted to visibility without obscuring their neighbours.
-  struct PxSeg {
-    double sx, sw;
-    bool is_partition;
-    std::shared_ptr<Block> block;
-    int color_idx;
-  };
-  std::vector<PxSeg> psegs;
-  {
-    double cursor = 0.0;
-    int color_idx = 0;
-    for (auto& seg : segs) {
-      // Skip leading free space (partition table area)
-      if (psegs.empty() && !seg.block && cursor == 0.0) continue;
-      uint64_t seg_size = seg.end - seg.start;
-      double sw = std::max(w * (static_cast<double>(seg_size) / total_span), 150.0);
-      // Clamp to remaining bar width so we never overflow
-      if (cursor + sw > w) sw = w - cursor;
-      if (sw <= 0) break;
-      int ci = seg.block ? color_idx++ : -1;
-      psegs.push_back({cursor, sw, seg.block != nullptr, seg.block, ci});
-      cursor += sw;
-    }
-  }
-
-  // Draw left-to-right (segments are already in sorted order)
-  for (auto& ps : psegs) {
-    if (ps.sw <= 0) continue;
-    if (ps.is_partition) {
-      auto& c = kColors[ps.color_idx % 7];
-      set_rgb(cr, c[0], c[1], c[2]);
-    } else {
-      set_rgb(cr, kFreeColor[0], kFreeColor[1], kFreeColor[2]);
-    }
-    cairo_rectangle(cr, x + ps.sx, y, ps.sw, bar_h);
+  for (size_t i = 0; i < lo.rows.size(); ++i) {
+    auto& row = lo.rows[i];
+    auto r = row.rect;
+    r.y -= app.contentScroll;
+    if (r.y + r.h < clip_y0 || r.y > clip_y1) continue;
+    auto& b = row.block;
+    bool sel = int(i) == app.selected_block;
+    bool hov = int(i) == app.hov_row;
+    // Row bg
+    if (sel)
+      W::fill_rounded(cr, r.x, r.y + 2, r.w, r.h - 4, 10,
+                      {app.accentR, app.accentG, app.accentB, 0.16});
+    else if (hov)
+      W::fill_rounded(cr, r.x, r.y + 2, r.w, r.h - 4, 10, {1, 1, 1, 0.045});
+    else if (i % 2 == 0)
+      W::fill_rounded(cr, r.x, r.y + 2, r.w, r.h - 4, 10, {1, 1, 1, 0.018});
+    if (sel)
+      W::stroke_rounded(cr, r.x + 0.5, r.y + 2.5, r.w - 1, r.h - 5, 10,
+                        {app.accentR, app.accentG, app.accentB});
+    // Swatch
+    W::RGB fc = W::fs_color(b->get_fstype(), b->get_fsusage());
+    cairo_set_source_rgb(cr, fc.r, fc.g, fc.b);
+    cairo_arc(cr, r.x + 24, r.y + 20, 5, 0, 2 * M_PI);
     cairo_fill(cr);
-  }
-
-  cairo_restore(cr);
-
-  set_rgb(cr, 0.25, 0.25, 0.27);
-  cairo_set_line_width(cr, 1);
-  cairo_rectangle(cr, x, y, w, bar_h);
-  cairo_stroke(cr);
-
-  int label_y = y + bar_h + 3;
-  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-  cairo_set_font_size(cr, 9);
-
-  for (auto& ps : psegs) {
-    if (ps.is_partition && ps.sw >= 30) {
-      std::string dev = ps.block->get_device();
-      auto pos2 = dev.find_last_of('/');
-      if (pos2 != std::string::npos) dev = dev.substr(pos2 + 1);
-      std::string sz = size_str(ps.block->get_size());
-
-      cairo_text_extents_t te;
-      cairo_text_extents(cr, dev.c_str(), &te);
-      double tx = x + ps.sx + (ps.sw - te.width) * 0.5;
-      if (tx < x) tx = x;
-      if (tx + te.width > x + w) tx = x + w - te.width;
-
-      set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-      cairo_move_to(cr, tx, label_y + 9);
-      cairo_show_text(cr, dev.c_str());
-
-      cairo_text_extents(cr, sz.c_str(), &te);
-      tx = x + ps.sx + (ps.sw - te.width) * 0.5;
-      if (tx < x) tx = x;
-      if (tx + te.width > x + w) tx = x + w - te.width;
-
-      set_rgba(cr, app.textSecR, app.textSecG, app.textSecB, 0.7);
-      cairo_move_to(cr, tx, label_y + 20);
-      cairo_show_text(cr, sz.c_str());
+    // Line 1: name + fs pill ... size right
+    W::text_ellipsis(cr, block_short_name(b), r.x + 36, r.y + 21, 13, txt(app), 1, 110);
+    {
+      double pillx = r.x + 176;
+      double pw = 0;
+      W::fs_pill(cr, app, pillx, r.y + 10, block_fs_label(b), 96, &pw);
+      // Label next to pill
+      std::string lbl = b->get_label();
+      if (!lbl.empty())
+        W::text_ellipsis(cr, "“" + lbl + "”", pillx + pw + 8, r.y + 24, 12, txt(app), 0,
+                         120);
     }
+    W::text_right(cr, size_str(b->get_size()), r.x + r.w - 200, r.y + 21, 13, txt(app),
+                  0);
+    // Line 2: type · mount · flags ... usage right
+    {
+      std::string meta;
+      if (b->has_partition()) {
+        char nb[16];
+        std::snprintf(nb, sizeof(nb), "p%llu", (unsigned long long)b->get_partition_number());
+        meta += nb;
+        if (!b->get_partition_name().empty()) meta += " · " + b->get_partition_name();
+      } else {
+        meta += "whole disk";
+      }
+      std::string m = block_mount_str(b);
+      if (!m.empty()) meta += "  ·  " + m;
+      std::string fl = partition_flags_str(b);
+      if (!fl.empty() && fl != b->get_partition_name()) meta += "  ·  " + fl;
+      if (b->is_encrypted() && !b->has_cleartext()) meta += "  ·  locked";
+      // UUID tail
+      std::string uuid = b->get_uuid();
+      if (!uuid.empty() && uuid.size() > 8) meta += "  ·  " + uuid.substr(0, 8) + "…";
+      W::text_ellipsis(cr, meta, r.x + 36, r.y + 41, 11, sec(app), 0,
+                       r.w - 36 - 320);
+    }
+    // Usage (mounted only, else "—")
+    {
+      double ux = r.x + r.w - 200 - 110;
+      if (b->is_mounted() && b->get_fs_total_bytes() > 0) {
+        double f = double(b->get_fs_used_bytes()) / double(b->get_fs_total_bytes());
+        W::usage_bar(cr, ux, r.y + 32, T::kUsageBarW, T::kUsageBarH, f);
+        char pct[16];
+        std::snprintf(pct, sizeof(pct), "%d%%", int(f * 100));
+        W::text(cr, pct, ux + T::kUsageBarW + 6, r.y + 41, 11, sec(app), 0);
+      } else if (b->is_swap()) {
+        W::text(cr, b->is_swap_active() ? "active" : "inactive", ux, r.y + 41, 11,
+                sec(app), 0);
+      }
+    }
+    // Job overlay (Disks 51 per-row spinner + progress)
+    auto job = JobTracker::instance().for_block(b->get_object_path());
+    if (job) {
+      W::fill_rounded(cr, r.x, r.y + 2, r.w, r.h - 4, 10, {0, 0, 0, 0.45});
+      W::spinner(cr, r.x + 24, r.y + r.h / 2, 8,
+                 {app.accentR, app.accentG, app.accentB}, app.spinner_phase);
+      W::text_ellipsis(cr, job->label, r.x + 40, r.y + r.h / 2 + 4, 12, txt(app), 0,
+                       r.w - 160);
+      if (job->progress >= 0)
+        W::progress_bar(cr, r.x + 16, r.y + r.h - 10, r.w - 32, 4, job->progress,
+                        {1, 1, 1, 0.12}, {app.accentR, app.accentG, app.accentB});
+    } else {
+      // Action cluster (only when row hovered/selected to stay clean)
+      if (hov || sel) {
+        auto f = b->get_features();
+        if (row.mount_btn.w > 0) {
+          bool mh = app.hov_row_mount == int(i);
+          std::string lbl = (f & FEATURE_CAN_MOUNT)     ? "Mount"
+                            : (f & FEATURE_CAN_UNMOUNT) ? "Unmount"
+                            : (f & FEATURE_CAN_SWAPOFF) ? "Swapoff"
+                            : (f & FEATURE_CAN_SWAPON)  ? "Swapon"
+                            : (f & FEATURE_CAN_LOCK)    ? "Lock"
+                                                        : "Unlock";
+          bool green = (f & FEATURE_CAN_MOUNT) || (f & FEATURE_CAN_SWAPON) ||
+                       (f & FEATURE_CAN_UNLOCK);
+          bool red = (f & FEATURE_CAN_UNMOUNT) || (f & FEATURE_CAN_LOCK);
+          // Adjust rect for scroll
+          W::action_button(cr, app, row.mount_btn.x, r.y + (r.h - 30) / 2,
+                           row.mount_btn.w, 30, lbl, mh, green, red);
+        }
+        if (row.lock_btn.w > 0) {
+          bool lh = app.hov_row_lock == int(i);
+          svg_btn(app, cr, row.lock_btn.x, r.y + (r.h - 32) / 2, 32,
+                  (f & FEATURE_CAN_LOCK) ? app.svg.lock : app.svg.unlock,
+                  (f & FEATURE_CAN_LOCK) ? "🔒" : "🔓", lh, false, false);
+        }
+        bool gh = app.hov_row_gear == int(i);
+        svg_btn(app, cr, row.gear_btn.x, r.y + (r.h - 32) / 2, 32, app.svg.settings,
+                "⚙", gh, false, false);
+      }
+    }
+    W::hairline_h(cr, r.x + 12, r.x + r.w - 12, r.y + r.h - 1, out(app));
+  }
+  cairo_restore(cr);
+}
+
+// ---- details card (GParted device-info parity) ----
+
+static void paint_details(AppState& app, cairo_t* cr, const L::Layout& lo,
+                          const std::shared_ptr<Block>& b) {
+  if (!b || lo.details_card.w == 0) return;
+  auto r = lo.details_card;
+  int ry = r.y - app.contentScroll;
+  int clip_y1 = lo.H - T::kStatusH -
+                (JobTracker::instance().has_active() ? T::kJobBarH : 0);
+  if (ry + r.h < lo.content.y || ry > clip_y1) return;
+  W::card(cr, app, r.x, ry, r.w, r.h);
+  W::text(cr, "Details", r.x + T::kCardPad, ry + 24, 13, txt(app), 1);
+  // 2-col grid
+  struct KV {
+    const char* k;
+    std::string v;
+  };
+  std::string mp = block_mount_str(b);
+  std::vector<KV> left = {
+      {"Device", b->get_device().empty() ? block_short_name(b) : b->get_device()},
+      {"UUID", b->get_uuid().empty() ? "—" : b->get_uuid()},
+      {"Label", b->get_label().empty() ? "—" : b->get_label()},
+      {"Type", block_fs_label(b) + (b->get_fsversion().empty() ? "" : " " + b->get_fsversion())},
+  };
+  std::vector<KV> right = {
+      {"Size", size_str_full(b->get_size())},
+      {"Mounted at", mp.empty() ? "—" : mp},
+      {"Usage", b->is_mounted() && b->get_fs_total_bytes() > 0
+                    ? size_str(b->get_fs_used_bytes()) + " / " +
+                          size_str(b->get_fs_total_bytes())
+                    : "—"},
+      {"Partition", b->has_partition() ? ("#" + std::to_string(b->get_partition_number()) +
+                                          " · " + b->get_partition_type_guid())
+                                       : "—"},
+  };
+  auto col = [&](double x, const std::vector<KV>& kvs) {
+    double y = ry + 48;
+    for (auto& kv : kvs) {
+      W::text(cr, kv.k, x, y, 11, sec(app), 0);
+      W::text_ellipsis(cr, kv.v, x + 92, y, 12, txt(app), 0,
+                       (r.w - 32) / 2 - 100);
+      y += 20;
+    }
+  };
+  col(r.x + T::kCardPad, left);
+  col(r.x + r.w / 2, right);
+  // Buttons
+  auto btn = [&](L::Rect br, const char* label, bool hov, bool dis = false) {
+    // br is unscrolled; adjust
+    W::pill_button(cr, app, br.x, ry + br.h * 0 + (lo.details_card.h - T::kCardPad - 30),
+                   br.w, 30, label, hov, false, false, false, dis);
+  };
+  btn(lo.btn_mount_opts, "Mount Options", false);
+  btn(lo.btn_edit_part, "Edit Partition", false);
+  btn(lo.btn_resize, "Resize", false,
+      !(b->get_features() & FEATURE_RESIZE_PARTITION));
+  btn(lo.btn_check, "Check", false,
+      !(b->get_features() & FEATURE_CHECK_FILESYSTEM));
+  btn(lo.btn_ownership, "Ownership", false,
+      !(b->get_features() & FEATURE_TAKE_OWNERSHIP));
+}
+
+// ---- job bar + status ----
+
+static void paint_jobbar(AppState& app, cairo_t* cr, const L::Layout& lo) {
+  if (lo.job_bar.h == 0) return;
+  W::fill_rounded(cr, lo.job_bar.x, lo.job_bar.y, lo.job_bar.w, lo.job_bar.h, 0,
+                  {app.accentR, app.accentG, app.accentB, 0.10});
+  W::hairline_h(cr, 0, lo.W, lo.job_bar.y, out(app));
+  auto act = JobTracker::instance().active();
+  if (!act.empty()) {
+    W::spinner(cr, 20, lo.job_bar.y + 15, 8, {app.accentR, app.accentG, app.accentB},
+               app.spinner_phase);
+    W::text_ellipsis(cr, act[0]->label, 36, lo.job_bar.y + 19, 12, txt(app), 0,
+                     lo.W - 120);
+    if (act[0]->progress >= 0)
+      W::progress_bar(cr, lo.W - 220, lo.job_bar.y + 11, 160, 8, act[0]->progress,
+                      {1, 1, 1, 0.12}, {app.accentR, app.accentG, app.accentB});
+    else
+      W::text(cr, "working…", lo.W - 80, lo.job_bar.y + 19, 11, sec(app), 0);
   }
 }
 
-// Drive details.
+static void paint_status(AppState& app, cairo_t* cr, const L::Layout& lo,
+                         size_t ndrives, size_t nvols) {
+  W::fill_rounded(cr, lo.status_bar.x, lo.status_bar.y, lo.status_bar.w,
+                  lo.status_bar.h, 0, {app.surfaceR, app.surfaceG, app.surfaceB, 1.0});
+  W::hairline_h(cr, 0, lo.W, lo.status_bar.y, out(app));
+  std::string left = std::to_string(ndrives) + (ndrives == 1 ? " drive" : " drives");
+  left += "  ·  " + std::to_string(nvols) + (nvols == 1 ? " volume" : " volumes");
+  if (!app.statusText.empty()) left += "  ·  " + app.statusText;
+  W::text_ellipsis(cr, left, 12, lo.status_bar.y + 20, 11, sec(app), 0, lo.W * 0.7);
+  W::text_right(cr, "Disks 51 model · UDisks2", lo.W - 12, lo.status_bar.y + 20, 11,
+                sec(app), 0);
+}
 
-void draw_drive_details(AppState& app, cairo_t* cr, int x, int y,
-                         const std::shared_ptr<Drive>& drive) {
-  if (!drive) return;
+// ---- empty states ----
 
-  int lx = x + 12;
-  int ly = y + 16;
-  int lh = 18;
+static void paint_empty(AppState& app, cairo_t* cr, const L::Layout& lo) {
+  double cx = lo.content.x + lo.content.w / 2;
+  double cy = lo.content.y + lo.content.h / 2 - 20;
+  // Illustration ring
+  cairo_set_source_rgba(cr, app.accentR, app.accentG, app.accentB, 0.25);
+  cairo_set_line_width(cr, 2);
+  cairo_arc(cr, cx, cy - 30, 34, 0, 2 * M_PI);
+  cairo_stroke(cr);
+  if (app.svg.hard_drive)
+    icons::paint_svg(cr, app.svg.hard_drive, cx - 20, cy - 50, 40,
+                     {app.accentR, app.accentG, app.accentB});
+  else
+    W::text(cr, "◉", cx - 13, cy - 8, 26, {app.accentR, app.accentG, app.accentB}, 0);
+  W::text(cr, "No drives found", cx - 62, cy + 32, 15, txt(app), 1);
+  W::text(cr, "Attach a disk image or connect a drive", cx - 118, cy + 52, 12, sec(app),
+          0);
+}
 
-  auto draw_field = [&](const char* label, const std::string& value, int& ly) {
-    // Label
-    set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 11);
-    cairo_move_to(cr, lx, ly);
-    cairo_show_text(cr, label);
-    cairo_text_extents_t te;
-    cairo_text_extents(cr, label, &te);
+// ---- main ----
 
-    // Value directly after label
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 12);
-    cairo_move_to(cr, lx + te.width + 6, ly);
-    cairo_show_text(cr, value.c_str());
-
-    ly += lh;
-  };
-
-  draw_field("Model: ", drive->get_model(), ly);
-  draw_field("Size: ", size_str(drive->get_size()), ly);
-  draw_field("Serial: ", drive->get_serial(), ly);
-  draw_field("Firmware: ", drive->get_firmware_version(), ly);
-
-  if (drive->smart_supported()) {
-    bool warn = false;
-    std::string assessment = drive->smart_one_liner_assessment(&warn);
-    draw_field("Assessment:", assessment, ly);
+void paint_main(AppState& app, cairo_t* cr, const L::Layout& lo,
+                const std::vector<std::shared_ptr<Drive>>& drives,
+                const std::vector<std::shared_ptr<Block>>& blocks) {
+  paint_header(app, cr, lo, drives);
+  paint_sidebar(app, cr, lo, drives);
+  // Content bg
+  W::fill_rounded(cr, lo.content.x, lo.content.y, lo.content.w, lo.content.h, 0,
+                  {app.bgR, app.bgG, app.bgB, 1.0});
+  if (drives.empty()) {
+    paint_empty(app, cr, lo);
   } else {
-    draw_field("SMART:", "Not available", ly);
-  }
-}
-
-// Partition list.
-
-void draw_partition_list(AppState& app, cairo_t* cr, int x, int y, int w,
-                          const std::vector<std::shared_ptr<Block>>& blocks) {
-  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-
-  for (size_t i = 0; i < blocks.size(); ++i) {
-    auto& b = blocks[i];
-    int ry = y + static_cast<int>(i) * kPartitionRowH - app.contentScroll;
-    if (ry + kPartitionRowH < kHeaderH || ry > app.height) continue;
-
-    bool hover = static_cast<int>(i) == app.partitionHover;
-    bool sel = static_cast<int>(i) == app.selected_block;
-
-    if (sel) {
-      set_rgba(cr, app.accentR, app.accentG, app.accentB, 0.15);
-    } else if (hover) {
-      set_rgba(cr, 1, 1, 1, 0.04);
-    } else if (i % 2 == 0) {
-      set_rgba(cr, 1, 1, 1, 0.02);
+    auto drive = (app.selected_drive >= 0 && app.selected_drive < int(drives.size()))
+                     ? drives[size_t(app.selected_drive)]
+                     : nullptr;
+    if (!drive) {
+      paint_empty(app, cr, lo);
     } else {
-      set_rgba(cr, 0, 0, 0, 0.04);
-    }
-    cairo_rectangle(cr, x + 2, ry + 2, w - 4, kPartitionRowH - 4);
-    cairo_fill(cr);
-
-    std::string dev = b->get_device();
-    auto pos = dev.find_last_of('/');
-    if (pos != std::string::npos) dev = dev.substr(pos + 1);
-
-    int col_x = x + 12;
-    int btn_right_x = x + w - 12;
-
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_set_font_size(cr, 13);
-    cairo_move_to(cr, col_x, ry + 19);
-    cairo_show_text(cr, dev.c_str());
-
-    set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-    cairo_set_font_size(cr, 11);
-    cairo_move_to(cr, col_x, ry + 38);
-    cairo_show_text(cr, size_str(b->get_size()).c_str());
-
-    {
-      std::string type = b->get_fstype();
-      if (type.empty()) type = b->get_fsusage();
-      if (type.empty()) type = b->get_partition_type();
-      if (type.empty()) type = "—";
-      cairo_move_to(cr, col_x + 100, ry + 38);
-      cairo_show_text(cr, type.c_str());
-    }
-
-    {
-      std::string label = b->get_label();
-      if (!label.empty()) {
-        set_rgb(cr, app.textR, app.textG, app.textB);
-        cairo_set_font_size(cr, 12);
-        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-        cairo_move_to(cr, col_x + 180, ry + 19);
-        cairo_show_text(cr, label.c_str());
-        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+      // Vertical scroll: translate content sections.
+      cairo_save(cr);
+      int clip_y1 = lo.H - T::kStatusH -
+                    (JobTracker::instance().has_active() ? T::kJobBarH : 0);
+      cairo_rectangle(cr, lo.content.x, lo.content.y, lo.content.w,
+                      clip_y1 - lo.content.y);
+      cairo_clip(cr);
+      // NOTE: layout rects were computed with scroll already applied for
+      // rows/details; drive card + volumes are above the fold and painted
+      // with manual offset so short lists don't need scrolling.
+      cairo_translate(cr, 0, -app.contentScroll);
+      paint_drive_card(app, cr, lo, drive);
+      paint_volumes(app, cr, lo, drive, blocks);
+      cairo_restore(cr);
+      paint_table(app, cr, lo, blocks);
+      // Details (handles its own scroll offset)
+      std::shared_ptr<Block> sel;
+      if (app.selected_block >= 0 && app.selected_block < int(blocks.size()))
+        sel = blocks[size_t(app.selected_block)];
+      if (sel) paint_details(app, cr, lo, sel);
+      // Content scrollbar
+      int view_h = lo.content.h;
+      if (app.contentH > view_h && view_h > 0) {
+        int sh = std::max(view_h * view_h / app.contentH, 24);
+        int sy = lo.content.y + (view_h - sh) * app.contentScroll /
+                                        (app.contentH - view_h);
+        W::fill_rounded(cr, lo.content.x + lo.content.w - 8, sy, 4, sh, 2,
+                        {1, 1, 1, 0.25});
       }
     }
-
-    bool is_mounted = b->is_mounted();
-    uint64_t fs_total = 0, fs_used = 0;
-    if (is_mounted) {
-      fs_total = b->get_fs_total_bytes();
-      fs_used = b->get_fs_used_bytes();
-    }
-    if (is_mounted && fs_total > 0) {
-      int bar_x = col_x + 220;
-      int bar_w = 64;
-      int bar_h = 8;
-      int bar_y = ry + 34;
-      double pct = static_cast<double>(fs_used) / static_cast<double>(fs_total);
-
-      set_rgba(cr, 0.25, 0.25, 0.27, 0.6);
-      draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 3);
-      cairo_fill(cr);
-
-      int fill_w = static_cast<int>(bar_w * pct);
-      if (fill_w > 0) {
-        if (pct < 0.75) {
-          set_rgb(cr, 0.35, 0.70, 0.45);
-        } else if (pct < 0.90) {
-          set_rgb(cr, 0.85, 0.75, 0.30);
-        } else {
-          set_rgb(cr, 0.85, 0.30, 0.30);
-        }
-        draw_rounded_rect(cr, bar_x, bar_y, fill_w, bar_h, 3);
-        cairo_fill(cr);
-      }
-
-      set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-      cairo_set_font_size(cr, 10);
-      std::string usage = size_str(fs_used) + " / " + size_str(fs_total);
-      cairo_move_to(cr, bar_x + bar_w + 6, bar_y + 8);
-      cairo_show_text(cr, usage.c_str());
-    }
-
-    auto feats = b->get_features();
-    if (feats & FEATURE_CAN_MOUNT) {
-      bool btn_hover = static_cast<int>(i) == app.partitionBtnHover;
-      int bw = 70;
-      int bx = btn_right_x - bw;
-      int by = ry + (kPartitionRowH - kBtnH) / 2;
-      if (btn_hover) {
-        set_rgb(cr, 0.25, 0.45, 0.30);
-      } else {
-        set_rgb(cr, 0.20, 0.35, 0.25);
-      }
-      draw_rounded_rect(cr, bx, by, bw, kBtnH, 6);
-      cairo_fill(cr);
-      set_rgb(cr, 0.70, 0.95, 0.75);
-      cairo_set_font_size(cr, 11);
-      cairo_move_to(cr, bx + 14, by + 21);
-      cairo_show_text(cr, "Mount");
-    } else if (feats & FEATURE_CAN_UNMOUNT) {
-      bool btn_hover = static_cast<int>(i) == app.partitionBtnHover;
-      int bw = 80;
-      int bx = btn_right_x - bw;
-      int by = ry + (kPartitionRowH - kBtnH) / 2;
-      if (btn_hover) {
-        set_rgb(cr, 0.45, 0.25, 0.25);
-      } else {
-        set_rgb(cr, 0.35, 0.20, 0.20);
-      }
-      draw_rounded_rect(cr, bx, by, bw, kBtnH, 6);
-      cairo_fill(cr);
-      set_rgb(cr, 0.95, 0.70, 0.70);
-      cairo_set_font_size(cr, 11);
-      cairo_move_to(cr, bx + 8, by + 21);
-      cairo_show_text(cr, "Unmount");
-
-      auto mps = b->get_mount_points();
-      if (!mps.empty()) {
-        set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-        cairo_set_font_size(cr, 11);
-        std::string mp = mps[0];
-        int mp_x = col_x + 450;
-        int mp_max_w = btn_right_x - (feats & FEATURE_CAN_UNMOUNT ? 80 + 4 + 30 : 30) - 4 - mp_x;
-        if (mp_max_w > 20) {
-          cairo_text_extents_t te;
-          cairo_text_extents(cr, mp.c_str(), &te);
-          if (te.width > mp_max_w) {
-            while (mp.size() > 3) {
-              cairo_text_extents(cr, (mp + "...").c_str(), &te);
-              if (te.width <= mp_max_w - 6) break;
-              mp = mp.substr(0, mp.size() - 1);
-            }
-            mp += "...";
-          }
-        }
-        cairo_move_to(cr, mp_x, ry + 38);
-        cairo_show_text(cr, mp.c_str());
-      }
-    }
-
-    // Menu button (⋯)
-    {
-      bool mnu_hover = static_cast<int>(i) == app.partitionMenuHover;
-      int mw = 30;
-      int btn_w_max = (feats & FEATURE_CAN_UNMOUNT) ? 80 : 70;
-      int mx = btn_right_x - (feats & (FEATURE_CAN_MOUNT | FEATURE_CAN_UNMOUNT) ? btn_w_max + 4 : 0) - mw;
-      int my = ry + (kPartitionRowH - kBtnH) / 2;
-      if (mnu_hover) {
-        set_rgba(cr, 1, 1, 1, 0.1);
-        draw_rounded_rect(cr, mx, my, mw, kBtnH, 6);
-        cairo_fill(cr);
-      }
-      set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-      cairo_set_font_size(cr, 18);
-      cairo_move_to(cr, mx + 6, my + 23);
-      cairo_show_text(cr, "⋯");
-    }
-
-    set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-    cairo_set_line_width(cr, 1);
-    cairo_move_to(cr, x + 4, ry + kPartitionRowH - 0.5);
-    cairo_line_to(cr, x + w - 4, ry + kPartitionRowH - 0.5);
-    cairo_stroke(cr);
   }
+  paint_jobbar(app, cr, lo);
+  size_t nvols = 0;
+  // Count visible volumes for status (cheap: current drive only — matches selection ctx).
+  {
+    auto drive = (app.selected_drive >= 0 && app.selected_drive < int(drives.size()))
+                     ? drives[size_t(app.selected_drive)]
+                     : nullptr;
+    if (drive) nvols = blocks.size();
+  }
+  paint_status(app, cr, lo, drives.size(), nvols);
 }
 
-// Partition context menu.
-
-void draw_partition_context_menu(AppState& app, cairo_t* cr) {
-  if (!app.partitionMenuOpen || app.selected_block < 0) return;
-
-  int mx = app.partitionMenuX;
-  int my = app.partitionMenuY;
-  int mw = 180;
-  int mh = 32 * 6 + 8;
-
+void paint_menu(AppState& app, cairo_t* cr, const L::Layout& lo) {
+  if (!app.menu.open || app.menu.items.empty()) return;
+  auto r = lo.menu_rect;
+  // Scrim-less floating menu (Adwaita popover)
   cairo_save(cr);
-  cairo_translate(cr, 2, 2);
-  set_rgba(cr, 0, 0, 0, 0.4);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_fill(cr);
-  cairo_translate(cr, -2, -2);
-
-  set_rgb(cr, 0.20, 0.20, 0.22);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_fill(cr);
-
-  set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-  cairo_set_line_width(cr, 1);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_stroke(cr);
-
-  static const char* kMenuItems[] = {
-    "New Partition…", "Format…", "Edit Partition…",
-    "Edit Filesystem…", "Check", "Repair"
-  };
-  int miy = my + 4;
-  cairo_set_font_size(cr, 13);
-  for (int mi = 0; mi < 6; ++mi) {
-    if (mi == app.partitionMenuItemHover) {
-      set_rgba(cr, app.accentR, app.accentG, app.accentB, 0.25);
-      cairo_rectangle(cr, mx + 4, miy, mw - 8, 32);
-      cairo_fill(cr);
-    }
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_move_to(cr, mx + 14, miy + 22);
-    cairo_show_text(cr, kMenuItems[mi]);
-    miy += 32;
-  }
+  cairo_set_source_rgba(cr, 0, 0, 0, 0.35);
+  W::fill_rounded(cr, r.x + 2, r.y + 3, r.w, r.h, T::kMenuRadius, {0, 0, 0, 0.35});
   cairo_restore(cr);
-}
-
-// Drive header menu.
-
-void draw_drive_header_menu(AppState& app, cairo_t* cr) {
-  if (!app.driveMenuOpen) return;
-
-  int mx = app.driveMenuX;
-  int my = app.driveMenuY;
-  int mw = 160;
-  int mh = 32 * 3 + 8;
-
-  cairo_save(cr);
-  cairo_translate(cr, 2, 2);
-  set_rgba(cr, 0, 0, 0, 0.4);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_fill(cr);
-  cairo_translate(cr, -2, -2);
-
-  set_rgb(cr, 0.20, 0.20, 0.22);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_fill(cr);
-
-  set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-  cairo_set_line_width(cr, 1);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_stroke(cr);
-
-  static const char* kDriveMenuItems[] = {
-    "Power Off", "Standby", "Eject"
-  };
-  int miy = my + 4;
-  cairo_set_font_size(cr, 13);
-  for (int mi = 0; mi < 3; ++mi) {
-    if (mi == app.driveMenuItemHover) {
-      set_rgba(cr, app.accentR, app.accentG, app.accentB, 0.25);
-      cairo_rectangle(cr, mx + 4, miy, mw - 8, 32);
-      cairo_fill(cr);
+  W::fill_rounded(cr, r.x, r.y, r.w, r.h, T::kMenuRadius,
+                  {app.surfaceR, app.surfaceG, app.surfaceB, 1.0});
+  W::stroke_rounded(cr, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, T::kMenuRadius,
+                    out(app));
+  double y = r.y + T::kMenuPad;
+  for (size_t i = 0; i < app.menu.items.size(); ++i) {
+    auto& it = app.menu.items[i];
+    bool hov = int(i) == app.menu.hover;
+    if (hov && it.enabled)
+      W::fill_rounded(cr, r.x + 4, y, r.w - 8, T::kMenuItemH, 7,
+                      {app.accentR, app.accentG, app.accentB, 0.20});
+    W::RGB fg = it.enabled ? (it.danger ? W::RGB{0.95, 0.55, 0.55} : txt(app))
+                           : sec(app);
+    if (!it.glyph.empty()) {
+      auto* mi = icons::menu_icon_for_glyph(app.svg, it.glyph);
+      if (mi)
+        icons::paint_svg(cr, mi, r.x + 11, y + (T::kMenuItemH - 16) / 2.0, 16,
+                         {fg.r, fg.g, fg.b});
+      else
+        W::text(cr, it.glyph, r.x + 14, y + 22, 13, fg, 0);
     }
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_move_to(cr, mx + 14, miy + 22);
-    cairo_show_text(cr, kDriveMenuItems[mi]);
-    miy += 32;
-  }
-  cairo_restore(cr);
-}
-
-// Sidebar drive row menu.
-
-void draw_sidebar_drive_menu(AppState& app, cairo_t* cr) {
-  if (!app.sidebarDriveMenuOpen || app.sidebarDriveMenuIdx < 0) return;
-
-  int mx = app.sidebarDriveMenuX;
-  int my = app.sidebarDriveMenuY;
-  int mw = 170;
-  int mh = 32 * 6 + 8;
-
-  cairo_save(cr);
-  cairo_translate(cr, 2, 2);
-  set_rgba(cr, 0, 0, 0, 0.4);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_fill(cr);
-  cairo_translate(cr, -2, -2);
-
-  set_rgb(cr, 0.20, 0.20, 0.22);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_fill(cr);
-
-  set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-  cairo_set_line_width(cr, 1);
-  draw_rounded_rect(cr, mx, my, mw, mh, 8);
-  cairo_stroke(cr);
-
-  static const char* kItems[] = {
-    "Format Disk…", "Create Image…", "SMART Data",
-    "Benchmark…", "Drive Settings", "Power Off"
-  };
-  int miy = my + 4;
-  cairo_set_font_size(cr, 13);
-  for (int mi = 0; mi < 6; ++mi) {
-    if (mi == app.sidebarDriveMenuHover) {
-      set_rgba(cr, app.accentR, app.accentG, app.accentB, 0.25);
-      cairo_rectangle(cr, mx + 4, miy, mw - 8, 32);
-      cairo_fill(cr);
+    W::text_ellipsis(cr, it.label, r.x + 36, y + 22, 13, fg, 0, r.w - 48);
+    y += T::kMenuItemH;
+    if (it.separator_after && i + 1 < app.menu.items.size()) {
+      W::hairline_h(cr, r.x + 12, r.x + r.w - 12, y - 1, out(app));
     }
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_move_to(cr, mx + 14, miy + 22);
-    cairo_show_text(cr, kItems[mi]);
-    miy += 32;
   }
-  cairo_restore(cr);
 }
 
-// Status bar.
-
-void draw_status_bar(AppState& app, cairo_t* cr, int w) {
-  int sb_h = 24;
-
-  set_rgba(cr, app.surfaceR, app.surfaceG, app.surfaceB, 0.85);
-  cairo_rectangle(cr, 0, app.height - sb_h, w, sb_h);
-  cairo_fill(cr);
-
-  set_rgb(cr, app.outlineR, app.outlineG, app.outlineB);
-  cairo_set_line_width(cr, 1);
-  cairo_move_to(cr, 0, app.height - sb_h + 0.5);
-  cairo_line_to(cr, w, app.height - sb_h + 0.5);
-  cairo_stroke(cr);
-
-  set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-  cairo_set_font_size(cr, 10);
-  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-  cairo_move_to(cr, 10, app.height - sb_h + 16);
-
-  auto drives = Manager::instance().get_drives();
-  std::string text = std::to_string(drives.size()) + " drive" + (drives.size() != 1 ? "s" : "");
-  if (!app.statusText.empty()) {
-    text += "  ·  " + app.statusText;
-  }
-  cairo_show_text(cr, text.c_str());
+void paint_dialogs(AppState& app, cairo_t* cr) {
+  if (app.fmtDiskDlg && app.fmtDiskDlg->open) draw_format_disk_dialog(app, cr);
+  if (app.fmtDlg && app.fmtDlg->open) draw_format_volume_dialog(app, cr);
+  if (app.createPartDlg && app.createPartDlg->open) draw_create_partition_dialog(app, cr);
+  if (app.resizeDlg && app.resizeDlg->open) draw_resize_dialog(app, cr);
+  if (app.unlockDlg && app.unlockDlg->open) draw_unlock_dialog(app, cr);
+  if (app.smartDlg && app.smartDlg->open) draw_smart_dialog(app, cr);
+  if (app.benchDlg && app.benchDlg->open) draw_benchmark_dialog(app, cr);
+  if (app.mountOptsDlg && app.mountOptsDlg->open) draw_mount_options_dialog(app, cr);
+  if (app.imageDlg && app.imageDlg->open) draw_image_dialog(app, cr);
+  if (app.attachDlg && app.attachDlg->open) draw_attach_dialog(app, cr);
+  if (app.drvSettingsDlg && app.drvSettingsDlg->open)
+    draw_drive_settings_dialog(app, cr);
 }
 
-}
+}  // namespace eh::disks

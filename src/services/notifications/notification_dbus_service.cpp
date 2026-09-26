@@ -15,7 +15,7 @@
 #include <sdbus-c++/VTableItems.h>
 
 #ifndef EH_SHELL_VERSION
-#define EH_SHELL_VERSION "0.9.5-beta1"
+#define EH_SHELL_VERSION "0.9.6-beta2"
 #endif
 
 namespace eh::shell::notifications {
@@ -209,7 +209,13 @@ NotificationDbusService::NotificationDbusService(NotificationManager& manager) :
     }
   }
 
-  bus_->requestName(kBusName);
+  try {
+    bus_->requestName(kBusName);
+  } catch (const sdbus::Error& e) {
+    std::cerr << "[notifications] requestName failed (another provider won the race) — deferring\n";
+    bus_.reset();
+    return;
+  }
   object_ = sdbus::createObject(*bus_, kObjectPath);
 
   object_
@@ -288,8 +294,9 @@ void NotificationDbusService::shellDismissAll() {
 void NotificationDbusService::processExpired() {
    
   for (const std::uint32_t id : manager_.expiredIds()) {
-    emitClose(id, CloseReason::Expired);
-    (void)manager_.close(id, CloseReason::Expired);
+    if (manager_.close(id, CloseReason::Expired)) {
+      emitClose(id, CloseReason::Expired);
+    }
   }
 }
 
@@ -399,6 +406,7 @@ void NotificationDbusService::onCloseNotification(std::uint32_t id) {
 }
 
 void NotificationDbusService::emitClose(std::uint32_t id, CloseReason reason) {
+  if (!object_) return;
    
   object_->emitSignal("NotificationClosed")
       .onInterface(kInterface)
@@ -420,6 +428,7 @@ void NotificationDbusService::onInvokeAction(std::uint32_t id, const std::string
 }
 
 void NotificationDbusService::emitActionInvoked(std::uint32_t id, const std::string& action_key) {
+  if (!object_) return;
    
   object_->emitSignal("ActionInvoked").onInterface(kInterface).withArguments(id, action_key);
 }

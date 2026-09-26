@@ -4,8 +4,10 @@
 #include <sdbus-c++/sdbus-c++.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <thread>
 #include <utility>
 
 #include <cairo/cairo.h>
@@ -30,10 +32,51 @@ TrayManager::~TrayManager() {
 
 bool TrayManager::start() {
    
-  if (running_) return true;
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true)) return true;
   start_watcher();
-  running_ = true;
-  return running_;
+  return running_.load();
+}
+
+bool TrayManager::watcher_owned_externally() {
+  if (!bus_) {
+    try {
+      bus_ = sdbus::createSessionBusConnection();
+    } catch (const std::exception& e) {
+      std::cerr << "[tray] connect failed: " << e.what() << "\n";
+      return false;
+    }
+    bus_->setMethodCallTimeout(kTrayMethodCallTimeout);
+  }
+  try {
+    auto daemonProxy = sdbus::createProxy(*bus_, sdbus::ServiceName{"org.freedesktop.DBus"},
+                                          sdbus::ObjectPath{"/org/freedesktop/DBus"});
+    bool owned = false;
+    daemonProxy->callMethod("NameHasOwner")
+        .onInterface("org.freedesktop.DBus")
+        .withArguments(std::string{"org.kde.StatusNotifierWatcher"})
+        .storeResultsTo(owned);
+    return owned;
+  } catch (const sdbus::Error&) {
+    return false;
+  }
+}
+
+bool TrayManager::start_secondary_host(int waitMs) {
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true)) return true;
+
+  const int attempts = waitMs > 0 ? (waitMs + 199) / 200 : 0;
+  for (int i = 0; i < attempts; ++i) {
+    if (watcher_owned_externally()) {
+      std::cerr << "[tray] external StatusNotifierWatcher present -> client mode\n";
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  }
+
+  start_watcher();
+  return running_.load();
 }
 
 void TrayManager::shutdown() {
@@ -81,6 +124,7 @@ std::vector<TrayItem> TrayManager::copy_items() const {
 
 sdbus::IConnection* TrayManager::connection() const {
    
+  std::lock_guard<std::mutex> lock(mutex_);
   return bus_.get();
 }
 
@@ -107,6 +151,34 @@ void TrayManager::unsubscribe(int fd) {
 
 // Internal.
 
+std::string tray_resolve_path_owner(sdbus::IConnection& bus, const std::string& path) {
+  std::vector<std::string> names;
+  try {
+    auto daemonProxy = sdbus::createProxy(bus,
+      sdbus::ServiceName{"org.freedesktop.DBus"},
+      sdbus::ObjectPath{"/org/freedesktop/DBus"});
+    daemonProxy->callMethod("ListNames")
+      .onInterface("org.freedesktop.DBus")
+      .storeResultsTo(names);
+  } catch (const std::exception&) {
+    return {};
+  }
+  for (const auto& name : names) {
+    if (name.empty() || name[0] != ':') continue;
+    try {
+      auto probe = sdbus::createProxy(bus,
+        sdbus::ServiceName{name},
+        sdbus::ObjectPath{path});
+      const auto id = probe->getProperty("Id")
+        .onInterface("org.kde.StatusNotifierItem")
+        .get<std::string>();
+      if (!id.empty()) return name;
+    } catch (const std::exception&) {
+    }
+  }
+  return {};
+}
+
 std::pair<std::string, std::string> TrayManager::parse_service_path(const std::string& arg) {
    
   const auto slash = arg.find('/');
@@ -125,20 +197,28 @@ void TrayManager::update_item_properties(TrayItem& item) {
 
 void TrayManager::add_item(const std::string& svc, const std::string& path) {
    
-  if (!bus_) return;
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!running_) return;
-  auto it = std::find_if(items_.begin(), items_.end(), [&](const TrayItem& t) {
-    return t.service == svc && t.path == path;
-  });
-  if (it != items_.end()) return;
-
+  std::shared_ptr<sdbus::IConnection> bus;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!bus_ || !running_) return;
+    const auto dup = std::find_if(items_.begin(), items_.end(), [&](const TrayItem& t) {
+      return t.service == svc && t.path == path;
+    });
+    if (dup != items_.end()) return;
+    if (items_.size() >= 64) {
+      std::cerr << "[tray] cap reached (64), dropping: " << svc << path << "\n";
+      return;
+    }
+    bus = bus_;
+  }
   TrayItem item;
   item.service = svc;
   item.path = path;
-  {
-    auto up = sdbus::createProxy(*bus_, sdbus::ServiceName{svc}, sdbus::ObjectPath{path});
+  try {
+    auto up = sdbus::createProxy(*bus, sdbus::ServiceName{svc}, sdbus::ObjectPath{path});
     item.proxy = std::shared_ptr<sdbus::IProxy>(up.release());
+  } catch (const std::exception&) {
+    return;
   }
   update_item_properties(item);
   std::cerr << "[tray] registered: service='" << item.service << "' path='" << item.path
@@ -149,11 +229,21 @@ void TrayManager::add_item(const std::string& svc, const std::string& path) {
               << "' id='" << item.id << "' title='" << item.title
               << "' reason=empty_IconName\n";
   }
-  if (items_.size() >= 64) {
-    std::cerr << "[tray] cap reached (64), dropping: " << svc << path << "\n";
-    return;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_) {
+      if (item.pixSurface) cairo_surface_destroy(item.pixSurface);
+      return;
+    }
+    const auto dup = std::find_if(items_.begin(), items_.end(), [&](const TrayItem& t) {
+      return t.service == svc && t.path == path;
+    });
+    if (dup != items_.end() || items_.size() >= 64) {
+      if (item.pixSurface) cairo_surface_destroy(item.pixSurface);
+      return;
+    }
+    items_.push_back(std::move(item));
   }
-  items_.push_back(std::move(item));
 }
 
 void TrayManager::remove_item(const std::string& svc, const std::string& path) {
@@ -218,12 +308,8 @@ void TrayManager::setup_name_owner_watch() {
 
 void TrayManager::notify_subscribers() {
    
-  std::vector<int> subs;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    subs = subscribers_;
-  }
-  for (int fd : subs) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (int fd : subscribers_) {
     if (fd >= 0) {
       const uint64_t one = 1;
       (void)write(fd, &one, sizeof(one));
@@ -241,6 +327,7 @@ void TrayManager::start_watcher() {
       start_client();
       return;
     }
+    bus_->setMethodCallTimeout(kTrayMethodCallTimeout);
 
     // Check if another StatusNotifierWatcher (e.g. ksni) already owns the bus name.
     // Claiming it would break system tray for all applications.
@@ -277,8 +364,16 @@ void TrayManager::start_watcher() {
           try {
             auto [svc, path] = parse_service_path(serviceArg);
             if (svc.empty()) {
-              notify_subscribers();
-              return;
+              std::shared_ptr<sdbus::IConnection> busCopy;
+              {
+                std::lock_guard<std::mutex> lock(mutex_);
+                busCopy = bus_;
+              }
+              if (busCopy) svc = tray_resolve_path_owner(*busCopy, path);
+              if (svc.empty()) {
+                notify_subscribers();
+                return;
+              }
             }
             std::cerr << "[tray] RegisterStatusNotifierItem: arg='" << serviceArg << "'\n";
             add_item(svc, path);
@@ -336,7 +431,6 @@ void TrayManager::discover_existing_items() {
     for (const auto& name : names) {
       if (name.find("org.kde.StatusNotifier") == 0) continue;
       if (name.find("org.freedesktop.") == 0) continue;
-      if (name.find(":") == 0) continue;
       try {
         auto probe = sdbus::createProxy(*bus_,
           sdbus::ServiceName{name},
@@ -369,28 +463,43 @@ void TrayManager::start_client() {
         std::cerr << "[tray] connect failed, skipping tray: " << e.what() << "\n";
         return;
       }
+      bus_->setMethodCallTimeout(kTrayMethodCallTimeout);
     }
 
     auto watcher = sdbus::createProxy(*bus_,
                                      sdbus::ServiceName{"org.kde.StatusNotifierWatcher"},
                                      sdbus::ObjectPath{"/StatusNotifierWatcher"});
 
-    auto items = watcher->getProperty("RegisteredStatusNotifierItems")
-                   .onInterface("org.kde.StatusNotifierWatcher")
-                   .get<std::vector<std::string>>();
-    for (const auto& s : items) {
-      auto [svc, path] = parse_service_path(s);
-      if (svc.empty()) continue;
-      add_item(svc, path);
+    try {
+      auto items = watcher->getProperty("RegisteredStatusNotifierItems")
+                     .onInterface("org.kde.StatusNotifierWatcher")
+                     .get<std::vector<std::string>>();
+      for (const auto& s : items) {
+        auto [svc, path] = parse_service_path(s);
+        if (svc.empty() && bus_) svc = tray_resolve_path_owner(*bus_, path);
+        if (svc.empty()) continue;
+        add_item(svc, path);
+      }
+      notify_subscribers();
+    } catch (const std::exception& e) {
+      std::cerr << "[tray] initial RegisteredStatusNotifierItems read failed (" << e.what()
+                << "); continuing as a live client\n";
     }
-    notify_subscribers();
 
     watcher->uponSignal("StatusNotifierItemRegistered")
       .onInterface("org.kde.StatusNotifierWatcher")
       .call([this](const std::string& serviceAndPath) {
         try {
           auto [svc, path] = parse_service_path(serviceAndPath);
-          if (svc.empty()) return;
+          if (svc.empty()) {
+            std::shared_ptr<sdbus::IConnection> busCopy;
+            {
+              std::lock_guard<std::mutex> lock(mutex_);
+              busCopy = bus_;
+            }
+            if (busCopy) svc = tray_resolve_path_owner(*busCopy, path);
+            if (svc.empty()) return;
+          }
           std::cerr << "[tray] client registered: '" << serviceAndPath << "'\n";
           add_item(svc, path);
           notify_subscribers();

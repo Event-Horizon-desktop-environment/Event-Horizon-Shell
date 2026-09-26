@@ -25,7 +25,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
   const double cw = content_w();
   const double cx = row_start_x();
 
-  // Close if clicked outside card
   if (x < 0 || x >= W || y < 0 || y >= H) {
     popup_close(app);
     return;
@@ -37,7 +36,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
   if (y >= pillY && y < pillY + kPillH) {
     const bool isViewOutput = ui().viewOutput;
 
-    // Output pill hit
     if (x >= cx && x < cx + outPillW) {
       if (!isViewOutput) {
         ui().viewOutput = true;
@@ -46,7 +44,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
       return;
     }
 
-    // Input pill hit (if output view and has sources)
     MixerSnapshot snap = take_snapshot();
     if (isViewOutput && !snap.sources.empty()) {
       const double inPillW = 28.0 + 8.0 + 80.0;
@@ -57,7 +54,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
         return;
       }
     }
-    // In input view, the output pill label says "Input" — clicking it goes back to output
     if (!isViewOutput) {
       ui().viewOutput = true;
       reset_ui();
@@ -78,14 +74,12 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
     const auto& dev = devices[static_cast<size_t>(i)];
     const double rowY = devRowsY + static_cast<double>(i) * kRowH;
 
-    // Mute button hit
     const double muteX = cx + kRadioR * 2.0 + 8.0 + kDevIconSz + 8.0 + kNameMaxW + 8.0;
     if (x >= muteX && x < muteX + kMuteBtnSz && y >= rowY && y < rowY + kRowH) {
       pw.set_node_mute(dev.node_id, !dev.muted);
       return;
     }
 
-    // Slider hit
     const auto sg = device_slider_geom(i, devCount, headerBottom);
     const double hitPadV = 15.0;
     const double hitPadH = 6.0;
@@ -96,7 +90,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
       return;
     }
 
-    // Radio / row click — set as default
     if (x >= cx && x <= cx + cw && y >= rowY && y < rowY + kRowH) {
       if (ui().viewOutput)
         pw.set_default_sink(dev.node_id);
@@ -117,14 +110,12 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
     const auto& st = streams[static_cast<size_t>(i)];
     const double rowY = streamsTop + static_cast<double>(i) * kRowH;
 
-    // Mute button hit
     const double muteX = cx + kAppIconSz + 8.0 + kAppNameMaxW + 4.0;
     if (x >= muteX && x < muteX + kMuteBtnSz && y >= rowY && y < rowY + kRowH) {
       pw.set_node_mute(st.node_id, !st.muted);
       return;
     }
 
-    // Slider hit
     const auto sg = stream_slider_geom(i, headerBottom, 4.0 + devicesH + 16.0 + 1.0 + appsHeaderH);
     const double hitPadV = 15.0;
     const double hitPadH = 6.0;
@@ -135,7 +126,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
       return;
     }
 
-    // Device picker button hit
     const double pickerX = row_end_x() - kPad - kPickerBtnW - 4.0 - kEqBtnSz - 4.0 - kCloseBtnSz;
     const double pickerY = rowY + (kRowH - kPickerBtnH) * 0.5;
     if (x >= pickerX && x < pickerX + kPickerBtnW && y >= pickerY && y < pickerY + kPickerBtnH) {
@@ -145,7 +135,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
       return;
     }
 
-    // EQ button hit
     const double eqBtnX = pickerX + kPickerBtnW + 4.0;
     const double eqBtnY = rowY + (kRowH - kEqBtnSz) * 0.5;
     if (x >= eqBtnX && x < eqBtnX + kEqBtnSz && y >= eqBtnY && y < eqBtnY + kEqBtnSz) {
@@ -155,7 +144,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
       return;
     }
 
-    // Close button hit (visible when EQ or router open)
     auto& appState = ui().apps[st.node_id];
     if (appState.eqExpanded || appState.routerExpanded) {
       const double closeX = eqBtnX + kEqBtnSz + 4.0;
@@ -167,7 +155,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
       }
     }
 
-    // EQ panel preset hit
     if (appState.eqExpanded) {
       const double eqY = rowY + kRowH;
       const double eqX = cx;
@@ -193,7 +180,6 @@ void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint
       }
     }
 
-    // Router panel sink list hits
     if (appState.routerExpanded) {
       const MixerSnapshot rs = take_snapshot();
       const double routerY = rowY + kRowH;

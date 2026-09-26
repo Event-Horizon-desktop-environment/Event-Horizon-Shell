@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -22,8 +23,18 @@ namespace eh::ipc {
 
 struct IpcService::QueuedEvent {
   std::vector<uint8_t> bytes;
-  std::vector<int>     fds;        // SCM_RIGHTS attachments (delivered on first send)
+  std::vector<int>     fds;
   bool                 fdsSent = false;
+  ~QueuedEvent() {
+    for (int f : fds) ::close(f);
+  }
+  QueuedEvent() = default;
+  QueuedEvent(std::vector<uint8_t> b, std::vector<int> f, bool sent)
+      : bytes(std::move(b)), fds(std::move(f)), fdsSent(sent) {}
+  QueuedEvent(const QueuedEvent&) = delete;
+  QueuedEvent& operator=(const QueuedEvent&) = delete;
+  QueuedEvent(QueuedEvent&&) = default;
+  QueuedEvent& operator=(QueuedEvent&&) = default;
 };
 
 struct IpcService::Client {
@@ -80,8 +91,7 @@ bool IpcService::start(const std::string& path) {
     return false;
   }
 
-  // Make the socket accessible to all users
-  ::chmod(socketPath_.c_str(), 0666);
+  ::chmod(socketPath_.c_str(), 0600);
 
   if (::listen(listenFd_, 8) < 0) {
     std::cerr << "[ipc] listen() failed: " << std::strerror(errno) << "\n";
@@ -103,7 +113,8 @@ void IpcService::stop() {
       ::close(client->fd);
     }
     clients_.clear();
-    for (int fd : pending_) {
+    for (const auto& [fd, since] : pending_) {
+      (void)since;
       ::close(fd);
     }
     pending_.clear();
@@ -162,13 +173,11 @@ void IpcService::on_accept() {
     // before the client writes). Park it in `pending_`; the poll loop re-peeks it
     // in on_fd_ready once data arrives, choosing the dialect then.
     std::lock_guard<std::mutex> lock(busMtx_);
-    pending_.insert(clientFd);
+    pending_.emplace(clientFd, std::chrono::steady_clock::now());
   }
 }
 
 void IpcService::dispatch_legacy(int clientFd) {
-  // One-shot legacy command: read a plain-text line (<= kMaxLegacyCmd), respond
-  // with the handler output followed by a newline, then close.
   char buf[kMaxLegacyCmd + 1];
   ssize_t n = ::read(clientFd, buf, kMaxLegacyCmd);
   if (n <= 0) {
@@ -177,8 +186,16 @@ void IpcService::dispatch_legacy(int clientFd) {
   }
   buf[n] = '\0';
 
-  std::string line(buf);
-  while (!line.empty() && (line.back() == '\n' || line.back() == '\r' || line.back() == ' ')) {
+  std::string line(buf, static_cast<size_t>(n));
+  const size_t nl = line.find('\n');
+  if (nl == std::string::npos && static_cast<size_t>(n) == kMaxLegacyCmd) {
+    const std::string err = "error command too long\n";
+    (void)::send(clientFd, err.data(), err.size(), MSG_NOSIGNAL);
+    ::close(clientFd);
+    return;
+  }
+  if (nl != std::string::npos) line.resize(nl);
+  while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
     line.pop_back();
   }
 
@@ -187,16 +204,17 @@ void IpcService::dispatch_legacy(int clientFd) {
 
   const char* out = response.data();
   size_t remaining = response.size();
+  int stays = 0;
   while (remaining > 0) {
     ssize_t written = ::send(clientFd, out, remaining, MSG_NOSIGNAL);
     if (written > 0) {
       out += written;
       remaining -= static_cast<size_t>(written);
+      stays = 0;
       continue;
     }
     if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      // Response is tiny (command output is bounded); the peer is draining it
-      // slowly. Pause briefly rather than hot-spinning, then retry.
+      if (++stays > 5000) break;
       ::usleep(1000);
       continue;
     }
@@ -356,13 +374,13 @@ bool IpcService::flush_client(Client& c) {
 
     ssize_t written = ::sendmsg(c.fd, &msg, MSG_NOSIGNAL);
     if (written > 0) {
-      if (withFds) {
-        q.fdsSent = true;
-        for (int f : q.fds) ::close(f);
-        q.fds.clear();
-      }
       q.bytes.erase(q.bytes.begin(), q.bytes.begin() + written);
       if (q.bytes.empty()) {
+        if (withFds) {
+          q.fdsSent = true;
+          for (int f : q.fds) ::close(f);
+          q.fds.clear();
+        }
         c.out.pop_front();
         if (c.out.empty()) {
           // Queue fully drained: drop the POLLOUT interest. Leaving it set
@@ -385,6 +403,19 @@ void IpcService::on_fd_ready(int fd, short revents) {
   if (fd == listenFd_) {
     on_accept();
     return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(busMtx_);
+    const auto now = std::chrono::steady_clock::now();
+    for (auto it = pending_.begin(); it != pending_.end();) {
+      if (now - it->second > std::chrono::seconds(10)) {
+        ::close(it->first);
+        it = pending_.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   // A connection parked before its first byte arrived: resolve its dialect now.
@@ -415,7 +446,7 @@ void IpcService::on_fd_ready(int fd, short revents) {
       }
       pending_.erase(pendingIt);
       if (static_cast<uint8_t>(probe) == kFrameMagic) {
-        auto client = std::make_unique<Client>();
+        auto client = std::make_shared<Client>();
         client->fd = fd;
         clients_[fd] = std::move(client);
         // Fall through to the framed read path below.
@@ -429,12 +460,12 @@ void IpcService::on_fd_ready(int fd, short revents) {
     return;
   }
 
-  Client* c = nullptr;
+  std::shared_ptr<Client> c;
   {
     std::lock_guard<std::mutex> lock(busMtx_);
     auto it = clients_.find(fd);
     if (it == clients_.end()) return;
-    c = it->second.get();
+    c = it->second;
   }
   // Client lifetime is owned by this poll thread: only on_fd_ready/stop() remove
   // entries, so the raw pointer stays valid while we work.
@@ -488,7 +519,8 @@ std::vector<PollInterest> IpcService::poll_interests() const {
     interests.push_back({listenFd_, POLLIN});
   }
   std::lock_guard<std::mutex> lock(busMtx_);
-  for (int fd : pending_) {
+  for (const auto& [fd, since] : pending_) {
+    (void)since;
     interests.push_back({fd, POLLIN});
   }
   for (auto& [fd, client] : clients_) {
@@ -520,7 +552,18 @@ void IpcService::publish(const std::string& topic, std::string_view payload,
   for (int fd : it->second) {
     auto client = clients_.find(fd);
     if (client == clients_.end()) continue;
-    client->second->out.push_back(QueuedEvent{enc, fds, false});
+    std::vector<int> rfds;
+    rfds.reserve(fds.size());
+    for (int f : fds) {
+      const int d = ::dup(f);
+      if (d < 0) break;
+      rfds.push_back(d);
+    }
+    if (rfds.size() != fds.size()) {
+      for (int d : rfds) ::close(d);
+      continue;
+    }
+    client->second->out.push_back(QueuedEvent{enc, std::move(rfds), false});
     client->second->wantPollOut = true;
   }
 }

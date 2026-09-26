@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -52,8 +53,8 @@ public:
   void pauseExpiry(std::uint32_t id);
   void resumeExpiry(std::uint32_t id, std::int32_t remaining_ms);
 
-  [[nodiscard]] const std::deque<Notification>& all() const noexcept;
-  [[nodiscard]] const std::deque<NotificationHistoryEntry>& history() const noexcept;
+  [[nodiscard]] std::deque<Notification> all() const;
+  [[nodiscard]] std::deque<NotificationHistoryEntry> history() const;
   [[nodiscard]] std::uint64_t changeSerial() const noexcept;
   void removeHistoryEntry(std::uint32_t id);
   void clearHistory();
@@ -71,6 +72,7 @@ private:
   void upsertHistory(const Notification& notification, bool active, std::optional<CloseReason> close_reason);
   void rebuildHistoryIndex();
 
+  mutable std::recursive_mutex mu_;
   std::deque<Notification> notifications_;
   std::unordered_map<std::uint32_t, std::size_t> id_to_index_;
   std::deque<NotificationHistoryEntry> history_;

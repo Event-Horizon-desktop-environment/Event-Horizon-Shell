@@ -155,6 +155,7 @@ bool IpcClient::wait_for_ack(uint64_t id, int timeoutMs) {
     IpcFrame frame;
     if (!pump_frame(static_cast<int>(remaining), frame)) return false;
     if (frame.header.type == kTypeAck && frame.header.id == id) return true;
+    if (frame.header.type == kTypeEvent) dispatch_event(frame);
   }
 }
 

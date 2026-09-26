@@ -5,6 +5,7 @@
 
 #include "desktop_shell/widgets/shared/widget_settings.hpp"
 #include "desktop_shell/widgets/shared/measure_scratch.hpp"
+#include "desktop_shell/shared/core/cairo_helpers.hpp"
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/common/icon_cache/icon_cache.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
@@ -62,12 +63,7 @@ WorkspaceDisplayMode parse_display_mode(std::string_view instance_id, const eh::
 }
 
 bool parse_show_workspace_apps(std::string_view instance_id, const eh::config::ShellConfig& sc) {
-   
-  const std::string raw = widget_setting(sc, instance_id, "show_apps");
-  if (raw.empty()) return true;
-  if (raw == "1" || raw == "true" || raw == "True" || raw == "yes") return true;
-  if (raw == "0" || raw == "false" || raw == "False" || raw == "no") return false;
-  return true;
+  return parse_bool_setting(widget_setting(sc, instance_id, "show_apps"), true);
 }
 
 int parse_max_workspace_icons(std::string_view instance_id, const eh::config::ShellConfig& sc) {
@@ -113,8 +109,6 @@ void workspace_strip_apply_max_slots(std::vector<WorkspaceEntry>& out, int max_s
   out = std::move(result);
 }
 
-
-
 PangoLayout* make_layout(cairo_t* cr, const char* font_desc) {
    
   PangoLayout* l = pango_cairo_create_layout(cr);
@@ -125,16 +119,6 @@ PangoLayout* make_layout(cairo_t* cr, const char* font_desc) {
   pango_layout_set_ellipsize(l, PANGO_ELLIPSIZE_END);
   pango_layout_set_alignment(l, PANGO_ALIGN_CENTER);
   return l;
-}
-
-void rrect(cairo_t* cr, double x, double y, double w, double h, double rad) {
-   
-  cairo_new_path(cr);
-  cairo_arc(cr, x + w - rad, y + rad, rad, -M_PI_2, 0);
-  cairo_arc(cr, x + w - rad, y + h - rad, rad, 0, M_PI_2);
-  cairo_arc(cr, x + rad, y + h - rad, rad, M_PI_2, M_PI);
-  cairo_arc(cr, x + rad, y + rad, rad, M_PI, 3.0 * M_PI_2);
-  cairo_close_path(cr);
 }
 
 std::string cell_text(const WorkspaceEntry& e, WorkspaceDisplayMode mode) {
@@ -226,7 +210,7 @@ bool layout_cells(cairo_t* measure_cr, const eh::config::ShellConfig& sc, std::s
         cwidths.push_back(static_cast<int>(dot_d));
         continue;
       }
-        PangoLayout* pl = make_layout(scratch_cr, fd.c_str());
+      PangoLayout* pl = make_layout(scratch_cr, fd.c_str());
       pango_layout_set_text(pl, txt.c_str(), -1);
       pango_layout_set_width(pl, -1);
       pango_layout_set_wrap(pl, PANGO_WRAP_NONE);
@@ -303,7 +287,7 @@ static void draw_scaled_icon_with_alpha(cairo_t* cr, cairo_surface_t* surf, doub
 static void draw_steam_tile(cairo_t* cr, double ix, double iy, double cell_sz, double alpha) {
    
   const double rr = std::max(2.0, cell_sz * 0.22);
-  rrect(cr, ix, iy, cell_sz, cell_sz, rr);
+  eh::shell::shared::rounded_rect(cr, ix, iy, cell_sz, cell_sz, rr);
   cairo_set_source_rgba(cr, 0.55, 0.72, 0.94, 0.5 * alpha);
   cairo_fill(cr);
 }
@@ -470,7 +454,7 @@ bool paint_workspaces_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::
   cairo_clip(cr);
 
   if (entries.empty()) {
-    PangoLayout* pl = make_layout(cr, "Sans SemiBold 10");
+    PangoLayout* pl = make_layout(cr, "Inter SemiBold 10");
     pango_layout_set_text(pl, "\342\200\224", -1);
     int tw = 0;
     int th = 0;
@@ -550,7 +534,8 @@ bool paint_workspaces_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::
     prec.widths.clear();
     prec.heights.clear();
   }
-  if (!prec.layout || prec.fontPx != font_px) {
+  const bool layoutStale = !prec.layout || prec.fontPx != font_px;
+  if (layoutStale) {
     if (prec.layout) g_object_unref(prec.layout);
     prec.layout = make_layout(cr, fd.c_str());
   } else {
@@ -578,15 +563,15 @@ bool paint_workspaces_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::
     const double rr = std::min(cw * 0.5, pill_h * 0.5) - 1.0;
 
     if (e.active) {
-      rrect(cr, cx, pill_y + 2.0, cw, pill_h - 4.0, std::max(2.0, rr * 0.5));
+      eh::shell::shared::rounded_rect(cr, cx, pill_y + 2.0, cw, pill_h - 4.0, std::max(2.0, rr * 0.5));
       cairo_set_source_rgba(cr, activeFillR, activeFillG, activeFillB, pressed ? 0.85 : 0.75);
       cairo_fill(cr);
     } else if (e.occupied) {
-      rrect(cr, cx, pill_y + 2.0, cw, pill_h - 4.0, std::max(2.0, rr * 0.5));
+      eh::shell::shared::rounded_rect(cr, cx, pill_y + 2.0, cw, pill_h - 4.0, std::max(2.0, rr * 0.5));
       cairo_set_source_rgba(cr, 0.35, 0.38, 0.42, 0.55);
       cairo_fill(cr);
     } else {
-      rrect(cr, cx, pill_y + 2.0, cw, pill_h - 4.0, std::max(2.0, rr * 0.5));
+      eh::shell::shared::rounded_rect(cr, cx, pill_y + 2.0, cw, pill_h - 4.0, std::max(2.0, rr * 0.5));
       cairo_set_source_rgba(cr, 0.22, 0.24, 0.26, 0.45);
       cairo_fill(cr);
     }
@@ -611,7 +596,7 @@ bool paint_workspaces_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::
           draw_scaled_icon_with_alpha(cr, ent->surface, ixx, iy0, icon_cell, icon_alpha);
         } else {
           const double rr = std::max(2.0, icon_cell * 0.22);
-          rrect(cr, ixx, iy0, icon_cell, icon_cell, rr);
+          eh::shell::shared::rounded_rect(cr, ixx, iy0, icon_cell, icon_cell, rr);
           cairo_set_source_rgba(cr, 0.55, 0.60, 0.65, 0.25 * icon_alpha);
           cairo_fill(cr);
         }

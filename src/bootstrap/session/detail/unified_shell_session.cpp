@@ -86,6 +86,14 @@
 namespace eh::app {
 namespace detail {
 
+namespace {
+// Minimum gap between two spawns of the same split-out child. A child that dies
+// again inside this window gets its respawn deferred to the deadline rather than
+// dropped, so a crash burst throttles instead of stranding the child for the
+// rest of the session.
+constexpr uint64_t kChildRespawnCooldownMs = 5000;
+}  // namespace
+
 struct DragPreviewUser {
   eh::wayland::GammaService* gamma = nullptr;
   eh::ipc::IpcService* ipc = nullptr;
@@ -260,10 +268,12 @@ std::vector<FdHandler> UnifiedShellSession::build_handlers() {
             desktop_child_pid_ = -1;
             if (!running_) continue;
             const uint64_t now = eh::shell::now_mono_ms();
-            if (now - desktopLastRestartMs_ < 5000) {
-              debug_log("desktop", "child died; respawn RATE_LIMITED");
+            if (now - desktopLastRestartMs_ < kChildRespawnCooldownMs) {
+              desktopRespawnAtMs_ = desktopLastRestartMs_ + kChildRespawnCooldownMs;
+              debug_log("desktop", "child died; respawn deferred to cooldown");
               continue;
             }
+            desktopRespawnAtMs_ = 0;
             desktopLastRestartMs_ = now;
             const int pid = eh::shell::desktop::desktop_spawn_native_child();
             if (pid > 1) desktop_child_pid_ = pid;
@@ -274,11 +284,17 @@ std::vector<FdHandler> UnifiedShellSession::build_handlers() {
             std::cerr << "[dock] child exited (status=" << status << ")\n";
             dock_child_pid_ = -1;
             if (!running_) continue;
-            const uint64_t now = eh::shell::now_mono_ms();
-            if (now - dockLastRestartMs_ < 5000) {
-              debug_log("dock", "child died; respawn RATE_LIMITED");
+            if (!eh::config::shell_config_snapshot().dock.dockShowDock) {
+              std::cerr << "[dock] show_dock disabled; leaving the dock child down\n";
               continue;
             }
+            const uint64_t now = eh::shell::now_mono_ms();
+            if (now - dockLastRestartMs_ < kChildRespawnCooldownMs) {
+              dockRespawnAtMs_ = dockLastRestartMs_ + kChildRespawnCooldownMs;
+              debug_log("dock", "child died; respawn deferred to cooldown");
+              continue;
+            }
+            dockRespawnAtMs_ = 0;
             dockLastRestartMs_ = now;
             const int pid = eh::shell::dock::dock_spawn_native_child();
             if (pid > 1) dock_child_pid_ = pid;
@@ -290,10 +306,12 @@ std::vector<FdHandler> UnifiedShellSession::build_handlers() {
             taskbar_child_pid_ = -1;
             if (!running_) continue;
             const uint64_t now = eh::shell::now_mono_ms();
-            if (now - taskbarLastRestartMs_ < 5000) {
-              debug_log("taskbar", "child died; respawn RATE_LIMITED");
+            if (now - taskbarLastRestartMs_ < kChildRespawnCooldownMs) {
+              taskbarRespawnAtMs_ = taskbarLastRestartMs_ + kChildRespawnCooldownMs;
+              debug_log("taskbar", "child died; respawn deferred to cooldown");
               continue;
             }
+            taskbarRespawnAtMs_ = 0;
             taskbarLastRestartMs_ = now;
             const int pid = eh::shell::taskbar::taskbar_spawn_native_child();
             if (pid > 1) taskbar_child_pid_ = pid;
@@ -348,6 +366,76 @@ bool UnifiedShellSession::on_after_wayland_dispatch() {
   // The dock (its own display dispatch + running flag) lives in the
   // horizon-dock child; here this display only carries the toplevel tracker.
   return true;
+}
+
+// Respawn a split-out child whose death landed inside the cooldown window. The
+// SIGCHLD edge that reported the death has already been consumed, so without
+// this armed deadline nothing would ever retry and the child would stay down
+// until the whole session restarted. Driven from on_idle_flush(), which runs on
+// every idle, so the retry lands as soon as the cooldown expires.
+void UnifiedShellSession::retry_deferred_child_respawns() {
+  if (!running_) return;
+  const uint64_t now = eh::shell::now_mono_ms();
+
+  if (dockRespawnAtMs_ && now >= dockRespawnAtMs_) {
+    dockRespawnAtMs_ = 0;
+    dockLastRestartMs_ = now;
+    const int pid = eh::shell::dock::dock_spawn_native_child();
+    if (pid > 1) {
+      dock_child_pid_ = pid;
+      debug_log("dock", "deferred respawn after cooldown pid=%d", pid);
+    }
+  }
+  if (desktopRespawnAtMs_ && now >= desktopRespawnAtMs_) {
+    desktopRespawnAtMs_ = 0;
+    desktopLastRestartMs_ = now;
+    const int pid = eh::shell::desktop::desktop_spawn_native_child();
+    if (pid > 1) {
+      desktop_child_pid_ = pid;
+      debug_log("desktop", "deferred respawn after cooldown pid=%d", pid);
+    }
+  }
+  if (taskbarRespawnAtMs_ && now >= taskbarRespawnAtMs_) {
+    taskbarRespawnAtMs_ = 0;
+    taskbarLastRestartMs_ = now;
+    const int pid = eh::shell::taskbar::taskbar_spawn_native_child();
+    if (pid > 1) {
+      taskbar_child_pid_ = pid;
+      debug_log("taskbar", "deferred respawn after cooldown pid=%d", pid);
+    }
+  }
+}
+
+void UnifiedShellSession::sync_dock_child_with_enabled_setting() {
+  if (!running_ || !ipc_service_ || !ipc_service_->running()) return;
+  const bool want = eh::config::shell_config_snapshot().dock.dockShowDock;
+
+  if (!want) {
+    if (dockEnabledApplied_) {
+      dockEnabledApplied_ = false;
+      if (dock_child_pid_ > 1) {
+        std::cerr << "[dock] show_dock disabled; stopping dock child pid=" << dock_child_pid_ << "\n";
+        (void)kill(dock_child_pid_, SIGTERM);
+      }
+    }
+    return;
+  }
+
+  if (dock_child_pid_ > 1) {
+    dockEnabledApplied_ = true;
+    return;
+  }
+  if (dockRespawnAtMs_) return;
+  const uint64_t now = eh::shell::now_mono_ms();
+  if (now - dockLastRestartMs_ < kChildRespawnCooldownMs) return;
+
+  dockEnabledApplied_ = true;
+  dockLastRestartMs_ = now;
+  const int pid = eh::shell::dock::dock_spawn_native_child();
+  if (pid > 1) {
+    dock_child_pid_ = pid;
+    std::cerr << "[dock] show_dock enabled; started dock child pid=" << pid << "\n";
+  }
 }
 
 void UnifiedShellSession::on_idle_flush(bool did_display_event) {
@@ -421,6 +509,8 @@ void UnifiedShellSession::on_idle_flush(bool did_display_event) {
     matugen_pending_ = false;
     eh::config::shell_config_trigger_async_matugen();
   }
+  retry_deferred_child_respawns();
+  sync_dock_child_with_enabled_setting();
   {
     eh::app::wl_loop_diag::StallScope _stall("unified", "weather_drive_curl_multi");
     eh::widgets::control_center_weather_drive_curl_multi();
@@ -880,10 +970,14 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   // `config.applied`. The SIGCHLD handler respawns it on crash; the taskbar +
   // gamma + Super+S settings were the last supervisor bits removed by this
   // split.
-  if (ipc_service_ && ipc_service_->running()) {
+  dockEnabledApplied_ = eh::config::shell_config_snapshot().dock.dockShowDock;
+  if (dockEnabledApplied_ && ipc_service_ && ipc_service_->running()) {
     const int dPid = eh::shell::dock::dock_spawn_native_child();
     if (dPid > 1) dock_child_pid_ = dPid;
+  } else if (!dockEnabledApplied_) {
+    std::cerr << "[dock] show_dock disabled at startup; not spawning the dock child\n";
   }
+  dockRespawnAtMs_ = 0;
   boot_mark("dock_child_spawned");
 
   // Spawn the split-out `horizon-taskbar` child: the taskbar bar + app drawer +
@@ -1054,6 +1148,9 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
     eh::wallpaper::wallpaper_kill_native_child(wallpaper_child_pid_);
     wallpaper_child_pid_ = -1;
   }
+  desktopRespawnAtMs_ = 0;
+  dockRespawnAtMs_ = 0;
+  taskbarRespawnAtMs_ = 0;
   if (desktop_child_pid_ > 1) {
     eh::shell::desktop::desktop_kill_native_child(desktop_child_pid_);
     desktop_child_pid_ = -1;

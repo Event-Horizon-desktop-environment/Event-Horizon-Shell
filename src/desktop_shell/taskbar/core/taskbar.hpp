@@ -28,6 +28,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <atomic>
+#include <thread>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -52,6 +54,36 @@ namespace eh::config { struct ShellConfig; }
 
 namespace eh::shell::taskbar {
 
+struct TaskbarScaledIconCache {
+  struct Key {
+    const void* src = nullptr;
+    int w = 0;
+    int h = 0;
+    bool operator==(const Key& o) const { return src == o.src && w == o.w && h == o.h; }
+  };
+  struct KeyHash {
+    size_t operator()(const Key& k) const noexcept {
+      size_t h = std::hash<const void*>{}(k.src);
+      h ^= std::hash<int>{}(k.w + 0x9e3779b9 + (h << 6) + (h >> 2));
+      h ^= std::hash<int>{}(k.h + 0x9e3779b9 + (h << 6) + (h >> 2));
+      return h;
+    }
+  };
+  std::unordered_map<Key, cairo_surface_t*, KeyHash> map{};
+  std::vector<Key> fifo{};
+  static constexpr size_t kCap = 256;
+  uint64_t hits = 0;
+  uint64_t misses = 0;
+
+  ~TaskbarScaledIconCache() { clear(); }
+  void clear() {
+    for (auto& [k, s] : map) if (s) cairo_surface_destroy(s);
+    map.clear();
+    fifo.clear();
+  }
+  cairo_surface_t* getOrScale(cairo_surface_t* src, int tw, int th);
+};
+
 struct TaskbarOutputLayer {
   TaskbarApp* taskbar = nullptr;
   wl_output* wlOut = nullptr;
@@ -68,6 +100,8 @@ struct TaskbarOutputLayer {
   eh::wayland::SurfaceExtensions surfExt{};
   eh::wayland::CairoCpuBuffer glRaster{};
   std::unique_ptr<eh::wayland::VulkanLayerSurface> vkLayer{};
+  double regionBarW = -1.0;
+  double regionBarH = -1.0;
 };
 
 struct TaskbarApp {
@@ -138,6 +172,7 @@ struct TaskbarApp {
 
   // Icon cache
   eh::icons::IconCache icons{};
+  TaskbarScaledIconCache scaledIcons{};
 
   // Animation
   eh::shell::AnimationManager anim{};
@@ -157,6 +192,8 @@ struct TaskbarApp {
   int trayEventFd = -1;
   std::unique_ptr<sdbus::IConnection> trayBus{};
   std::unordered_map<std::string, bool> trayMissingLogged{};
+  std::atomic<bool> trayStartLaunched{false};
+  std::thread trayStartThread{};
 
   // Logo / icon surfaces
   cairo_surface_t* settingsLogo = nullptr;
@@ -247,7 +284,10 @@ struct TaskbarApp {
   // Frame callback (vsync alignment).
   wl_callback* frameCallback = nullptr;
   bool frameRedrawPending = false;
-  uint64_t frameCallbackRequestedMs = 0; // watchdog: guards against a frame callback that never fires
+  uint64_t frameCallbackRequestedMs = 0;
+  uint64_t frameDoneCount = 0;
+  uint64_t frameWatchdogCount = 0;
+  double sectionMs[3] = {0.0, 0.0, 0.0};
 
   // Fast-start (EH_TASKBAR_FAST_START).
   std::shared_ptr<eh::wayland::VulkanDisplayContext> taskbarVk;
@@ -275,6 +315,7 @@ void taskbar_init_deferred_startup(TaskbarApp& app);
 void taskbar_add_layer(TaskbarApp& app, wl_output* output);
 void taskbar_draw(TaskbarApp& app);
 void taskbar_schedule_frame(TaskbarApp& app);
+void taskbar_popup_draw(TaskbarApp& app);
 void taskbar_handle_tray(TaskbarApp& app);
 void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfig& sc);
 void taskbar_cleanup(TaskbarApp& app);

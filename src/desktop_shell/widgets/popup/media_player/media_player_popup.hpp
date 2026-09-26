@@ -8,8 +8,18 @@ namespace eh::config { struct ShellConfig; }
 
 namespace eh::shell::dock::popup::media_player {
 
-constexpr int kMediaPlayerPopupW = 340;
-constexpr int kMediaPlayerPopupH = 420;
+// iOS-style now-playing card: art + scrolling title/artist, wave bars,
+// seekbar with elapsed/remaining stamps, 5 transport controls.
+constexpr int kMediaPlayerPopupW = 400;
+constexpr int kMediaPlayerPopupH = 188;
+
+// Process-shared marquee state (one popup per process): paint sets it when
+// the title or artist is actually scrolling, timer drivers read it.
+inline bool& media_popup_marquee_state() {
+  static bool active = false;
+  return active;
+}
+inline bool media_popup_marquee_active() { return media_popup_marquee_state(); }
 
 template<typename A>
 void dock_media_player_popup_paint(const A& app, cairo_t* cr, const eh::config::ShellConfig& sc);

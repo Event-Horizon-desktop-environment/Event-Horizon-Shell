@@ -28,11 +28,24 @@ bool ToplevelClient::start(const std::string& socket_path) {
     handle_event(std::move(topic), std::move(payload), std::move(fds));
   });
 
-  // Initial snapshot via request/response.
+  // Initial snapshot via request/response. Events arriving between
+  // subscribe and fetch are buffered and replayed in order afterwards.
+  {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+    syncing_ = true;
+  }
   const auto snapshot = ipc->request(std::string(kToplevelListCmd));
-  if (!snapshot || !toplevel_decode_list(*snapshot, list_)) {
-    std::cerr << "[toplevel-client] failed to fetch initial snapshot\n";
-    return false;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+    if (!snapshot || !toplevel_decode_list(*snapshot, list_)) {
+      std::cerr << "[toplevel-client] failed to fetch initial snapshot\n";
+      syncing_ = false;
+      pending_.clear();
+      return false;
+    }
+    for (auto& ev : pending_) dispatch_event(std::move(ev.topic), std::move(ev.payload));
+    pending_.clear();
+    syncing_ = false;
   }
 
   ipc_ = std::move(ipc);
@@ -40,7 +53,13 @@ bool ToplevelClient::start(const std::string& socket_path) {
   return true;
 }
 
+std::vector<ToplevelRecord> ToplevelClient::list() const {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
+  return list_;
+}
+
 const ToplevelRecord* ToplevelClient::find(std::uint64_t id) const {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   for (const auto& r : list_) {
     if (r.id == id) return &r;
   }
@@ -49,11 +68,26 @@ const ToplevelRecord* ToplevelClient::find(std::uint64_t id) const {
 
 void ToplevelClient::handle_event(std::string topic, std::string payload,
                                   std::vector<int>) {
+  {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+    if (syncing_) {
+      pending_.push_back(PendingEvent{std::move(topic), std::move(payload)});
+      return;
+    }
+  }
+  dispatch_event(std::move(topic), std::move(payload));
+}
+
+void ToplevelClient::dispatch_event(std::string topic, std::string payload) {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   if (topic == kToplevelClosed) {
+    if (payload.empty()) return;
     std::uint64_t id = 0;
     for (const char c : payload) {
       if (c < '0' || c > '9') return;
-      id = id * 10 + static_cast<std::uint64_t>(c - '0');
+      const unsigned digit = static_cast<unsigned>(c - '0');
+      if (id > (0xFFFFFFFFFFFFFFFFull - digit) / 10ull) return;
+      id = id * 10 + digit;
     }
     remove_record(id);
     return;
@@ -67,6 +101,7 @@ void ToplevelClient::handle_event(std::string topic, std::string payload,
 }
 
 void ToplevelClient::apply_record(const ToplevelRecord& rec, bool create) {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   auto it = std::find_if(list_.begin(), list_.end(),
                          [&rec](const ToplevelRecord& r) { return r.id == rec.id; });
   if (it != list_.end()) {
@@ -79,6 +114,7 @@ void ToplevelClient::apply_record(const ToplevelRecord& rec, bool create) {
 }
 
 void ToplevelClient::remove_record(std::uint64_t id) {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   auto it = std::find_if(list_.begin(), list_.end(),
                          [id](const ToplevelRecord& r) { return r.id == id; });
   if (it != list_.end()) {

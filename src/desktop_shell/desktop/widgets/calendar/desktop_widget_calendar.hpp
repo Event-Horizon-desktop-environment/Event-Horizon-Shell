@@ -20,6 +20,7 @@ struct DesktopCalendarWidget : DesktopWidget {
   [[nodiscard]] int intrinsicHeight() const override { return 370; }
 
 private:
+  void shift_month(int delta);
   void prev_month();
   void next_month();
 

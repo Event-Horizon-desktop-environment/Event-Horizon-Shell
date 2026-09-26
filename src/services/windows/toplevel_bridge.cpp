@@ -24,6 +24,7 @@ void ToplevelBridge::stop() {
     snapshotToken_ = 0;
   }
   service_.clear();
+  service_.unregister_handlers();
 }
 
 void ToplevelBridge::sync() {

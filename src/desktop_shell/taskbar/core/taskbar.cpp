@@ -16,6 +16,8 @@
 #include "desktop_shell/taskbar/layout/taskbar_position.hpp"
 #include "desktop_shell/widgets/popup/calendar/calendar_popup.hpp"
 #include "desktop_shell/widgets/popup/weather/weather_popup.hpp"
+#include "desktop_shell/widgets/app_drawer/tahoe/tahoe_launcher.hpp"
+#include "desktop_shell/desktop/widgets/weather_fancy/fancy_weather_card_paint.hpp"
 #include "desktop_shell/widgets/popup/volume_mixer/volume_mixer_popup.hpp"
 #include "desktop_shell/widgets/popup/media_player/media_player_popup.hpp"
 #include "desktop_shell/widgets/popup/vpn/vpn_popup.hpp"
@@ -56,6 +58,7 @@
 #include <cairo/cairo.h>
 
 #include <algorithm>
+#include <iomanip>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -77,8 +80,6 @@ using eh::shell::dock::control_center::ControlCenterActiveModal;
 namespace eh::shell::taskbar {
 
 // Forward declarations.
-
-static void taskbar_popup_draw(TaskbarApp& app);
 
 static bool eh_taskbar_fast_start() {
   static const bool v = [] {
@@ -560,6 +561,10 @@ void taskbar_popup_draw(TaskbarApp& app) {
       break;
     case TaskbarPopupKind::MediaPlayer:
       eh::widgets::popup::media_player::media_player_popup_paint(app, cr, sc);
+      // Kick the vsync chain while the title/artist scrolls (frame_done
+      // keeps it alive; it stops itself when the flag clears).
+      if (eh::shell::dock::popup::media_player::media_popup_marquee_active())
+        taskbar_schedule_frame(app);
       break;
     case TaskbarPopupKind::Vpn:
       eh::widgets::popup::vpn::vpn_popup_paint(app, cr, sc);
@@ -1316,49 +1321,52 @@ static void taskbar_handle_popup_click(TaskbarApp& app, uint32_t serial) {
   switch (app.popupKind) {
     case TaskbarPopupKind::Calendar:
     case TaskbarPopupKind::Weather:
+      taskbar_popup_close(app);
+      return;
     case TaskbarPopupKind::VolumeMixer:
     case TaskbarPopupKind::MediaPlayer:
-    case TaskbarPopupKind::Vpn: {
-      const double py = app.pointerY, px = app.pointerX;
-      constexpr double kVpnW = 320;
-      constexpr double kVpnKPad = 16.0;
-      constexpr double kVpnKHeaderH = 48.0;
-      constexpr double kVpnKRowH = 44.0;
-      constexpr double kVpnKBtnW = 84.0;
-      constexpr double kVpnKBtnH = 26.0;
-      constexpr double kVpnKRemoveSz = 22.0;
-      const int vpnCount = eh::shell::dock::popup::vpn::vpn_popup_entry_count();
-      const double H = kVpnKPad + kVpnKHeaderH + static_cast<double>(std::max(vpnCount, 1)) * kVpnKRowH + kVpnKPad;
-      if (px < 0 || px >= kVpnW || py < 0 || py >= H) { taskbar_popup_close(app); return; }
-      const double cbX = kVpnW - kVpnKPad - 24.0, cbY = kVpnKPad;
-      if (px >= cbX && px < cbX + 24.0 && py >= cbY && py < cbY + 24.0) { taskbar_popup_close(app); return; }
-      for (int vi = 0; vi < vpnCount; ++vi) {
-        const double rowY = kVpnKPad + kVpnKHeaderH + static_cast<double>(vi) * kVpnKRowH;
-        const double rowMidY = rowY + kVpnKRowH * 0.5;
-        const double remX = kVpnW - kVpnKPad - kVpnKRemoveSz;
-        const double remY = rowMidY - kVpnKRemoveSz * 0.5;
-        const double btnX = remX - 6.0 - kVpnKBtnW;
-        const double btnY = rowMidY - kVpnKBtnH * 0.5;
-        if (px >= remX && px < remX + kVpnKRemoveSz && py >= remY && py < remY + kVpnKRemoveSz) {
-          eh::shell::dock::popup::vpn::vpn_popup_remove_entry(vi);
-          taskbar_popup_draw(app);
-          return;
-        }
-        if (px >= btnX && px < btnX + kVpnKBtnW && py >= btnY && py < btnY + kVpnKBtnH) {
-          eh::shell::dock::popup::vpn::vpn_popup_toggle_entry(vi);
-          taskbar_popup_draw(app);
-          return;
-        }
-      }
       taskbar_popup_close(app);
+      return;
+    case TaskbarPopupKind::Vpn: {
+      switch (eh::shell::dock::popup::vpn::vpn_popup_click_action(app.pointerX, app.pointerY)) {
+        case eh::shell::dock::popup::vpn::VpnPopupClick::Close:
+          taskbar_popup_close(app);
+          break;
+        case eh::shell::dock::popup::vpn::VpnPopupClick::Redraw:
+          taskbar_popup_draw(app);
+          break;
+        case eh::shell::dock::popup::vpn::VpnPopupClick::Reopen:
+          taskbar_popup_create(app, app.popupAnchorX, eh::shell::dock::popup::vpn::kVpnPopupW,
+                               eh::shell::dock::popup::vpn::vpn_popup_height(
+                                   eh::shell::dock::popup::vpn::vpn_popup_entry_count()));
+          break;
+        case eh::shell::dock::popup::vpn::VpnPopupClick::None:
+          break;
+      }
+      wl_display_flush(app.display);
       return;
     }
     case TaskbarPopupKind::Battery:
       taskbar_popup_close(app);
       return;
-    case TaskbarPopupKind::Bluetooth:
-      taskbar_popup_close(app);
+    case TaskbarPopupKind::Bluetooth: {
+      switch (eh::widgets::bluetooth_popup_click_action(app.pointerX, app.pointerY)) {
+        case eh::widgets::BluetoothPopupClick::Close:
+          taskbar_popup_close(app);
+          break;
+        case eh::widgets::BluetoothPopupClick::Redraw:
+          taskbar_popup_draw(app);
+          break;
+        case eh::widgets::BluetoothPopupClick::Reopen:
+          taskbar_popup_create(app, app.popupAnchorX, eh::widgets::kBluetoothPopupW,
+                               eh::widgets::bluetooth_popup_height());
+          break;
+        case eh::widgets::BluetoothPopupClick::None:
+          break;
+      }
+      wl_display_flush(app.display);
       return;
+    }
     case TaskbarPopupKind::ControlCenter:
       taskbar_cc_click_handler(app);
       return;
@@ -2011,9 +2019,28 @@ static void taskbar_keyboard_key(void* data, wl_keyboard*, uint32_t, uint32_t,
       return;
     }
   } else {
+    // Tahoe grid: arrows move in 2D; Up from the first row returns focus to
+    // the search field. List mode keeps the old linear behavior.
+    const bool gridMode = s.viewMode == 0;
+    const int cols = eh::shell::tahoe::kTahoeCols;
+    auto grid_move = [&](int dSel) {
+      if (s.hits.empty()) return;
+      const int n = static_cast<int>(s.hits.size());
+      if (s.sel < 0) {
+        s.sel = (dSel < 0) ? n - 1 : 0;
+      } else {
+        s.sel += dSel;
+        if (s.sel < 0) s.sel = 0;
+        if (s.sel >= n) s.sel = n - 1;
+      }
+      eh::appdrawer::app_drawer_ensure_sel_visible(s);
+    };
     if (sym == XKB_KEY_Up) {
-      if (!s.hits.empty()) {
-        if (s.sel <= 0) s.sel = static_cast<int>(s.hits.size()) - 1;
+      if (gridMode && s.sel >= 0 && s.sel < cols) {
+        s.searchFieldFocused = true;
+      } else if (!s.hits.empty()) {
+        if (gridMode) grid_move(-cols);
+        else if (s.sel <= 0) s.sel = static_cast<int>(s.hits.size()) - 1;
         else s.sel--;
         eh::appdrawer::app_drawer_ensure_sel_visible(s);
       }
@@ -2023,11 +2050,18 @@ static void taskbar_keyboard_key(void* data, wl_keyboard*, uint32_t, uint32_t,
     }
     if (sym == XKB_KEY_Down) {
       if (!s.hits.empty()) {
-        if (s.sel < 0) s.sel = 0;
+        if (gridMode) grid_move(cols);
+        else if (s.sel < 0) s.sel = 0;
         else if (s.sel >= static_cast<int>(s.hits.size()) - 1) s.sel = 0;
         else s.sel++;
         eh::appdrawer::app_drawer_ensure_sel_visible(s);
       }
+      taskbar_popup_draw(app);
+      wl_display_flush(app.display);
+      return;
+    }
+    if ((sym == XKB_KEY_Left || sym == XKB_KEY_Right) && gridMode) {
+      grid_move(sym == XKB_KEY_Left ? -1 : 1);
       taskbar_popup_draw(app);
       wl_display_flush(app.display);
       return;
@@ -2852,26 +2886,34 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
   }
 
   if (wid == kSlotKeySpotlight) {
-    // Dock parity: a press that just dismissed this palette is a toggle-close,
-    // and an open palette of the same kind closes instead of reopening.
-    if (dismissedPopKind == TaskbarPopupKind::Spotlight) {
+    // Tahoe unification: Spotlight IS the Applications window now (search
+    // filters the grid live), so the Spotlight slot opens the same drawer.
+    if (dismissedPopKind == TaskbarPopupKind::AppDrawer) {
       wl_display_flush(app.display);
       return;
     }
-    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Spotlight) {
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::AppDrawer) {
       taskbar_popup_close(app);
       wl_display_flush(app.display);
       return;
     }
-    app.popupKind = TaskbarPopupKind::Spotlight;
-    app.spotlightQuery.clear();
-    app.spotlightSel = -1;
-    taskbar_spotlight_refresh(app);
-    const bool opened = taskbar_popup_create(app, slotCenterX, eh::shell::dock::kSpotlightPopupW(),
-                                             eh::shell::dock::spotlight_popup_total_height());
-    // Raise the bar to on-demand so it (and thus this palette's keystrokes)
-    // takes keyboard focus right away; popup_close drops it back to NONE.
-    if (opened) taskbar_set_keyboard_interactivity(app, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
+    app.appDrawerState = eh::appdrawer::AppDrawerState{};
+    app.appDrawerState.smenuMode = false;
+    app.appDrawerState.popupW = eh::appdrawer::app_drawer_popup_width();
+    app.appDrawerState.popupH = eh::appdrawer::app_drawer_popup_height();
+    app.appDrawerState.pinnedApps = app.settings.pinnedApps;
+    app.appDrawerState.startMenuPinnedApps = app.settings.pinnedApps;
+    app.appDrawerState.pointerX = app.pointerX;
+    app.appDrawerState.pointerY = app.pointerY;
+    app.appDrawerState.viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
+    eh::appdrawer::app_drawer_update_categories(app.appDrawerState);
+    eh::shell::dock::app_drawer::invalidate_desktop_entries_cache();
+    eh::appdrawer::app_drawer_refresh_hits(app.appDrawerState);
+    app.popupKind = TaskbarPopupKind::AppDrawer;
+    app.appDrawerPowerConfirmOpen = false;
+    app.appDrawerPowerConfirmIdx = -1;
+    taskbar_popup_create(app, slotCenterX,
+                         app.appDrawerState.popupW, app.appDrawerState.popupH);
     wl_display_flush(app.display);
     return;
   }
@@ -2894,7 +2936,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
       app.appDrawerState.pointerX = app.pointerX;
       app.appDrawerState.pointerY = app.pointerY;
       app.appDrawerState.viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
-      if (smenuMode) eh::appdrawer::app_drawer_update_categories(app.appDrawerState);
+      eh::appdrawer::app_drawer_update_categories(app.appDrawerState);
       eh::shell::dock::app_drawer::invalidate_desktop_entries_cache();
       eh::appdrawer::app_drawer_refresh_hits(app.appDrawerState);
       app.popupKind = TaskbarPopupKind::AppDrawer;
@@ -2945,7 +2987,11 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     else {
       app.popupKind = TaskbarPopupKind::Weather;
       app.weatherInstanceId = wid;
-      taskbar_popup_create(app, slotCenterX, eh::widgets::popup::weather::kWeatherPopupW, eh::widgets::popup::weather::kWeatherPopupH);
+      // Same shared card as the desktop weather-fancy widget: height is
+      // measured so long content is never cut off.
+      taskbar_popup_create(app, slotCenterX, eh::shell::dock::popup::weather::kWeatherPopupW,
+                           eh::shell::desktop::measure_fancy_weather_height(
+                               eh::config::shell_config_snapshot(), wid));
     }
     wl_display_flush(app.display);
     return;
@@ -3167,12 +3213,24 @@ static void sync_taskbar_tray_items(TaskbarApp& app) {
   app.trayItems = std::move(newItems);
 }
 
+static void taskbar_start_tray_async(TaskbarApp& app) {
+  if (app.trayStartLaunched.exchange(true)) return;
+  if (app.trayStartThread.joinable()) app.trayStartThread.join();
+  app.trayStartThread = std::thread([]() {
+    const bool dock_hosts_tray = eh::config::shell_config_snapshot().dock.dockShowDock;
+    constexpr int kDockClaimWaitMs = 8000;
+    (void)eh::tray::TrayManager::instance().start_secondary_host(dock_hosts_tray ? kDockClaimWaitMs : 0);
+  });
+}
+
 static void setup_tray_bus(TaskbarApp& app) {
   try {
     app.trayBus = sdbus::createSessionBusConnection();
+    if (app.trayBus) app.trayBus->setMethodCallTimeout(eh::tray::kTrayMethodCallTimeout);
   } catch (const std::exception& e) {
     eh::shell_log::dbus_tray("tray bus connection failed: ", e.what());
   }
+  taskbar_start_tray_async(app);
   app.trayEventFd = eh::tray::TrayManager::instance().subscribe();
   if (app.trayEventFd < 0) {
     eh::shell_log::dbus_tray("failed to subscribe to TrayManager");
@@ -3264,6 +3322,8 @@ bool taskbar_init_on_display(TaskbarApp& app) {
 void taskbar_init_deferred_startup(TaskbarApp& app) {
    
   setup_tray_bus(app);
+
+  eh::net::NetworkManagerService::instance().start();
 
   try {
     app.mpris = std::make_unique<eh::mpris::DockMpris>();
@@ -3360,11 +3420,19 @@ static void taskbar_frame_done(void* data, wl_callback* cb, uint32_t /*composito
   wl_callback_destroy(cb);
   app.frameCallback = nullptr;
   app.frameCallbackRequestedMs = 0;
+  app.frameDoneCount++;
   // Tick first: while an animation is live this both advances it and — via
   // taskbar_draw()'s schedule — requests the next frame, giving a vsync-locked
   // frame chain for the launch bounce / auto-hide slide.
   app.anim.tick();
   if (app.frameRedrawPending || app.anim.has_active()) taskbar_draw(app);
+  // Smooth media-popup marquee: repaint the open player every vsync while
+  // its title/artist scrolls, and keep the frame chain alive for it.
+  if (app.popupSurface && app.popupKind == TaskbarPopupKind::MediaPlayer &&
+      eh::shell::dock::popup::media_player::media_popup_marquee_active()) {
+    taskbar_popup_draw(app);
+    taskbar_schedule_frame(app);
+  }
 }
 
 static const wl_callback_listener g_taskbar_frame_listener = {
@@ -3413,6 +3481,7 @@ void taskbar_schedule_frame(TaskbarApp& app) {
         taskbar_now_ms() - app.frameCallbackRequestedMs > 100) {
       debug_log("taskbar", "schedule_frame: watchdog — abandoning stalled frame callback");
       app.frameCallback = nullptr;
+      app.frameWatchdogCount++;
     } else {
       return;
     }
@@ -3428,14 +3497,33 @@ void taskbar_schedule_frame(TaskbarApp& app) {
 
 // Main draw.
 
+namespace {
+double g_phaseReloadMs = 0.0;
+double g_phaseMeasureMs = 0.0;
+double g_phasePaintMs = 0.0;
+double g_phasePresentMs = 0.0;
+uint64_t g_phaseFrames = 0;
+}
+
+static void taskbar_phase_accum_paint(double ms) { g_phasePaintMs += ms; }
+static void taskbar_phase_accum_present(double ms) { g_phasePresentMs += ms; }
+
+static bool taskbar_draw_trace() {
+  static const bool on = eh::debug_profile::env_bool("EH_TASKBAR_DRAW_TRACE");
+  return on;
+}
+
 void taskbar_draw(TaskbarApp& app) {
    
   static uint64_t drawCallCount = 0;
   drawCallCount++;
   const auto tDraw0 = std::chrono::steady_clock::now();
-  debug_log("taskbar", "draw: #%llu BEGIN enabled=%d layers=%zu vk=%p vkFailed=%d",
-            (unsigned long long)drawCallCount, (int)app.enabled,
-            app.layers.size(), (void*)app.taskbarVk.get(), (int)app.vkFailed);
+  const bool traceDraw = taskbar_draw_trace();
+  if (traceDraw) {
+    debug_log("taskbar", "draw: #%llu BEGIN enabled=%d layers=%zu vk=%p vkFailed=%d",
+              (unsigned long long)drawCallCount, (int)app.enabled,
+              app.layers.size(), (void*)app.taskbarVk.get(), (int)app.vkFailed);
+  }
   const auto& sc = eh::config::shell_config_snapshot();
   taskbar_maybe_reload_settings(app, sc);
   const auto tReload = std::chrono::steady_clock::now();
@@ -3443,6 +3531,7 @@ void taskbar_draw(TaskbarApp& app) {
 
   // Per-call diagnostic snapshot.
   const auto diag = [&](const char* stage) {
+    if (!traceDraw) return;
     debug_log("taskbar", "draw: #%llu %s enabled=%d layers=%zu pendingRebind=%d fastStartPh=%d deferRedraw=%d",
               (unsigned long long)drawId, stage,
               (int)app.enabled, app.layers.size(),
@@ -3458,18 +3547,13 @@ void taskbar_draw(TaskbarApp& app) {
   };
   diag("enter");
 
-  if (!app.enabled) { diag("exit:disabled"); debug_log("taskbar", "draw: #%llu disabled, exit early", (unsigned long long)drawCallCount); return; }
+  if (!app.enabled) { diag("exit:disabled"); if (traceDraw) debug_log("taskbar", "draw: #%llu disabled, exit early", (unsigned long long)drawCallCount); return; }
   app.frameRedrawPending = false;
   // Advance the animation clock on every draw (not only from the frame
   // callback) so input/config-triggered draws also progress the launch bounce
   // and the auto-hide slide, and keep the frame chain alive while one runs.
   app.anim.tick();
   if (app.anim.has_active()) taskbar_schedule_frame(app);
-  eh::shell::dock_slot_hooks::battery_widget_poll();
-  eh::shell::dock_slot_hooks::bluetooth_widget_poll();
-  if (app.mpris) {
-    try { (void)app.mpris->poll_refresh(); } catch (const std::exception&) {}
-  }
   taskbar_tooltip_tick(app);
   if (app.layers.empty() || app.pendingOutputRebind) { diag("exit:no_layers"); return; }
 
@@ -3538,14 +3622,23 @@ void taskbar_draw(TaskbarApp& app) {
   const int radius = ts.radius;
   const int margin = isFloating ? ts.floatingAmount : 0;
 
+  eh::shell::shared::RunningSnapshot runningSnap;
+  if (app.toplevels && app.toplevels->size() > 0) {
+    runningSnap = eh::shell::shared::build_running_snapshot(
+        *app.toplevels, app.appFirstSeenSerial, app.settings.groupApps);
+  }
+  const eh::mpris::PlayerSnapshot mprisSnap =
+      app.mpris ? app.mpris->snapshot() : eh::mpris::PlayerSnapshot{};
+
   // Pre-measure section widths for fill mode (bar is sized to the three-
   // section layout, not just the raw content width).
   eh::shell::taskbar::TaskbarSectionWidths fillSections{};
   if (isFill) {
     const auto tM0 = std::chrono::steady_clock::now();
     fillSections = eh::shell::taskbar::taskbar_measure_sections(
-        app, ts.leftWidgets, ts.centerWidgets, ts.rightWidgets);
+        app, ts.leftWidgets, ts.centerWidgets, ts.rightWidgets, runningSnap, mprisSnap);
     const double tM = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tM0).count();
+    g_phaseMeasureMs += tM;
     if (tM > 0.5) std::cerr << "[taskbar-bench] measure_sections=" << tM << "ms\n";
   }
 
@@ -3657,37 +3750,45 @@ void taskbar_draw(TaskbarApp& app) {
 
       if (!ts.leftWidgets.empty() || !ts.centerWidgets.empty() || !ts.rightWidgets.empty()) {
         g_widgetHits.clear();
+        const auto tPaint0 = std::chrono::steady_clock::now();
         taskbar_paint_widget_bar(app, cr, barX, barY, barW, barHVisible,
                                  ts.leftWidgets, ts.centerWidgets, ts.rightWidgets,
                                  &g_widgetHits,
                                  app.hoverSlot, app.pressedSlot, app.hoverLiftPx,
-                                 use_panel);
+                                 use_panel, runningSnap, mprisSnap);
+        taskbar_phase_accum_paint(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - tPaint0).count());
       }
       cairo_restore(cr);
     }
 
     cairo_restore(cr);
     cairo_surface_flush(up->glRaster.cairo_surface());
-    if (up->bgEffect && barW > 0 && barHVisible > 0) {
-      wl_region* rgn = wl_compositor_create_region(app.compositor);
-      wl_region_add(rgn, static_cast<int32_t>(barX), static_cast<int32_t>(barY),
-                    static_cast<int32_t>(barW), static_cast<int32_t>(barHVisible));
-      ext_background_effect_surface_v1_set_blur_region(up->bgEffect, rgn);
-      wl_region_destroy(rgn);
-    }
-    // Set input region to match visible bar area
-    {
-      wl_region* inputRgn = wl_compositor_create_region(app.compositor);
-      wl_region_add(inputRgn, static_cast<int32_t>(barX), static_cast<int32_t>(barY),
-                    static_cast<int32_t>(barW), static_cast<int32_t>(barHVisible));
-      wl_surface_set_input_region(up->surface, inputRgn);
-      wl_region_destroy(inputRgn);
+    if ((up->regionBarW != barW || up->regionBarH != barHVisible) && barW > 0 && barHVisible > 0) {
+      up->regionBarW = barW;
+      up->regionBarH = barHVisible;
+      if (up->bgEffect) {
+        wl_region* rgn = wl_compositor_create_region(app.compositor);
+        wl_region_add(rgn, static_cast<int32_t>(barX), static_cast<int32_t>(barY),
+                      static_cast<int32_t>(barW), static_cast<int32_t>(barHVisible));
+        ext_background_effect_surface_v1_set_blur_region(up->bgEffect, rgn);
+        wl_region_destroy(rgn);
+      }
+      // Set input region to match visible bar area
+      {
+        wl_region* inputRgn = wl_compositor_create_region(app.compositor);
+        wl_region_add(inputRgn, static_cast<int32_t>(barX), static_cast<int32_t>(barY),
+                      static_cast<int32_t>(barW), static_cast<int32_t>(barHVisible));
+        wl_surface_set_input_region(up->surface, inputRgn);
+        wl_region_destroy(inputRgn);
+      }
     }
     if (up->surfExt.viewport && up->surface) {
       wl_surface_set_buffer_scale(up->surface, 1);
       wp_viewport_set_destination(up->surfExt.viewport, logW, logH);
     }
     bool transient = false;
+    const auto tPresent0 = std::chrono::steady_clock::now();
     if (!up->vkLayer->present_cpu_bgra(*app.taskbarVk, up->glRaster.data(), bufW, bufH, up->glRaster.stride(), &transient)) {
       diag("skip:vkPresentFail");
       if (transient) {
@@ -3699,15 +3800,80 @@ void taskbar_draw(TaskbarApp& app) {
     }
     wl_surface_damage_buffer(up->surface, 0, 0, INT32_MAX, INT32_MAX);
     wl_surface_commit(up->surface);
-    std::cerr << "[taskbar-dbg2] #" << drawId << " committed layer " << (up.get())
-              << " w=" << logW << " h=" << logH
-              << " radius=" << radius << " opacity=" << ts.opacity << " iconSize=" << ts.iconSize << "\n";
+    taskbar_phase_accum_present(std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tPresent0).count());
+    if (traceDraw) {
+      std::cerr << "[taskbar-dbg2] #" << drawId << " committed layer " << (up.get())
+                << " w=" << logW << " h=" << logH
+                << " radius=" << radius << " opacity=" << ts.opacity << " iconSize=" << ts.iconSize << "\n";
+    }
   }
   if (app.display) wl_display_flush(app.display);
   const double tDrawTotal = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tDraw0).count();
   const double tReloadMs = std::chrono::duration<double, std::milli>(tReload - tDraw0).count();
-  std::cerr << "[taskbar-dbg2] #" << drawId << " done draw_total=" << tDrawTotal << "ms  reload=" << tReloadMs << "ms\n";
-  std::cerr << "[taskbar-bench] draw_total=" << tDrawTotal << "ms  reload=" << tReloadMs << "ms\n";
+  g_phaseReloadMs += tReloadMs;
+  g_phaseFrames++;
+
+  {
+    static uint64_t fpsFrames = 0;
+    static double fpsMinGap = 0.0;
+    static double fpsMaxGap = 0.0;
+    static std::chrono::steady_clock::time_point fpsWindowStart{};
+    static std::chrono::steady_clock::time_point fpsLast{};
+    const auto now = std::chrono::steady_clock::now();
+    if (fpsWindowStart == std::chrono::steady_clock::time_point{}) {
+      fpsWindowStart = now;
+      fpsLast = now;
+    }
+    if (fpsFrames > 0) {
+      const double gap = std::chrono::duration<double, std::milli>(now - fpsLast).count();
+      if (fpsMinGap == 0.0 || gap < fpsMinGap) fpsMinGap = gap;
+      if (gap > fpsMaxGap) fpsMaxGap = gap;
+    }
+    fpsLast = now;
+    fpsFrames++;
+    const double windowMs = std::chrono::duration<double, std::milli>(now - fpsWindowStart).count();
+    if (windowMs >= 5000.0) {
+      const double div = static_cast<double>(std::max<uint64_t>(g_phaseFrames, 1));
+      std::cerr << std::fixed << std::setprecision(1) << "[taskbar-fps] hz="
+                << (fpsFrames * 1000.0 / windowMs) << " frames=" << fpsFrames
+                << " avg_gap_ms=" << (windowMs / std::max<uint64_t>(fpsFrames, 1))
+                << " gap_min_ms=" << fpsMinGap << " gap_max_ms=" << fpsMaxGap
+                << " draw_p50_hint_ms=" << tDrawTotal
+                << " phase_avg_ms={reload=" << (g_phaseReloadMs / div)
+                << " measure=" << (g_phaseMeasureMs / div)
+                << " paint=" << (g_phasePaintMs / div)
+                << " present=" << (g_phasePresentMs / div) << "}"
+                << " sec_avg_ms={L=" << (app.sectionMs[0] / div)
+                << " C=" << (app.sectionMs[1] / div)
+                << " R=" << (app.sectionMs[2] / div) << "}"
+                << " cb={done=" << app.frameDoneCount
+                << " watchdog=" << app.frameWatchdogCount << "}"
+                << " icons={hit=" << app.scaledIcons.hits
+                << " miss=" << app.scaledIcons.misses << "}\n";
+      fpsFrames = 0;
+      fpsMinGap = 0.0;
+      fpsMaxGap = 0.0;
+      fpsWindowStart = now;
+      app.frameDoneCount = 0;
+      app.frameWatchdogCount = 0;
+      app.scaledIcons.hits = 0;
+      app.scaledIcons.misses = 0;
+      g_phaseReloadMs = 0.0;
+      g_phaseMeasureMs = 0.0;
+      g_phasePaintMs = 0.0;
+      g_phasePresentMs = 0.0;
+      g_phaseFrames = 0;
+      app.sectionMs[0] = 0.0;
+      app.sectionMs[1] = 0.0;
+      app.sectionMs[2] = 0.0;
+    }
+  }
+
+  if (traceDraw) {
+    std::cerr << "[taskbar-dbg2] #" << drawId << " done draw_total=" << tDrawTotal << "ms  reload=" << tReloadMs << "ms\n";
+    std::cerr << "[taskbar-bench] draw_total=" << tDrawTotal << "ms  reload=" << tReloadMs << "ms\n";
+  }
 }
 
 void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfig& sc) {
@@ -3786,7 +3952,9 @@ void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfi
   if (app.icons.icon_theme() != sc.dock.iconTheme) {
     app.icons.set_icon_theme(sc.dock.iconTheme);
     app.settings.iconTheme = sc.dock.iconTheme;
+    app.scaledIcons.clear();
   }
+  if (next.iconSize != app.settings.iconSize) app.scaledIcons.clear();
 
   if (!geometryChanged && !visualChanged && !outputChanged && !autoHideChanged) {
     static uint64_t lastSame = 0;
@@ -4232,6 +4400,7 @@ void taskbar_cleanup(TaskbarApp& app) {
   eh::shell::dock_slot_hooks::bluetooth_widget_shutdown();
 
   // Clean up tray subscription and items
+  if (app.trayStartThread.joinable()) app.trayStartThread.join();
   eh::tray::TrayManager::instance().unsubscribe(app.trayEventFd);
   app.trayEventFd = -1;
   {
@@ -4373,7 +4542,7 @@ void taskbar_toggle_menu(TaskbarApp& app) {
     app.appDrawerState.pinnedApps = app.settings.pinnedApps;
     app.appDrawerState.startMenuPinnedApps = app.settings.pinnedApps;
     app.appDrawerState.viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
-    if (smenuMode) eh::appdrawer::app_drawer_update_categories(app.appDrawerState);
+    eh::appdrawer::app_drawer_update_categories(app.appDrawerState);
     eh::shell::dock::app_drawer::invalidate_desktop_entries_cache();
     eh::appdrawer::app_drawer_refresh_hits(app.appDrawerState);
     app.popupKind = TaskbarPopupKind::AppDrawer;

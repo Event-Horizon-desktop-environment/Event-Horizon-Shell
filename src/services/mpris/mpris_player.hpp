@@ -39,6 +39,9 @@ struct PlayerSnapshot {
   bool can_go_previous = false;
   bool can_play = false;
   bool can_pause = false;
+  bool shuffle = false;
+  // MPRIS LoopStatus: "None", "Track" or "Playlist" (empty = unknown).
+  std::string loop_status{};
 
   int64_t position_us = 0;
   int64_t duration_us = 0;
@@ -70,6 +73,9 @@ public:
   void next();
   void previous();
   void set_position(int64_t position_us);
+  void toggle_shuffle();
+  // Cycle LoopStatus None -> Playlist -> Track -> None.
+  void cycle_loop_status();
 
   static int media_hit_zone(double local_x, double slot_width, double icon_ref_px);
 

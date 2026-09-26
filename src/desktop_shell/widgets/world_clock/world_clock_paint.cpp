@@ -50,7 +50,10 @@ size_t wc_curl_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata) {
 
 bool wc_fetch_timezone(const std::string& tz, long& outOffsetSec) {
   std::string url = "https://timeapi.io/api/v1/timezone/zone?timeZone=";
-  url += curl_easy_escape(nullptr, tz.c_str(), static_cast<int>(tz.size()));
+  char* escaped = curl_easy_escape(nullptr, tz.c_str(), static_cast<int>(tz.size()));
+  if (escaped == nullptr) return false;
+  url += escaped;
+  curl_free(escaped);
 
   CURL* curl = curl_easy_init();
   if (!curl) return false;
@@ -62,7 +65,7 @@ bool wc_fetch_timezone(const std::string& tz, long& outOffsetSec) {
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, 8L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
   curl_easy_setopt(curl, CURLOPT_USERAGENT, "EventHorizon/1.0");
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
 
@@ -132,13 +135,6 @@ void wc_ensure_api_fetch(const std::vector<std::string>& timezones) {
 struct CityEntry {
   std::string label;
   std::string timezone;
-  // Legacy neon-accent fields, retained only so existing configs with
-  // city_N_color entries keep parsing cleanly. Unused by the analog face
-  // renderer below (face color is now driven by day/night, not per-city
-  // accent).
-  double glowR = 0.0;
-  double glowG = 1.0;
-  double glowB = 1.0;
 };
 
 static std::vector<CityEntry> parse_cities(const eh::config::ShellConfig& sc, std::string_view instance_id) {
@@ -154,23 +150,12 @@ static std::vector<CityEntry> parse_cities(const eh::config::ShellConfig& sc, st
       label = (pos != std::string::npos) ? tz.substr(pos + 1) : tz;
       if (label.size() > 10) label = label.substr(0, 10);
     }
-    const std::string colorKey = prefix + "_color";
-    const std::string colorVal = widget_setting(sc, instance_id, colorKey);
-    double r = 0.0, g = 1.0, b = 1.0;
-    if (!colorVal.empty()) {
-      unsigned int cr = 0, cg = 0, cb = 0;
-      if (std::sscanf(colorVal.c_str(), "#%02x%02x%02x", &cr, &cg, &cb) == 3) {
-        r = static_cast<double>(cr) / 255.0;
-        g = static_cast<double>(cg) / 255.0;
-        b = static_cast<double>(cb) / 255.0;
-      }
-    }
-    cities.push_back({label, tz, r, g, b});
+    cities.push_back({label, tz});
     idx++;
   }
   if (cities.empty()) {
-    cities.push_back({"Local", "", 0.0, 1.0, 1.0});
-    cities.push_back({"UTC", "UTC", 1.0, 0.0, 1.0});
+    cities.push_back({"Local", ""});
+    cities.push_back({"UTC", "UTC"});
   }
 
   // Start API fetch for configured timezones
@@ -498,8 +483,8 @@ double dock_world_clock_slot_width(cairo_t* measure_cr, const eh::config::ShellC
   std::ostringstream cityFd, smallFd;
   const double fontCityPx = std::clamp(icon_ref_px * 0.26, 10.0, 15.0);
   const double fontSmallPx = std::clamp(icon_ref_px * 0.20, 8.0, 12.0);
-  cityFd << "Sans Bold " << static_cast<int>(fontCityPx);
-  smallFd << "Sans " << static_cast<int>(fontSmallPx);
+  cityFd << "Inter SemiBold " << static_cast<int>(fontCityPx);
+  smallFd << "Inter " << static_cast<int>(fontSmallPx);
 
   PangoLayout* cityLayout = wc_make_layout(measure_cr, cityFd.str().c_str());
   PangoLayout* smallLayout = wc_make_layout(measure_cr, smallFd.str().c_str());
@@ -527,7 +512,7 @@ void paint_world_clock_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std:
   if (cities.empty()) return;
 
   const std::time_t now = std::time(nullptr);
-  const CityEntry refEntry{"", "", 0, 0, 0}; // empty timezone -> device local time
+  const CityEntry refEntry{"", ""};
   const CityTimeInfo reference = resolve_city_time(refEntry, now);
 
   cairo_save(cr);
@@ -536,8 +521,8 @@ void paint_world_clock_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std:
   std::ostringstream cityFd, smallFd, numFd;
   const double fontCityPx = std::clamp(icon_ref_px * 0.26, 10.0, 15.0);
   const double fontSmallPx = std::clamp(icon_ref_px * 0.20, 8.0, 12.0);
-  cityFd << "Sans Bold " << static_cast<int>(fontCityPx);
-  smallFd << "Sans " << static_cast<int>(fontSmallPx);
+  cityFd << "Inter SemiBold " << static_cast<int>(fontCityPx);
+  smallFd << "Inter " << static_cast<int>(fontSmallPx);
 
   PangoLayout* cityLayout = wc_make_layout(cr, cityFd.str().c_str());
   PangoLayout* smallLayout = wc_make_layout(cr, smallFd.str().c_str());
@@ -545,7 +530,7 @@ void paint_world_clock_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std:
   const WorldClockLayout lay = compute_layout(cities, icon_ref_px, slot_h, cityLayout, smallLayout);
 
   const double numFontPx = std::clamp(lay.diameter * 0.16, 7.0, 13.0);
-  numFd << "Sans Bold " << static_cast<int>(numFontPx);
+  numFd << "Inter SemiBold " << static_cast<int>(numFontPx);
   PangoLayout* numLayout = wc_make_layout(cr, numFd.str().c_str());
 
   const double interCellGap = 18.0;

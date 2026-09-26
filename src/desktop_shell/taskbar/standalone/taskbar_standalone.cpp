@@ -11,6 +11,7 @@
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/common/monitor/output_assign.hpp"
 #include "desktop_shell/common/mem/periodic_trim.hpp"
+#include "desktop_shell/widgets/dock_slot_hooks.hpp"
 #include "desktop_shell/controlcenter/input/control_center_bus_hook.hpp"
 #include "desktop_shell/shared/core/config_watch.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
@@ -20,9 +21,14 @@
 #include "wl/core/connection.hpp"
 #include "wl/toplevel/foreign_toplevels.hpp"
 
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <poll.h>
@@ -37,6 +43,41 @@ namespace {
 
 bool is_settings_command(const std::string& payload) {
   return payload == "settings.toggle";
+}
+
+struct ToplevelBindCtx {
+  wl_display* display = nullptr;
+  eh::wayland::ForeignToplevels* toplevels = nullptr;
+  zwlr_foreign_toplevel_manager_v1* manager = nullptr;
+};
+
+void toplevel_bind_global(void* data, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
+  auto* ctx = static_cast<ToplevelBindCtx*>(data);
+  if (ctx->manager) return;
+  if (std::string_view(interface) != zwlr_foreign_toplevel_manager_v1_interface.name) return;
+  ctx->manager = static_cast<zwlr_foreign_toplevel_manager_v1*>(
+      wl_registry_bind(registry, name, &zwlr_foreign_toplevel_manager_v1_interface, std::min<uint32_t>(version, 3)));
+  if (ctx->manager) ctx->toplevels->attach(ctx->manager, ctx->display);
+}
+
+void toplevel_bind_global_remove(void*, wl_registry*, uint32_t) {}
+
+const wl_registry_listener kToplevelBindListener = {
+    .global = toplevel_bind_global,
+    .global_remove = toplevel_bind_global_remove,
+};
+
+zwlr_foreign_toplevel_manager_v1* bind_toplevel_manager_for_tracking(wl_display* display,
+                                                                   eh::wayland::ForeignToplevels& toplevels) {
+  if (!display) return nullptr;
+  wl_registry* registry = wl_display_get_registry(display);
+  if (!registry) return nullptr;
+  ToplevelBindCtx ctx{display, &toplevels, nullptr};
+  wl_registry_add_listener(registry, &kToplevelBindListener, &ctx);
+  wl_display_flush(display);
+  (void)wl_display_roundtrip(display);
+  wl_registry_destroy(registry);
+  return ctx.manager;
 }
 
 // NEW command (distinct from the dock's `menu.toggle`): only the taskbar
@@ -104,8 +145,7 @@ int run_taskbar_standalone() {
   // zwlr_foreign_toplevel_manager_v1 (+ the extended toplevel list) so the running-app
   // snapshot stays live without the supervisor's ToplevelTracker seam.
   eh::wayland::ForeignToplevels toplevels;
-  if (app.wl && app.wl->foreign_toplevel_manager()) {
-    toplevels.attach(app.wl->foreign_toplevel_manager(), app.display);
+  if (bind_toplevel_manager_for_tracking(app.display, toplevels)) {
     toplevels.set_visual_dirty_hook([&app]() {
       app.frameRedrawPending = true;
       taskbar_schedule_frame(app);
@@ -124,17 +164,33 @@ int run_taskbar_standalone() {
 
   create_taskbar_layers(app);
 
-  // 1 s poll timer — the taskbar repaints / re-polls on it (mirrors the
-  // supervisor's old taskbar_poll_timer_fd_).
-  const int poll_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-  if (poll_timer_fd >= 0) {
-    itimerspec its{};
-    its.it_interval.tv_sec = 1;
-    its.it_interval.tv_nsec = 0;
-    its.it_value.tv_sec = 1;
-    its.it_value.tv_nsec = 0;
-    (void)timerfd_settime(poll_timer_fd, 0, &its, nullptr);
-  }
+  // 1 s poll timer.
+  int poll_timer_fd = -1;
+  int settings_fd = -1;
+  auto install_loop_fds = [&]() {
+    if (poll_timer_fd < 0) {
+      poll_timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+      if (poll_timer_fd < 0) {
+        std::cerr << "[horizon-taskbar] poll timer unavailable (" << std::strerror(errno)
+                  << "); repaints fall back to event-driven only\n";
+      } else {
+        itimerspec its{};
+        its.it_interval.tv_sec = 1;
+        its.it_interval.tv_nsec = 0;
+        its.it_value.tv_sec = 1;
+        its.it_value.tv_nsec = 0;
+        (void)timerfd_settime(poll_timer_fd, 0, &its, nullptr);
+      }
+    }
+    if (settings_fd < 0) {
+      settings_fd = eh::shell::shared::open_state_inotify();
+      if (settings_fd < 0) {
+        std::cerr << "[horizon-taskbar] settings watch unavailable (" << std::strerror(errno)
+                  << "); settings changes fall back to the poll timer\n";
+      }
+    }
+  };
+  install_loop_fds();
 
   // IPC client: config.applied → reload + redraw (settings saves, palette,
   // drag-preview merge — the snapshot carries the overlay); command.request →
@@ -177,7 +233,7 @@ int run_taskbar_standalone() {
 
   // Own settings watcher: raw file edits are not broadcast on the bus; each
   // child watches its own config (mirrors horizon-dock / horizon-desktop).
-  const int settings_fd = eh::shell::shared::open_state_inotify();
+  // Created by install_loop_fds() above so the loop can heal it.
 
   taskbar_write_pid_file(::getpid());
 
@@ -186,7 +242,17 @@ int run_taskbar_standalone() {
   mux.wayland_display = app.display;
   mux.display_fd = wl_display_get_fd(app.display);
   mux.on_display = [&running]() { return running; };
-  mux.on_idle_flush = [&app](bool) {
+  mux.on_idle_flush = [&app, &install_loop_fds, &poll_timer_fd, &settings_fd](bool) {
+    if ((poll_timer_fd < 0 || settings_fd < 0)) {
+      static uint64_t lastFdHealMs = 0;
+      const uint64_t nowMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+              .count());
+      if (nowMs - lastFdHealMs > 5000) {
+        lastFdHealMs = nowMs;
+        install_loop_fds();
+      }
+    }
     // Honor output rebinds requested by taskbar_maybe_reload_settings.
     if (app.pendingOutputRebind) {
       app.pendingOutputRebind = false;
@@ -203,16 +269,21 @@ int run_taskbar_standalone() {
       handlers.emplace_back(app.trayEventFd, POLLIN, [&app](short) { taskbar_handle_tray(app); });
     }
     if (poll_timer_fd >= 0) {
-      handlers.emplace_back(poll_timer_fd, POLLIN, [&app, poll_timer_fd](short) {
+      handlers.emplace_back(poll_timer_fd, POLLIN, [&app, &poll_timer_fd](short) {
         uint64_t exp = 0;
         (void)read(poll_timer_fd, &exp, sizeof(exp));
         if (!app.enabled) return;
+        eh::shell::dock_slot_hooks::battery_widget_poll();
+        eh::shell::dock_slot_hooks::bluetooth_widget_poll();
+        if (app.mpris) {
+          try { (void)app.mpris->poll_refresh(); } catch (const std::exception&) {}
+        }
         app.frameRedrawPending = true;
         taskbar_schedule_frame(app);
       });
     }
     if (settings_fd >= 0) {
-      handlers.emplace_back(settings_fd, POLLIN, [&app, settings_fd](short) {
+      handlers.emplace_back(settings_fd, POLLIN, [&app, &settings_fd](short) {
         eh::shell::shared::drain_inotify(settings_fd, [&app]() {
           eh::config::shell_config_invalidate_light();
           const auto& sc = eh::config::shell_config_snapshot_skip_matugen();
@@ -264,7 +335,7 @@ int run_taskbar_standalone() {
 
   std::cout << "[horizon-taskbar] running pid=" << ::getpid() << " ipc=" << (ipc_ok ? 1 : 0)
             << " trayEventFd=" << app.trayEventFd << " pollTimerFd=" << poll_timer_fd
-            << " settingsFd=" << settings_fd << "\n";
+            << " settingsFd=" << settings_fd << " toplevels=" << toplevels.size() << "\n";
 
   (void)mux.run(&running);
 

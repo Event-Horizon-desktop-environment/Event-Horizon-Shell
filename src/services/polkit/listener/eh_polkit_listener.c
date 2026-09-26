@@ -86,9 +86,8 @@ static PolkitIdentity *choose_first_unix_user(GList *identities) {
 static void on_completed(PolkitAgentSession *session, gboolean gained_authorization, gpointer user_data) {
   EhPolkitListener *listener = EH_PL(user_data);
   (void)session;
-  (void)gained_authorization;
 
-  eh_polkit_bridge_end_prompt();
+  eh_polkit_bridge_end_prompt(gained_authorization ? 1 : 0);
 
   if (listener->task) {
     GTask *t = listener->task;

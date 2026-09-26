@@ -15,16 +15,14 @@
 #include <unordered_map>
 #include <vector>
 
-#include "m3/core/primitives/box.hpp"
+#include "desktop_shell/shared/core/cairo_helpers.hpp"
 #include <cairo/cairo.h>
 
 namespace eh::shell::dock::popup::volume_mixer {
 namespace {
 
-// Constants.
-
 constexpr double kPad          = 16.0;
-constexpr double kCornerRadius = 14.0;
+constexpr double kCornerRadius = 20.0;
 constexpr double kHeaderH      = 48.0;
 constexpr double kPillH        = 28.0;
 constexpr double kPillR        = 8.0;
@@ -57,8 +55,6 @@ constexpr double kEqPanelPad    = 8.0;
 constexpr double kEqPresetBtnH  = 30.0;
 constexpr double kEqPresetBtnW  = 100.0;
 constexpr double kEqBandW       = 30.0;
-
-// Data types.
 
 struct DeviceInfo {
   std::uint32_t node_id = 0;
@@ -239,17 +235,6 @@ SliderGeom stream_slider_geom(int row_index, double header_bottom, double device
   return {slider_left, row_y + (kRowH - kSliderTrackH) * 0.5, slider_w, kSliderTrackH};
 }
 
-// Paint helpers.
-
-void rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
-  const double rad = std::min({r, w * 0.5, h * 0.5});
-  cairo_new_sub_path(cr);
-  cairo_arc(cr, x + w - rad, y + rad,     rad, -M_PI_2,      0);
-  cairo_arc(cr, x + w - rad, y + h - rad, rad,       0, M_PI_2);
-  cairo_arc(cr, x + rad,     y + h - rad, rad,  M_PI_2,   M_PI);
-  cairo_arc(cr, x + rad,     y + rad,     rad,     M_PI, 3 * M_PI_2);
-  cairo_close_path(cr);
-}
 
 void paint_slider(cairo_t* cr, double x, double y, double w, double t,
                   double dimR, double dimG, double dimB,
@@ -259,25 +244,14 @@ void paint_slider(cairo_t* cr, double x, double y, double w, double t,
   const double midY = y + kSliderTrackH * 0.5;
   const double thumbCx = std::clamp(x + w * t, x + kSliderThumbR, x + w - kSliderThumbR);
 
-  // Track with glassy
-  {
-    m3::Box tr;
-    tr.setColor(static_cast<float>(dimR), static_cast<float>(dimG), static_cast<float>(dimB), 0.55f);
-    tr.setRadius(static_cast<float>(kSliderTrackH * 0.5));
-    tr.setGeometry(static_cast<float>(x), static_cast<float>(y),
-                   static_cast<float>(w), static_cast<float>(kSliderTrackH));
-    tr.setGlassy(true);
-    tr.paint(cr);
-  }
+  eh::shell::shared::rounded_rect(cr, x, y, w, kSliderTrackH, kSliderTrackH * 0.5);
+  cairo_set_source_rgba(cr, dimR, dimG, dimB, 0.55);
+  cairo_fill(cr);
 
   if (fillW > 1.0) {
-    m3::Box fl;
-    fl.setColor(static_cast<float>(accR), static_cast<float>(accG), static_cast<float>(accB), 0.90f);
-    fl.setRadius(static_cast<float>(kSliderTrackH * 0.5));
-    fl.setGeometry(static_cast<float>(x), static_cast<float>(y),
-                   static_cast<float>(fillW), static_cast<float>(kSliderTrackH));
-    fl.setGlassy(true);
-    fl.paint(cr);
+    eh::shell::shared::rounded_rect(cr, x, y, fillW, kSliderTrackH, kSliderTrackH * 0.5);
+    cairo_set_source_rgba(cr, accR, accG, accB, 0.90);
+    cairo_fill(cr);
   }
 
   cairo_new_path(cr);
@@ -427,7 +401,7 @@ void paint_stream_app_icon(cairo_t* cr, const A& app, const StreamInfo& st, doub
 
 void paint_hover_highlight(cairo_t* cr, double x, double y, double w, double h, double r,
                            double hr, double hg, double hb) {
-  rounded_rect(cr, x, y, w, h, r);
+  eh::shell::shared::rounded_rect(cr, x, y, w, h, r);
   cairo_set_source_rgba(cr, hr, hg, hb, 0.08);
   cairo_fill(cr);
 }
@@ -441,27 +415,17 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
 
   const auto& mc = eh::config::derived_chrome_colors(sc.appearance);
 
-  // Shadow.
   cairo_save(cr);
-  rounded_rect(cr, kShadOffX, kShadOffY, W, H, kCornerRadius);
+  eh::shell::shared::rounded_rect(cr, kShadOffX, kShadOffY, W, H, kCornerRadius);
   cairo_set_source_rgba(cr, 0, 0, 0, kShadAlpha);
   cairo_fill(cr);
   cairo_restore(cr);
 
-  // Background.
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(mc.dockFillR * 0.35), static_cast<float>(mc.dockFillG * 0.35),
-                 static_cast<float>(mc.dockFillB * 0.35), 0.78f);
-    box.setRadius(static_cast<float>(kCornerRadius));
-    box.setGeometry(0, 0, static_cast<float>(W), static_cast<float>(H));
-    box.setGlassy(true);
-    box.paint(cr);
-  }
-
-  rounded_rect(cr, 0.5, 0.5, W - 1.0, H - 1.0, kCornerRadius);
-  // Border.
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
+  eh::shell::shared::rounded_rect(cr, 0, 0, W, H, kCornerRadius);
+  cairo_set_source_rgba(cr, mc.dockFillR * 0.30, mc.dockFillG * 0.30, mc.dockFillB * 0.30,
+                        0.92 * sc.appearance.overlayOpacityWidgetCard);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.14);
   cairo_set_line_width(cr, 1.0);
   cairo_stroke(cr);
 
@@ -505,7 +469,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     const double px = cx;
     if (hk == HoverKey::OutputPill)
       paint_hover_highlight(cr, px, pillY, outPillW, kPillH, kPillR, mc.accentR, mc.accentG, mc.accentB);
-    rounded_rect(cr, px, pillY, outPillW, kPillH, kPillR);
+    eh::shell::shared::rounded_rect(cr, px, pillY, outPillW, kPillH, kPillR);
     if (sel)
       cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.18);
     else
@@ -513,7 +477,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     cairo_fill(cr);
 
     if (sel) {
-      rounded_rect(cr, px, pillY, outPillW, kPillH, kPillR);
+      eh::shell::shared::rounded_rect(cr, px, pillY, outPillW, kPillH, kPillR);
       cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.45);
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
@@ -524,7 +488,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
                                    sel ? mc.accentG : mc.textG,
                                    sel ? mc.accentB : mc.textB, 0.90);
 
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 13.0);
     cairo_set_source_rgba(cr, sel ? mc.accentR : mc.textR,
                              sel ? mc.accentG : mc.textG,
@@ -540,7 +504,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     const double px = cx + cw - inPillW;
     if (hk == HoverKey::InputPill)
       paint_hover_highlight(cr, px, pillY, inPillW, kPillH, kPillR, mc.accentR, mc.accentG, mc.accentB);
-    rounded_rect(cr, px, pillY, inPillW, kPillH, kPillR);
+    eh::shell::shared::rounded_rect(cr, px, pillY, inPillW, kPillH, kPillR);
     if (sel)
       cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.18);
     else
@@ -548,7 +512,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     cairo_fill(cr);
 
     if (sel) {
-      rounded_rect(cr, px, pillY, inPillW, kPillH, kPillR);
+      eh::shell::shared::rounded_rect(cr, px, pillY, inPillW, kPillH, kPillR);
       cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.45);
       cairo_set_line_width(cr, 1.0);
       cairo_stroke(cr);
@@ -559,7 +523,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
                                    sel ? mc.accentG : mc.textG,
                                    sel ? mc.accentB : mc.textB, 0.90);
 
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 13.0);
     cairo_set_source_rgba(cr, sel ? mc.accentR : mc.textR,
                              sel ? mc.accentG : mc.textG,
@@ -611,7 +575,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
                                    dev.is_default ? 0.92 : 0.72);
 
     const double nameX = iconX + kDevIconSz + 8.0;
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL,
                            dev.is_default ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 13.0);
     cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB,
@@ -664,7 +628,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
   cairo_stroke(cr);
 
   const double appsLabelY = appsDividerY + 4.0;
-  cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
   cairo_set_font_size(cr, 10.0);
   cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.50);
   cairo_move_to(cr, cx + 4.0, appsLabelY + 14.0);
@@ -681,7 +645,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     paint_stream_app_icon(cr, app, st, cx + kAppIconSz * 0.5, rowY + kRowH * 0.5, kAppIconSz);
 
     const double nameX = cx + kAppIconSz + 8.0;
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 12.0);
     cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.87);
     cairo_text_extents_t te;
@@ -728,19 +692,12 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     const bool pickerHov = (hk_in_range(hk, HoverKey::PickerBtnStart, streamCount) == i);
     if (pickerHov)
       paint_hover_highlight(cr, pickerX, pickerY, kPickerBtnW, kPickerBtnH, 6.0, mc.accentR, mc.accentG, mc.accentB);
-    {
-      m3::Box pb;
-      pb.setColor(static_cast<float>(mc.drawerDimR), static_cast<float>(mc.drawerDimG),
-                  static_cast<float>(mc.drawerDimB), routerOpen ? 0.60f : 0.35f);
-      pb.setRadius(6.0f);
-      pb.setGeometry(static_cast<float>(pickerX), static_cast<float>(pickerY),
-                     static_cast<float>(kPickerBtnW), static_cast<float>(kPickerBtnH));
-      pb.setGlassy(true);
-      pb.paint(cr);
-    }
+    eh::shell::shared::rounded_rect(cr, pickerX, pickerY, kPickerBtnW, kPickerBtnH, 6.0);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, routerOpen ? 0.16 : 0.08);
+    cairo_fill(cr);
 
     const std::string pickerLabel = st.routed_sink_name.empty() ? "Default" : st.routed_sink_name;
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 11.0);
     cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.80);
     cairo_move_to(cr, pickerX + 8.0, pickerY + kPickerBtnH * 0.5 + 4.0);
@@ -764,16 +721,9 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     const bool eqHov = (hk_in_range(hk, HoverKey::EqBtnStart, streamCount) == i);
     if (eqHov)
       paint_hover_highlight(cr, eqBtnX, eqBtnY, kEqBtnSz, kEqBtnSz, kEqBtnSz * 0.5, mc.accentR, mc.accentG, mc.accentB);
-    {
-      m3::Box eb;
-      eb.setColor(static_cast<float>(mc.drawerDimR), static_cast<float>(mc.drawerDimG),
-                  static_cast<float>(mc.drawerDimB), eqOpen ? 0.60f : 0.35f);
-      eb.setRadius(static_cast<float>(kEqBtnSz * 0.5));
-      eb.setGeometry(static_cast<float>(eqBtnX), static_cast<float>(eqBtnY),
-                     static_cast<float>(kEqBtnSz), static_cast<float>(kEqBtnSz));
-      eb.setGlassy(true);
-      eb.paint(cr);
-    }
+    eh::shell::shared::rounded_rect(cr, eqBtnX, eqBtnY, kEqBtnSz, kEqBtnSz, kEqBtnSz * 0.5);
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, eqOpen ? 0.16 : 0.08);
+    cairo_fill(cr);
 
     const double barW = 3.0;
     const double barSpacing = 3.0;
@@ -784,7 +734,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
     for (int b = 0; b < 3; ++b) {
       const double bx = barStartX + static_cast<double>(b) * (barW + barSpacing);
       const double bh = barHeights[b];
-      rounded_rect(cr, bx, barCenterY - bh * 0.5, barW, bh, barW * 0.5);
+      eh::shell::shared::rounded_rect(cr, bx, barCenterY - bh * 0.5, barW, bh, barW * 0.5);
       cairo_set_source_rgba(cr, eqOpen ? mc.accentR : mc.textR,
                                eqOpen ? mc.accentG : mc.textG,
                                eqOpen ? mc.accentB : mc.textB, 0.85);
@@ -797,16 +747,9 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
       const bool closeHov = (hk_in_range(hk, HoverKey::CloseBtnStart, streamCount) == i);
       if (closeHov)
         paint_hover_highlight(cr, closeX, closeY, kCloseBtnSz, kCloseBtnSz, kCloseBtnSz * 0.5, 0.85, 0.30, 0.30);
-      {
-        m3::Box cb;
-        cb.setColor(static_cast<float>(mc.drawerDimR), static_cast<float>(mc.drawerDimG),
-                    static_cast<float>(mc.drawerDimB), 0.30f);
-        cb.setRadius(static_cast<float>(kCloseBtnSz * 0.5));
-        cb.setGeometry(static_cast<float>(closeX), static_cast<float>(closeY),
-                       static_cast<float>(kCloseBtnSz), static_cast<float>(kCloseBtnSz));
-        cb.setGlassy(true);
-        cb.paint(cr);
-      }
+      eh::shell::shared::rounded_rect(cr, closeX, closeY, kCloseBtnSz, kCloseBtnSz, kCloseBtnSz * 0.5);
+      cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
+      cairo_fill(cr);
       eh::shell::draw_material_glyph(cr, closeX + kCloseBtnSz * 0.5, closeY + kCloseBtnSz * 0.5,
                                      14.0, "close", mc.textR, mc.textG, mc.textB, 0.72);
     }
@@ -825,14 +768,14 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
       const double eqX = cx;
       const double eqW = cw;
 
-      rounded_rect(cr, eqX, eqY, eqW, eqPanelH, 8.0);
+      eh::shell::shared::rounded_rect(cr, eqX, eqY, eqW, eqPanelH, 8.0);
       cairo_set_source_rgba(cr, mc.panelFillR, mc.panelFillG, mc.panelFillB, 0.92);
       cairo_fill(cr);
 
       const double eqHeaderY = eqY + kEqPanelPad;
 
       const double presetX = eqX + eqW - kEqPanelPad - kEqPresetBtnW;
-      rounded_rect(cr, presetX, eqHeaderY, kEqPresetBtnW, kEqPresetBtnH, 6.0);
+      eh::shell::shared::rounded_rect(cr, presetX, eqHeaderY, kEqPresetBtnW, kEqPresetBtnH, 6.0);
       cairo_set_source_rgba(cr, mc.drawerDimR, mc.drawerDimG, mc.drawerDimB, 0.35);
       cairo_fill(cr);
 
@@ -842,13 +785,13 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
       if (appState.eqPresetIdx >= 0 && appState.eqPresetIdx < presetCount)
         presetLabel = kPresetLabels[appState.eqPresetIdx];
 
-      cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+      cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
       cairo_set_font_size(cr, 11.0);
       cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.75);
       cairo_move_to(cr, presetX + 8.0, eqHeaderY + kEqPresetBtnH * 0.5 + 4.0);
       cairo_show_text(cr, presetLabel);
 
-      cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+      cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
       cairo_set_font_size(cr, 12.0);
       cairo_set_source_rgba(cr, appState.eqEnabled ? mc.accentR : mc.textR,
                                appState.eqEnabled ? mc.accentG : mc.textG,
@@ -877,13 +820,13 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
 
         const double eqBarW = std::max(2.0, bandSpacing * 0.3);
         if (barH > 0.5) {
-          rounded_rect(cr, bx - eqBarW * 0.5, bandsY + bandH - barH, eqBarW, barH, eqBarW * 0.5);
+          eh::shell::shared::rounded_rect(cr, bx - eqBarW * 0.5, bandsY + bandH - barH, eqBarW, barH, eqBarW * 0.5);
           cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB,
                                 appState.eqEnabled ? 0.75 : 0.35);
           cairo_fill(cr);
         }
 
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 8.0);
         cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.45);
         cairo_text_extents_t teB;
@@ -901,7 +844,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
       const double sinkRowH = 36.0;
       const double routerH = 8.0 + static_cast<double>(sinkCount) * sinkRowH + 8.0;
 
-      rounded_rect(cr, cx, routerY, routerW, routerH, 8.0);
+      eh::shell::shared::rounded_rect(cr, cx, routerY, routerW, routerH, 8.0);
       cairo_set_source_rgba(cr, mc.panelFillR, mc.panelFillG, mc.panelFillB, 0.85);
       cairo_fill(cr);
 
@@ -940,7 +883,7 @@ inline void dock_volume_mixer_popup_paint(const A& app, cairo_t* cr, const eh::c
                                        isChecked ? mc.accentB : mc.textB,
                                        isChecked ? 0.87 : 0.60);
 
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
+        cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL,
                                isChecked ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 12.0);
         cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, isChecked ? 0.87 : 0.60);

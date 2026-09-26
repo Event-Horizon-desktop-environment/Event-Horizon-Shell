@@ -13,7 +13,7 @@ void dock_handle_tray(DockApp& app);
 
 void dock_try_start_deferred_tray(DockApp& app);
 void dock_after_display_dispatch(DockApp& app);
-void dock_schedule_frame(DockApp& app);
+bool dock_schedule_frame(DockApp& app);
 
 void dock_sync_settings_from_drag_preview(DockApp& app);
 void dock_cleanup(DockApp& app, bool disconnect_display);

@@ -3,6 +3,7 @@
 #include "desktop_shell/common/glyph/material_glyph.hpp"
 #include "desktop_shell/widgets/shared/widget_settings.hpp"
 #include "desktop_shell/widgets/shared/measure_scratch.hpp"
+#include "desktop_shell/shared/core/cairo_helpers.hpp"
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/shared/popup/session/session.hpp"
 
@@ -34,7 +35,6 @@
 namespace eh::widgets {
 namespace {
 
-// UPower types.
 
 enum class BatteryState : uint8_t {
   Unknown = 0,
@@ -53,7 +53,6 @@ struct UPowerState {
   bool onBattery = false;
 };
 
-// UPower DBus constants.
 
 const sdbus::ServiceName kUpowerBusName{"org.freedesktop.UPower"};
 const sdbus::ObjectPath kUpowerObjectPath{"/org/freedesktop/UPower"};
@@ -69,7 +68,6 @@ constexpr uint32_t kStateFullyCharged = 4;
 constexpr uint32_t kStatePendingCharge = 5;
 constexpr uint32_t kStatePendingDischarge = 6;
 
-// Helpers.
 
 template <typename T>
 T getPropertyOr(sdbus::IProxy& proxy, const std::string& iface, const std::string& prop, T fallback) {
@@ -105,7 +103,6 @@ UPowerState readDeviceState(sdbus::IProxy& proxy) {
   return s;
 }
 
-// Internal battery service (static).
 
 std::mutex g_batteryMutex;
 UPowerState g_cachedState;
@@ -258,7 +255,6 @@ static void pollThreadMain() {
 
 } // namespace
 
-// Public API.
 
 void battery_widget_init() {
    
@@ -295,17 +291,8 @@ void battery_widget_shutdown() {
   }
 }
 
-// Widget helpers.
 
 namespace {
-
-bool parse_bool_setting(const std::string& v, bool fallback) {
-   
-  if (v.empty()) return fallback;
-  if (v == "1" || v == "true" || v == "True" || v == "yes" || v == "Yes") return true;
-  if (v == "0" || v == "false" || v == "False" || v == "no" || v == "No") return false;
-  return fallback;
-}
 
 const char* battery_glyph_for(double pct, BatteryState state) {
    
@@ -377,7 +364,6 @@ static std::unordered_map<std::string, BatteryTextCache> g_batteryTextCache;
 
 }
 
-// Widget list check.
 
 bool widget_list_contains_battery(const eh::config::ShellConfig& sc, const std::vector<std::string>& widgets) {
    
@@ -388,7 +374,6 @@ bool widget_list_contains_battery(const eh::config::ShellConfig& sc, const std::
   return false;
 }
 
-// Width measurement.
 
 double dock_battery_slot_width(cairo_t* measure_cr, const eh::config::ShellConfig& sc,
                                 std::string_view instance_id, double icon_ref_px, double /*bar_height*/) {
@@ -454,7 +439,6 @@ double dock_battery_slot_width(cairo_t* measure_cr, const eh::config::ShellConfi
   return std::max(minW, total);
 }
 
-// Paint.
 
 void paint_battery_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::string_view instance_id,
                           double x, double y, double slot_w, double slot_h, double icon_ref_px,
@@ -469,21 +453,30 @@ void paint_battery_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::str
   }
   if (warningThreshold <= 0) warningThreshold = 10;
 
-  std::lock_guard<std::mutex> lock(g_batteryMutex);
+  UPowerState st;
+  {
+    std::lock_guard<std::mutex> lock(g_batteryMutex);
+    st = g_cachedState;
+  }
 
   cairo_save(cr);
   slot_pill_style::paint_pill(cr, x, y, slot_w, slot_h);
 
-  if (!g_cachedState.isPresent) {
+  const auto& mc = eh::config::derived_chrome_colors(sc.appearance);
+  const double glyphPx = icon_ref_px * 0.52;
+
+  if (!st.isPresent) {
+    eh::shell::draw_material_glyph(cr, x + slot_w * 0.5, y + slot_h * 0.5, glyphPx,
+                                   battery_glyph_for(0.0, BatteryState::Unknown),
+                                   mc.textR, mc.textG, mc.textB, 0.5);
     cairo_restore(cr);
     return;
   }
 
-  const int pct = static_cast<int>(std::round(g_cachedState.percentage));
-  const bool charging = is_charging(g_cachedState.state);
-  const bool warning = warningThreshold > 0 && pct <= warningThreshold && !charging;
+  const int pct = static_cast<int>(std::round(st.percentage));
+  const bool charging = is_charging(st.state);
+  const bool warning = pct <= warningThreshold && !charging;
 
-  const auto& mc = eh::config::derived_chrome_colors(sc.appearance);
   double fgR = mc.textR, fgG = mc.textG, fgB = mc.textB;
   if (warning) {
     fgR = 1.0; fgG = 0.4; fgB = 0.4;
@@ -491,7 +484,6 @@ void paint_battery_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::str
     fgR = mc.accentR; fgG = mc.accentG; fgB = mc.accentB;
   }
 
-  const double glyphPx = icon_ref_px * 0.52;
   const double gx = x + slot_w * 0.5;
   const double gy = y + slot_h * 0.5;
 
@@ -501,7 +493,7 @@ void paint_battery_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::str
 
     char buf[16];
     std::snprintf(buf, sizeof(buf), "%d%%", pct);
-    const char* glyph = battery_glyph_for(g_cachedState.percentage, g_cachedState.state);
+    const char* glyph = battery_glyph_for(st.percentage, st.state);
 
     const std::string pbatkid(instance_id);
     auto pbatit = g_batteryTextCache.find(pbatkid);
@@ -561,14 +553,13 @@ void paint_battery_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::str
     cairo_move_to(cr, labelX, labelY);
     pango_cairo_show_layout(cr, layout);
   } else {
-    const char* glyph = battery_glyph_for(g_cachedState.percentage, g_cachedState.state);
+    const char* glyph = battery_glyph_for(st.percentage, st.state);
     eh::shell::draw_material_glyph(cr, gx, gy, glyphPx, glyph, fgR, fgG, fgB, 1.0);
   }
 
   cairo_restore(cr);
 }
 
-// Popup.
 
 int battery_popup_height() {
    
@@ -576,13 +567,12 @@ int battery_popup_height() {
 }
 
 void dock_battery_popup_paint(double pointerX, double pointerY, cairo_t* cr, const eh::config::ShellConfig& sc) {
-   
   const double W = static_cast<double>(kBatteryPopupW);
   const double H = static_cast<double>(battery_popup_height());
 
   const auto& mc = eh::config::derived_chrome_colors(sc.appearance);
   const double shellOv = static_cast<double>(
-      eh::config::overlay_surface_alpha_scale(sc, eh::config::OverlaySurfaceAlphaKind::Weather));
+      eh::config::overlay_surface_alpha_scale(sc, eh::config::OverlaySurfaceAlphaKind::Battery));
 
   const double us = dock_ui_scale(sc.dock);
   const double kPad = 16.0 * us;
@@ -590,124 +580,107 @@ void dock_battery_popup_paint(double pointerX, double pointerY, cairo_t* cr, con
   const double kShadOffX = 2.0 * us, kShadOffY = 4.0 * us;
   constexpr double kShadAlpha = 0.28;
 
-  auto round_rect = [&](double x, double y, double w, double h, double r) {
-    const double rad = std::min({r, w * 0.5, h * 0.5});
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, x + w - rad, y + rad,     rad, -M_PI_2,      0);
-    cairo_arc(cr, x + w - rad, y + h - rad, rad,       0, M_PI_2);
-    cairo_arc(cr, x + rad,     y + h - rad, rad,  M_PI_2,   M_PI);
-    cairo_arc(cr, x + rad,     y + rad,     rad,     M_PI, 3 * M_PI_2);
-    cairo_close_path(cr);
-  };
+  UPowerState st;
+  {
+    std::lock_guard<std::mutex> lock(g_batteryMutex);
+    st = g_cachedState;
+  }
 
-  // Shadow
   cairo_save(cr);
-  round_rect(kShadOffX, kShadOffY, W, H, kCornerRadius);
+  eh::shell::shared::rounded_rect(cr, kShadOffX, kShadOffY, W, H, kCornerRadius);
   cairo_set_source_rgba(cr, 0, 0, 0, kShadAlpha);
   cairo_fill(cr);
   cairo_restore(cr);
 
-  // Background
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(mc.dockFillR * 0.35), static_cast<float>(mc.dockFillG * 0.35),
-                 static_cast<float>(mc.dockFillB * 0.35), static_cast<float>(0.78 * shellOv));
-    box.setRadius(static_cast<float>(kCornerRadius));
-    box.setGeometry(0, 0, static_cast<float>(W), static_cast<float>(H));
-    box.setGlassy(true);
-    box.paint(cr);
-  }
-
-  round_rect(0.5, 0.5, W - 1.0, H - 1.0, kCornerRadius);
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
+  eh::shell::shared::rounded_rect(cr, 0, 0, W, H, kCornerRadius);
+  cairo_set_source_rgba(cr, mc.dockFillR * 0.30, mc.dockFillG * 0.30, mc.dockFillB * 0.30,
+                        0.92 * shellOv);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.14);
   cairo_set_line_width(cr, 1.0);
   cairo_stroke(cr);
 
-  // Close button
   const double cbX = W - kPad - 24.0 * us, cbY = kPad, cbW = 24.0 * us, cbH = 24.0 * us;
   const double px = pointerX, py = pointerY;
   const bool hc = px >= cbX && px < cbX + cbW && py >= cbY && py < cbY + cbH;
-  round_rect(cbX, cbY, cbW, cbH, 7 * us);
+  eh::shell::shared::rounded_rect(cr, cbX, cbY, cbW, cbH, 7 * us);
   cairo_set_source_rgba(cr, 0.3, 0.3, 0.35, hc ? 0.75 : 0.45);
   cairo_fill(cr);
   eh::shell::draw_material_glyph(cr, cbX + cbW * 0.5, cbY + cbH * 0.5,
                                  14 * us, "close", mc.textR, mc.textG, mc.textB, hc ? 1.0 : 0.85);
 
-  // Title
   cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.92);
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
   cairo_set_font_size(cr, 14 * us);
+  cairo_text_extents_t titleTe;
+  cairo_text_extents(cr, "Battery", &titleTe);
   cairo_move_to(cr, kPad, kPad + 22.0 * us);
   cairo_show_text(cr, "Battery");
 
-  {
-    std::lock_guard<std::mutex> lock(g_batteryMutex);
-
-    if (!g_cachedState.isPresent) {
-      cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.5);
-      cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-      cairo_set_font_size(cr, 13 * us);
-      cairo_move_to(cr, kPad, 70.0 * us);
-      cairo_show_text(cr, "No battery detected");
-      return;
-    }
-
-    const int pct = static_cast<int>(std::round(g_cachedState.percentage));
-    const bool charging = is_charging(g_cachedState.state);
-
-    // Percentage number (big)
-    {
-      char buf[16];
-      std::snprintf(buf, sizeof(buf), "%d%%", pct);
-      cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 1.0);
-      cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-      cairo_set_font_size(cr, 36 * us);
-      cairo_text_extents_t te;
-      cairo_text_extents(cr, buf, &te);
-      cairo_move_to(cr, (W - te.x_advance) * 0.5, 82.0 * us);
-      cairo_show_text(cr, buf);
-    }
-
-    // Bar background
-    const double barX = kPad, barW = W - kPad * 2, barH = 10.0 * us, barY = 98.0 * us;
-    const double barR = barH * 0.5;
-    round_rect(barX, barY, barW, barH, barR);
-    cairo_set_source_rgba(cr, 0.15, 0.15, 0.18, 0.5);
-    cairo_fill(cr);
-
-    // Bar fill
-    if (pct > 0) {
-      const double fillW = std::max(barH, barW * (pct / 100.0));
-      double fgR = mc.accentR, fgG = mc.accentG, fgB = mc.accentB;
-      if (charging) {
-        fgR = 0.4; fgG = 0.8; fgB = 1.0;
-      } else if (pct <= 10) {
-        fgR = 1.0; fgG = 0.4; fgB = 0.4;
-      }
-      round_rect(barX, barY, fillW, barH, barR);
-      cairo_set_source_rgba(cr, fgR, fgG, fgB, 0.85);
-      cairo_fill(cr);
-    }
-
-    // Status text
-    {
-      const char* status = nullptr;
-      if (charging) status = "Charging";
-      else if (g_cachedState.state == BatteryState::FullyCharged) status = "Fully charged";
-      else status = "Discharging";
-      cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.7);
-      cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-      cairo_set_font_size(cr, 13 * us);
-      cairo_text_extents_t te;
-      cairo_text_extents(cr, status, &te);
-      cairo_move_to(cr, (W - te.x_advance) * 0.5, barY + barH + 22.0 * us);
-      cairo_show_text(cr, status);
-    }
-
-    // Glyph icon next to title
-    const char* glyph = battery_glyph_for(g_cachedState.percentage, g_cachedState.state);
-    eh::shell::draw_material_glyph(cr, kPad + 88.0 * us, kPad + 16.0 * us, 18 * us, glyph, mc.textR, mc.textG, mc.textB, 0.85);
+  if (!st.isPresent) {
+    cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.5);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 13 * us);
+    cairo_move_to(cr, kPad, 70.0 * us);
+    cairo_show_text(cr, "No battery detected");
+    return;
   }
+
+  const int pct = static_cast<int>(std::round(st.percentage));
+  const bool charging = is_charging(st.state);
+
+  {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d%%", pct);
+    cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 1.0);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 36 * us);
+    cairo_text_extents_t te;
+    cairo_text_extents(cr, buf, &te);
+    cairo_move_to(cr, (W - te.x_advance) * 0.5, 82.0 * us);
+    cairo_show_text(cr, buf);
+  }
+
+  const double barX = kPad, barW = W - kPad * 2, barH = 10.0 * us, barY = 98.0 * us;
+  const double barR = barH * 0.5;
+  eh::shell::shared::rounded_rect(cr, barX, barY, barW, barH, barR);
+  cairo_set_source_rgba(cr, 0.15, 0.15, 0.18, 0.5);
+  cairo_fill(cr);
+
+  if (pct > 0) {
+    const double fillW = std::max(barH, barW * (pct / 100.0));
+    double fgR = mc.accentR, fgG = mc.accentG, fgB = mc.accentB;
+    if (pct <= 10 && !charging) {
+      fgR = 1.0; fgG = 0.4; fgB = 0.4;
+    }
+    eh::shell::shared::rounded_rect(cr, barX, barY, fillW, barH, barR);
+    cairo_set_source_rgba(cr, fgR, fgG, fgB, 0.85);
+    cairo_fill(cr);
+  }
+
+  {
+    const char* status = "Discharging";
+    switch (st.state) {
+      case BatteryState::Charging:
+      case BatteryState::PendingCharge: status = "Charging"; break;
+      case BatteryState::FullyCharged: status = "Fully charged"; break;
+      case BatteryState::Empty: status = "Empty"; break;
+      case BatteryState::PendingDischarge: status = "Discharging"; break;
+      case BatteryState::Unknown:
+      case BatteryState::Discharging: status = st.onBattery ? "Discharging" : "Not charging"; break;
+    }
+    cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.7);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 13 * us);
+    cairo_text_extents_t te;
+    cairo_text_extents(cr, status, &te);
+    cairo_move_to(cr, (W - te.x_advance) * 0.5, barY + barH + 22.0 * us);
+    cairo_show_text(cr, status);
+  }
+
+  const char* glyph = battery_glyph_for(st.percentage, st.state);
+  eh::shell::draw_material_glyph(cr, kPad + titleTe.x_advance + 10.0 * us, kPad + 16.0 * us, 18 * us,
+                                 glyph, mc.textR, mc.textG, mc.textB, 0.85);
 }
 
 void dock_battery_popup_handle_click(::DockApp& app, double x, double y, uint32_t) {

@@ -190,7 +190,7 @@ static void draw_clock_face(cairo_t* cr, double cx, double cy, double r,
     cairo_stroke(cr);
   }
 
-  cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
   cairo_set_font_size(cr, r * 0.20);
   for (int n = 1; n <= 12; n++) {
     const double angle = (static_cast<double>(n) * 30.0 - 90.0) * M_PI / 180.0;
@@ -247,7 +247,7 @@ static void draw_centered_text(cairo_t* cr, const std::string& text, double cx, 
                                 double r, double g, double b, double alpha, double fontSize, int weight) {
   if (text.empty()) return;
   cairo_save(cr);
-  cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL,
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL,
                           weight >= 700 ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
   cairo_set_font_size(cr, fontSize);
   cairo_text_extents_t te;

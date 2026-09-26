@@ -41,13 +41,10 @@ bool env_true(const char* name) {
 }
 
 FILE* autostart_log_file() {
-  static FILE* f = [] {
-    const char* home = std::getenv("HOME");
-    const std::string dir = std::string(home && *home ? home : "/tmp") + "/EH-logs";
-    ::mkdir(dir.c_str(), 0755);
-    return fopen((dir + "/autostart.log").c_str(), "a");
-  }();
-  return f;
+  const char* home = std::getenv("HOME");
+  const std::string dir = std::string(home && *home ? home : "/tmp") + "/EH-logs";
+  ::mkdir(dir.c_str(), 0755);
+  return fopen((dir + "/autostart.log").c_str(), "a");
 }
 
 void autostart_log(const char* fmt, ...) {
@@ -109,7 +106,7 @@ std::string current_desktop_env() {
 }
 
 bool matches_desktop(const std::vector<std::string>& list, const std::string& de) {
-  if (list.empty()) return true;
+  if (list.empty()) return false;
   if (de.empty()) return false;
   std::string deLower = de;
   for (auto& c : deLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -119,8 +116,19 @@ bool matches_desktop(const std::vector<std::string>& list, const std::string& de
     for (auto& c : i) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     if (i == deLower) return true;
   }
-  // Also accept "eventhorizon" as a generic match for our shell
-  if (deLower == "eventhorizon") return true;
+  return false;
+}
+
+bool matches_any_desktop(const std::vector<std::string>& list, const std::string& desktops) {
+  std::string::size_type pos = 0;
+  while (pos <= desktops.size()) {
+    const auto next = desktops.find(':', pos);
+    const std::string part =
+        (next == std::string::npos) ? desktops.substr(pos) : desktops.substr(pos, next - pos);
+    if (matches_desktop(list, part)) return true;
+    if (next == std::string::npos) break;
+    pos = next + 1;
+  }
   return false;
 }
 
@@ -131,6 +139,19 @@ bool file_executable(const std::string& path) {
 std::string basename_no_ext(const std::string& path) {
   fs::path p(path);
   return p.stem().string();
+}
+
+bool valid_stem(const std::string& stem) {
+  if (stem.empty() || stem.size() > 128) return false;
+  if (stem == "." || stem == "..") return false;
+  return stem.find('/') == std::string::npos && stem.find('\\') == std::string::npos;
+}
+
+std::string flat_desktop_value(std::string v) {
+  for (auto& c : v) {
+    if (c == '\n' || c == '\r') c = ' ';
+  }
+  return v;
 }
 
 } // anonymous namespace
@@ -174,10 +195,7 @@ std::vector<AutostartEntry> scan_autostart_entries() {
       ae.effectiveEnabled = enabled;
 
       auto it = seen.find(stemLower);
-      if (it != seen.end()) {
-        // Shadow previous (system) entry with this one (user config dir usually later)
-        out[it->second] = std::move(ae);
-      } else {
+      if (it == seen.end()) {
         seen[stemLower] = out.size();
         out.push_back(std::move(ae));
       }
@@ -191,12 +209,10 @@ std::vector<AutostartEntry> scan_autostart_entries() {
 bool should_show_in_current_desktop(const AutostartEntry& e) {
   const std::string de = current_desktop_env();
 
-  // NotShowIn wins
-  if (matches_desktop(e.info.notShowIn, de)) return false;
+  if (matches_any_desktop(e.info.notShowIn, de)) return false;
 
-  // OnlyShowIn: if present, must match
   if (!e.info.onlyShowIn.empty()) {
-    return matches_desktop(e.info.onlyShowIn, de);
+    return matches_any_desktop(e.info.onlyShowIn, de);
   }
   return true;
 }
@@ -383,25 +399,41 @@ std::vector<AutostartUiEntry> get_autostart_ui_entries() {
   return ui;
 }
 
+void emit_preserved_autostart_keys(std::ofstream& f, const DesktopEntryInfo& base) {
+  if (!base.tryExec.empty()) f << "TryExec=" << flat_desktop_value(base.tryExec) << "\n";
+  if (!base.onlyShowIn.empty()) {
+    f << "OnlyShowIn=";
+    for (const auto& v : base.onlyShowIn) f << flat_desktop_value(v) << ";";
+    f << "\n";
+  }
+  if (!base.notShowIn.empty()) {
+    f << "NotShowIn=";
+    for (const auto& v : base.notShowIn) f << flat_desktop_value(v) << ";";
+    f << "\n";
+  }
+  if (!base.startup_wm_class.empty()) f << "StartupWMClass=" << flat_desktop_value(base.startup_wm_class) << "\n";
+  if (base.dbus_activatable) f << "DBusActivatable=true\n";
+  if (base.noDisplay) f << "NoDisplay=true\n";
+}
+
 bool write_autostart_override(const std::string& stem, const DesktopEntryInfo& baseInfo, bool enabled) {
+  if (!valid_stem(stem)) return false;
   const std::string dir = user_autostart_dir();
   if (!ensure_dir(dir)) return false;
 
   const std::string path = dir + "/" + stem + ".desktop";
 
-  // Build a .desktop that preserves useful display info + forces our state.
-  // We copy key fields from base (which may be the system one) so the UI and launchers see good names/icons.
   std::ofstream f(path);
   if (!f.is_open()) return false;
 
   f << "[Desktop Entry]\n";
   f << "Type=Application\n";
-  f << "Name=" << (baseInfo.name.empty() ? stem : baseInfo.name) << "\n";
-  if (!baseInfo.icon.empty()) f << "Icon=" << baseInfo.icon << "\n";
-  if (!baseInfo.exec.empty()) f << "Exec=" << baseInfo.exec << "\n";
+  f << "Name=" << flat_desktop_value(baseInfo.name.empty() ? stem : baseInfo.name) << "\n";
+  if (!baseInfo.icon.empty()) f << "Icon=" << flat_desktop_value(baseInfo.icon) << "\n";
+  if (!baseInfo.exec.empty()) f << "Exec=" << flat_desktop_value(baseInfo.exec) << "\n";
   if (baseInfo.terminal) f << "Terminal=true\n";
+  emit_preserved_autostart_keys(f, baseInfo);
 
-  // The critical autostart control keys
   f << "Hidden=" << (enabled ? "false" : "true") << "\n";
   f << "X-GNOME-Autostart-enabled=" << (enabled ? "true" : "false") << "\n";
   if (baseInfo.autostartDelaySec > 0) {
@@ -413,7 +445,7 @@ bool write_autostart_override(const std::string& stem, const DesktopEntryInfo& b
 }
 
 bool set_autostart_enabled(const std::string& stem, bool enabled) {
-  if (stem.empty()) return false;
+  if (!valid_stem(stem)) return false;
 
   // Find a base entry (prefer system or any existing scan)
   auto all = scan_autostart_entries();
@@ -436,7 +468,7 @@ bool set_autostart_enabled(const std::string& stem, bool enabled) {
 }
 
 bool remove_autostart_override(const std::string& stem) {
-  if (stem.empty()) return true;
+  if (!valid_stem(stem)) return true;
   const std::string dir = user_autostart_dir();
   const std::string path = dir + "/" + stem + ".desktop";
   std::error_code ec;
@@ -449,7 +481,7 @@ bool remove_autostart_override(const std::string& stem) {
 bool create_autostart_entry(const std::string& stem, const std::string& name,
                             const std::string& exec, const std::string& icon,
                             int delaySec, bool runInTerminal) {
-  if (stem.empty() || name.empty() || exec.empty()) return false;
+  if (!valid_stem(stem) || name.empty() || exec.empty()) return false;
 
   const std::string dir = user_autostart_dir();
   if (!ensure_dir(dir)) return false;
@@ -461,9 +493,9 @@ bool create_autostart_entry(const std::string& stem, const std::string& name,
 
   f << "[Desktop Entry]\n";
   f << "Type=Application\n";
-  f << "Name=" << name << "\n";
-  if (!icon.empty()) f << "Icon=" << icon << "\n";
-  f << "Exec=" << exec << "\n";
+  f << "Name=" << flat_desktop_value(name) << "\n";
+  if (!icon.empty()) f << "Icon=" << flat_desktop_value(icon) << "\n";
+  f << "Exec=" << flat_desktop_value(exec) << "\n";
   if (runInTerminal) f << "Terminal=true\n";
   f << "Hidden=false\n";
   f << "X-GNOME-Autostart-enabled=true\n";
@@ -479,24 +511,26 @@ bool create_autostart_entry(const std::string& stem, const std::string& name,
 bool edit_autostart_entry(const std::string& stem, const std::string& name,
                           const std::string& exec, const std::string& icon,
                           int delaySec, bool runInTerminal) {
-  if (stem.empty()) return false;
+  if (!valid_stem(stem)) return false;
 
   const std::string dir = user_autostart_dir();
   const std::string path = dir + "/" + stem + ".desktop";
 
-  // Only edit user-override files
   std::error_code ec;
   if (!fs::exists(path)) return false;
+  DesktopEntryInfo preserved{};
+  if (auto cur = read_desktop_entry_info(path)) preserved = std::move(*cur);
 
   std::ofstream f(path);
   if (!f.is_open()) return false;
 
   f << "[Desktop Entry]\n";
   f << "Type=Application\n";
-  f << "Name=" << (name.empty() ? stem : name) << "\n";
-  if (!icon.empty()) f << "Icon=" << icon << "\n";
-  if (!exec.empty()) f << "Exec=" << exec << "\n";
+  f << "Name=" << flat_desktop_value(name.empty() ? stem : name) << "\n";
+  if (!icon.empty()) f << "Icon=" << flat_desktop_value(icon) << "\n";
+  if (!exec.empty()) f << "Exec=" << flat_desktop_value(exec) << "\n";
   if (runInTerminal) f << "Terminal=true\n";
+  emit_preserved_autostart_keys(f, preserved);
   f << "Hidden=false\n";
   f << "X-GNOME-Autostart-enabled=true\n";
   if (delaySec > 0) {
@@ -528,10 +562,9 @@ std::vector<InstalledApp> scan_installed_apps() {
       if (info->name.empty()) continue;
       if (info->exec.empty() && !info->dbus_activatable) continue;
 
-      std::string lower = info->name;
-      for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-      if (seen.count(lower)) continue;
-      seen.insert(lower);
+      const std::string fileId = p.filename().string();
+      if (seen.count(fileId)) continue;
+      seen.insert(fileId);
 
       InstalledApp a;
       a.name = info->name;

@@ -4,6 +4,7 @@
 #include "services/windows/toplevel_types.hpp"
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -30,6 +31,7 @@ public:
 
   // Register the "toplevel.list" handler on the IPC service. Idempotent.
   void register_handlers();
+  void unregister_handlers();
 
   // Replace the tracked snapshot with `records`, publishing created/updated/
   // closed deltas. Records must have non-empty, stable `key` fields.
@@ -37,10 +39,11 @@ public:
 
   void clear();
 
-  [[nodiscard]] const std::vector<ToplevelRecord>& snapshot() const { return snapshot_; }
+  [[nodiscard]] std::vector<ToplevelRecord> snapshot() const;
 
 private:
   eh::ipc::IpcService& ipc_;
+  mutable std::mutex mu_;
   std::vector<ToplevelRecord> snapshot_;
   std::unordered_map<std::string, std::uint64_t> keyToId_;
   std::uint64_t nextId_ = 1;

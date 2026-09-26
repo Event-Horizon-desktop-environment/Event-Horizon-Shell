@@ -21,56 +21,46 @@
 namespace eh::widgets {
 namespace {
 
-// Thread-safe timezone helper: computes broken-down local time for an IANA
-// timezone without mutating the process-global TZ environment variable.
-// Falls back to system localtime when tzName is empty.
 struct SafeLocalTime {
   std::tm tm{};
-  long utcOffsetSeconds = 0;
+  bool ok = false;
 };
 
 SafeLocalTime safe_localtime(std::time_t now, const std::string& tzName) {
   SafeLocalTime out{};
   if (tzName.empty()) {
-    if (localtime_r(&now, &out.tm) != nullptr) {
-#if defined(__GLIBC__) || defined(__linux__)
-      out.utcOffsetSeconds = out.tm.tm_gmtoff;
-#endif
-    }
+    out.ok = (localtime_r(&now, &out.tm) != nullptr);
     return out;
   }
-  const auto* tz = std::chrono::locate_zone(tzName);
-  if (tz == nullptr) {
-    if (localtime_r(&now, &out.tm) != nullptr) {
-#if defined(__GLIBC__) || defined(__linux__)
-      out.utcOffsetSeconds = out.tm.tm_gmtoff;
-#endif
+  try {
+    const auto* tz = std::chrono::locate_zone(tzName);
+    if (tz == nullptr) {
+      out.ok = (localtime_r(&now, &out.tm) != nullptr);
+      return out;
     }
-    return out;
+    const auto zt = std::chrono::zoned_time(tz, std::chrono::system_clock::from_time_t(now));
+    const auto lt = zt.get_local_time();
+    const auto tp = std::chrono::floor<std::chrono::seconds>(lt);
+    const auto dp = std::chrono::floor<std::chrono::days>(tp);
+    std::chrono::hh_mm_ss hms{tp - dp};
+    std::chrono::year_month_day ymd{dp};
+    out.tm.tm_year = static_cast<int>(ymd.year()) - 1900;
+    out.tm.tm_mon = static_cast<unsigned>(ymd.month()) - 1;
+    out.tm.tm_mday = static_cast<unsigned>(ymd.day());
+    out.tm.tm_wday = static_cast<int>(std::chrono::weekday{dp}.c_encoding());
+    const auto jan1 = std::chrono::sys_days(std::chrono::year_month_day{
+        ymd.year(), std::chrono::month{1}, std::chrono::day{1}});
+    out.tm.tm_yday = static_cast<int>((std::chrono::sys_days(ymd) - jan1).count());
+    out.tm.tm_hour = static_cast<int>(hms.hours().count());
+    out.tm.tm_min = static_cast<int>(hms.minutes().count());
+    out.tm.tm_sec = static_cast<int>(hms.seconds().count());
+    out.ok = true;
+  } catch (...) {
+    out.ok = (localtime_r(&now, &out.tm) != nullptr);
   }
-  const auto zt = std::chrono::zoned_time(tz, std::chrono::system_clock::from_time_t(now));
-  const auto lt = zt.get_local_time();
-  const auto tp = std::chrono::floor<std::chrono::seconds>(lt);
-  const auto dp = std::chrono::floor<std::chrono::days>(tp);
-  std::chrono::hh_mm_ss hms{tp - dp};
-  std::chrono::year_month_day ymd{dp};
-  out.tm.tm_year = static_cast<int>(ymd.year()) - 1900;
-  out.tm.tm_mon = static_cast<unsigned>(ymd.month()) - 1;
-  out.tm.tm_mday = static_cast<unsigned>(ymd.day());
-  out.tm.tm_wday = static_cast<int>(std::chrono::weekday{dp}.c_encoding());
-  const auto jan1 = std::chrono::sys_days(std::chrono::year_month_day{
-      ymd.year(), std::chrono::month{1}, std::chrono::day{1}});
-  out.tm.tm_yday = static_cast<int>((std::chrono::sys_days(ymd) - jan1).count());
-  out.tm.tm_hour = static_cast<int>(hms.hours().count());
-  out.tm.tm_min = static_cast<int>(hms.minutes().count());
-  out.tm.tm_sec = static_cast<int>(hms.seconds().count());
-  const auto offset = zt.get_info().offset;
-  out.utcOffsetSeconds = static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(offset).count());
   return out;
 }
 
-// Per-instance cache to avoid recreating PangoLayout every frame
-// when the text content and font size haven't changed.
 struct ClockLayoutCache {
   double lastFontPx = 0;
   std::string cacheKey;
@@ -104,14 +94,6 @@ struct ClockLayoutCache {
 };
 
 static std::unordered_map<std::string, ClockLayoutCache> g_clockLayoutCache;
-
-bool parse_bool_setting(const std::string& v, bool fallback) {
-   
-  if (v.empty()) return fallback;
-  if (v == "1" || v == "true" || v == "True" || v == "yes" || v == "Yes") return true;
-  if (v == "0" || v == "false" || v == "False" || v == "no" || v == "No") return false;
-  return fallback;
-}
 
 static void append_weekday_short(std::string& s, const std::tm& tm) {
    
@@ -162,6 +144,18 @@ void format_clock_lines(const eh::config::ShellConfig& sc, std::string_view inst
     lines = it->second;
     return;
   }
+  if (s_cache.size() > 4) {
+    const std::string tickSuffix = ':' + std::to_string(tickKey);
+    for (auto jt = s_cache.begin(); jt != s_cache.end();) {
+      const std::string& k = jt->first;
+      const bool current = k.size() >= tickSuffix.size() &&
+          k.compare(k.size() - tickSuffix.size(), tickSuffix.size(), tickSuffix) == 0;
+      if (current)
+        ++jt;
+      else
+        jt = s_cache.erase(jt);
+    }
+  }
 
   lines.clear();
 
@@ -191,10 +185,9 @@ void format_clock_lines(const eh::config::ShellConfig& sc, std::string_view inst
 
   std::tm local{};
   {
-    const std::string& tz = sc.time.timezone;
-    const auto slt = safe_localtime(now, tz);
+    const auto slt = safe_localtime(now, sc.time.timezone);
+    if (!slt.ok) return;
     local = slt.tm;
-    if (local.tm_hour == 0 && local.tm_min == 0 && local.tm_sec == 0 && now != 0) return;
   }
 
   if (!custom.empty()) {
@@ -271,10 +264,9 @@ bool clock_tick_signature_changed(int& cached_signature, const eh::config::Shell
   std::time_t t = std::time(nullptr);
   std::tm local{};
   {
-    const std::string& tz = sc.time.timezone;
-    const auto slt = safe_localtime(t, tz);
+    const auto slt = safe_localtime(t, sc.time.timezone);
+    if (!slt.ok) return false;
     local = slt.tm;
-    if (local.tm_hour == 0 && local.tm_min == 0 && local.tm_sec == 0 && t != 0) return false;
   }
   const int sig =
       showSeconds ? (local.tm_hour * 3600 + local.tm_min * 60 + local.tm_sec) : (local.tm_hour * 60 + local.tm_min);
@@ -346,6 +338,7 @@ void paint_clock_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::strin
   bool cacheHit = (it != g_clockLayoutCache.end() && it->second.cacheKey == ck && it->second.lastFontPx == fontPx);
   ClockLayoutCache* clp = cacheHit ? &it->second : &g_clockLayoutCache[kid];
   ClockLayoutCache& clc = *clp;
+  const bool layoutStale = !clc.layout || clc.lastFontPx != fontPx;
   if (!cacheHit) {
     clc.cacheKey = ck;
     clc.lastFontPx = fontPx;
@@ -354,7 +347,7 @@ void paint_clock_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::strin
     clc.maxWidth = 0;
     clc.totalTextH = 0;
   }
-  if (!clc.layout || clc.lastFontPx != fontPx) {
+  if (layoutStale) {
     if (clc.layout) g_object_unref(clc.layout);
     clc.layout = make_layout(cr, fdStr.c_str());
   } else {

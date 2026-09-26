@@ -22,9 +22,6 @@
 namespace eh::widgets {
 namespace {
 
-constexpr double kSpacingS  = 6.0;
-constexpr double kSpacingXS = 4.0;
-
 constexpr double kBtnSmallD = 16.0;
 constexpr double kBtnPlayD  = 19.0;
 
@@ -32,12 +29,8 @@ constexpr double kMediaOuterHPad = 4.0;
 
 constexpr double kScrollThreshold4Words = 72.0;
 
-constexpr double kPrimR = 0.90, kPrimG = 0.90, kPrimB = 0.90;
-constexpr double kOnPrimR = 0.10, kOnPrimG = 0.10, kOnPrimB = 0.10;
 constexpr double kSurfR = 1.0, kSurfG = 1.0, kSurfB = 1.0;
 
-// Per-instance cache for title/artist natural widths.
-// Invalidated automatically when track metadata changes.
 struct MediaTextWidths {
     std::string title;
     std::string artist;
@@ -45,14 +38,6 @@ struct MediaTextWidths {
     int artistNatW = 0;
 };
 static std::unordered_map<std::string, MediaTextWidths> g_mediaTextWidths;
-
-bool parse_bool(const std::string& v, bool def) {
-   
-    if (v.empty()) return def;
-    if (v=="1"||v=="true"||v=="True"||v=="yes"||v=="Yes") return true;
-    if (v=="0"||v=="false"||v=="False"||v=="no"||v=="No") return false;
-    return def;
-}
 
 double parse_max_title_scale(const eh::config::ShellConfig& sc, std::string_view id) {
    
@@ -76,9 +61,9 @@ PangoLayout* make_layout(cairo_t* cr, const char* desc) {
     return l;
 }
 
-std::pair<int, int> font_sizes(double  ) {
-   
-  return {10, 9}; }
+std::pair<int, int> font_sizes(double s) {
+  return {static_cast<int>(std::round(10.0 * s)), static_cast<int>(std::round(9.0 * s))};
+}
 
 static void layout_set_natural_single_line(PangoLayout* layout) {
    
@@ -99,14 +84,17 @@ static int layout_natural_pixel_width(PangoLayout* layout) {
 static constexpr const char kTitleArtistDotUtf8[] = " \xe2\x80\xa2 ";
 
 static double title_artist_sep_width_px(cairo_t* measure_cr, double s) {
-    
     const double sep_min = std::max(6.0, 8.0 * s);
     if (!measure_cr) return sep_min;
+    const int fontPx = static_cast<int>(std::round(9.0 * s));
     static int cached_dot_w = 0;
-    if (cached_dot_w == 0) {
-        PangoLayout* l = make_layout(measure_cr, "Inter SemiBold 9");
+    static int cached_dot_font = 0;
+    if (cached_dot_w == 0 || cached_dot_font != fontPx) {
+        std::string fd = "Inter SemiBold " + std::to_string(std::max(1, fontPx));
+        PangoLayout* l = make_layout(measure_cr, fd.c_str());
         pango_layout_set_text(l, kTitleArtistDotUtf8, -1);
         cached_dot_w = layout_natural_pixel_width(l);
+        cached_dot_font = fontPx;
         g_object_unref(l);
     }
     return std::max(sep_min, static_cast<double>(cached_dot_w));
@@ -138,8 +126,6 @@ void fill_circle(cairo_t* cr, double cx, double cy, double r,
 
 }
 
-// Animations disabled — no per-widget crossfade state needed.
-
 bool widget_list_contains_media(const eh::config::ShellConfig& sc,
                                  const std::vector<std::string>& widgets) {
    
@@ -155,7 +141,7 @@ double dock_media_slot_width(cairo_t* measure_cr,
                               double icon_ref_px, double bar_height,
                               const eh::mpris::PlayerSnapshot& snap) {
    
-    const bool show_text = parse_bool(widget_setting(sc, instance_id, "show_text"), true);
+    const bool show_text = parse_bool_setting(widget_setting(sc, instance_id, "show_text"), true);
     const double max_tw = parse_max_title_scale(sc, instance_id);
     const double s = icon_ref_px / 30.0;
     const double art_dia = icon_ref_px * 0.78;
@@ -245,7 +231,7 @@ bool paint_media_slot(cairo_t* cr,
     if (progress_tick_wanted) *progress_tick_wanted = false;
     if (slot_w <= 1.0) return false;
 
-    const bool show_text = parse_bool(widget_setting(sc, instance_id, "show_text"), true);
+    const bool show_text = parse_bool_setting(widget_setting(sc, instance_id, "show_text"), true);
     const double max_tw = parse_max_title_scale(sc, instance_id);
     const double s = icon_ref_px / 30.0;
     const double art_dia = icon_ref_px * 0.78;
@@ -564,30 +550,25 @@ bool paint_media_slot(cairo_t* cr,
     if (showProgress) {
         if (progress_tick_wanted) *progress_tick_wanted = true;
 
-        // Smooth position tracking — always project forward from
-        // steady_clock.  MPRIS snapshot is ONLY used to detect genuine
-        // seeks (position jumps >2s between successive snapshots).
-        // Snapshots reporting position 0 mid-track are discarded
-        // (some players briefly emit 0 between track metadata updates).
+        auto now = std::chrono::steady_clock::now();
+        int64_t new_snap = snap.position_us;
+        const std::string cur_track_key = snap.track_id + '\x1f' + snap.title;
+
         static std::string s_pos_track;
         static int64_t s_pos_us = 0;
         static int64_t s_last_snap = 0;
         static std::chrono::steady_clock::time_point s_pos_at;
 
-        auto now = std::chrono::steady_clock::now();
-        int64_t new_snap = snap.position_us;
-
-        // Discard spurious 0-positions when we're clearly past the start
-        if (new_snap == 0 && s_pos_us > 2000000) new_snap = s_last_snap;
+        if (new_snap == 0 && s_pos_us > 2000000 && cur_track_key == s_pos_track) new_snap = s_last_snap;
 
         bool seek = false;
-        if (s_last_snap > 0 && snap.track_id == s_pos_track) {
+        if (s_last_snap > 0 && cur_track_key == s_pos_track) {
             int64_t delta = new_snap - s_last_snap;
             seek = (delta > 2000000 || delta < -2000000);
         }
 
-        if (snap.track_id != s_pos_track || seek) {
-            s_pos_track = snap.track_id;
+        if (cur_track_key != s_pos_track || seek) {
+            s_pos_track = cur_track_key;
             s_pos_us = new_snap;
             s_pos_at = now;
         } else {

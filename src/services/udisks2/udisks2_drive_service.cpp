@@ -67,16 +67,18 @@ void UDisks2DriveService::start() {
    
   std::lock_guard<std::mutex> lock(mtx_);
   if (started_) return;
-  started_ = true;
+  bool ok = false;
 
   try {
     bus_ = sdbus::createSystemBusConnection();
     proxy_ = sdbus::createProxy(*bus_, kUDisks2, kUDisks2Root);
     bind_signals();
     bus_->enterEventLoopAsync();
+    ok = true;
   } catch (const sdbus::Error& e) {
     std::cerr << "[udisks2] failed to connect: " << e.what() << '\n';
   }
+  if (ok) started_ = true;
 }
 
 void UDisks2DriveService::set_change_callback(ChangeCallback cb) {

@@ -4,6 +4,8 @@
 
 #include <sdbus-c++/sdbus-c++.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -12,11 +14,19 @@
 
 namespace eh::tray {
 
+// Every synchronous StatusNotifier call (Activate / GetLayout / property reads /
+// the start() discovery walk) runs on a shell event-loop thread. sdbus-c++
+// defaults to a 25s method-call timeout, so one unresponsive tray app used to
+// park the whole dock/taskbar loop for that long. Keep the ceiling short.
+inline constexpr std::chrono::seconds kTrayMethodCallTimeout{2};
+
 class TrayManager {
 public:
   static TrayManager& instance();
 
   bool start();
+
+  bool start_secondary_host(int waitMs);
   void shutdown();
 
   std::vector<TrayItem> copy_items() const;
@@ -45,9 +55,10 @@ private:
 
   void start_watcher();
   void start_client();
+  bool watcher_owned_externally();
   void discover_existing_items();
 
-  std::unique_ptr<sdbus::IConnection> bus_;
+  std::shared_ptr<sdbus::IConnection> bus_;
   std::unique_ptr<sdbus::IObject> watcherObj_;
   std::unique_ptr<sdbus::IProxy> dbusDaemonProxy_;
   sdbus::Slot nameOwnerChangedSlot_;
@@ -56,7 +67,7 @@ private:
   std::vector<TrayItem> items_;
   std::vector<int> subscribers_;
 
-  bool running_ = false;
+  std::atomic<bool> running_{false};
 };
 
 }

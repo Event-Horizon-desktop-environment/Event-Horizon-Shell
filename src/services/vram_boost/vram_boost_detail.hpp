@@ -36,7 +36,7 @@ struct DmemRegion {
 // Read /sys/fs/cgroup/dmem.capacity. Returns {} when unavailable.
 [[nodiscard]] std::vector<DmemRegion> probe_dmem_regions();
 
-// Prefer the region whose name contains "vram", else the first region.
+// Prefer the region whose name contains "vidmem", then "vram", else the first region.
 [[nodiscard]] std::string primary_vram_region(const std::vector<DmemRegion>& regions);
 
 } // namespace eh::service::vramboost

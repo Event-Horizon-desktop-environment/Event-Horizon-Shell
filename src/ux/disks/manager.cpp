@@ -8,6 +8,7 @@
 #include <sdbus-c++/Types.h>
 
 #include <algorithm>
+#include <chrono>
 #include <fcntl.h>
 #include <iostream>
 #include <map>
@@ -58,6 +59,9 @@ void Manager::start() {
 
   try {
     bus_ = sdbus::createSystemBusConnection();
+    // rebuild_object_tree() below is a synchronous GetManagedObjects and runs on
+    // the caller's (UI event-loop) thread; don't inherit sdbus's 25s default.
+    bus_->setMethodCallTimeout(std::chrono::seconds(2));
     proxy_ = sdbus::createProxy(*bus_, kUDisks2, kUDisks2Root);
     bind_signals();
     rebuild_object_tree();

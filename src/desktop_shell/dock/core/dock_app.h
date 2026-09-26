@@ -1,12 +1,14 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -90,6 +92,7 @@ struct DockApp : WaylandState {
 
   std::vector<std::string> appMenuCategories{};
   std::vector<double> appMenuCategoryWidths{};
+  std::vector<int> appMenuCategoryCounts{};
   int appMenuSelectedCategory = -1;
   int appMenuCategoryHoverIdx = -1;
 
@@ -147,6 +150,11 @@ struct DockApp : WaylandState {
   size_t pointerDockLayerIdx = 0;
 
   wl_callback* frameCallback = nullptr;
+  // When the outstanding frame callback was requested. A frame request whose
+  // commit carried no new buffer is not guaranteed to be serviced until the
+  // surface is damaged again, so the poll-timer watchdog uses this to drop a
+  // callback that has stopped the dock from ever getting its next frame.
+  std::chrono::steady_clock::time_point frameCallbackAt{};
 
   std::uint32_t dockSlideAnimId = 0;
   std::uint32_t dockHoverLiftAnimId = 0;
@@ -155,6 +163,7 @@ struct DockApp : WaylandState {
   int configuredHeight = 0;
   bool configured = false;
   bool running = true;
+  bool exitRequested = false;
   bool sizeDirty = true;
 
   int dockLastIntrinsicStripWidth = -1;
@@ -191,6 +200,13 @@ struct DockApp : WaylandState {
   void (*launch_settings_override)() = nullptr;
 
   int pollTimerFd = -1;
+
+  // TrayManager::start() performs a burst of synchronous session-bus calls
+  // (NameHasOwner, requestName, a property Get, and a Get per bus name during
+  // owner resolution). It must never run on the event-loop thread: an
+  // unresponsive bus parks the whole dock. Launched once, joined at cleanup.
+  std::atomic<bool> trayStartLaunched{false};
+  std::thread trayStartThread;
 
   // One-shot timer that wakes the dock when the media progress border has
   // moved enough to be worth repainting. Replaces the old vsync-rate frame
@@ -413,7 +429,7 @@ struct DockPinnedDragGeometry {
 
 [[nodiscard]] int eh_dock_fps_log_mode();
 void dock_draw(DockApp& app, bool* committed = nullptr);
-void dock_schedule_frame(DockApp& app);
+bool dock_schedule_frame(DockApp& app);
 int dock_compute_widget_strip_width(DockApp& app, const std::vector<std::string>& l,
                                     const std::vector<std::string>& c, const std::vector<std::string>& r);
 [[nodiscard]] DockPinnedDragGeometry dock_pinned_drag_geometry(DockApp& app);

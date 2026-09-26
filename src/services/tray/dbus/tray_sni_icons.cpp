@@ -148,23 +148,37 @@ void dock_update_item_from_proxy(sdbus::IProxy& proxy, std::string& id, std::str
                                  int& pixW, int& pixH, std::vector<uint8_t>& pixData,
                                  std::vector<uint8_t>& pixDataCairo, cairo_surface_t*& pixSurface) {
    
-  destroy_pixmap(pixSurface, pixW, pixH, pixData, pixDataCairo);
-  iconName.clear();
-
-  get_text_prop(proxy, "Id", id);
-  get_text_prop(proxy, "Title", title);
+  std::string nid, ntitle, nicon;
+  get_text_prop(proxy, "Id", nid);
+  get_text_prop(proxy, "Title", ntitle);
 
   std::string tmp;
-  if (!try_nonempty_string_prop(proxy, "IconName", iconName)) {
+  if (!try_nonempty_string_prop(proxy, "IconName", nicon)) {
     if (try_nonempty_string_prop(proxy, "AttentionIconName", tmp))
-      iconName = std::move(tmp);
+      nicon = std::move(tmp);
     else if (try_nonempty_string_prop(proxy, "OverlayIconName", tmp))
-      iconName = std::move(tmp);
+      nicon = std::move(tmp);
   }
 
-  if (!try_pixmap_prop(proxy, "IconPixmap", pixSurface, pixW, pixH, pixData, pixDataCairo)) {
-    if (!iconName.empty()) return;
-    (void)try_pixmap_prop(proxy, "AttentionIconPixmap", pixSurface, pixW, pixH, pixData, pixDataCairo);
+  int nw = 0, nh = 0;
+  std::vector<uint8_t> nd, ndc;
+  cairo_surface_t* nsurf = nullptr;
+  bool havePix = try_pixmap_prop(proxy, "IconPixmap", nsurf, nw, nh, nd, ndc);
+  if (!havePix && nicon.empty())
+    havePix = try_pixmap_prop(proxy, "AttentionIconPixmap", nsurf, nw, nh, nd, ndc);
+
+  id = std::move(nid);
+  title = std::move(ntitle);
+  iconName = std::move(nicon);
+  if (havePix && nsurf) {
+    destroy_pixmap(pixSurface, pixW, pixH, pixData, pixDataCairo);
+    pixSurface = nsurf;
+    pixW = nw;
+    pixH = nh;
+    pixData = std::move(nd);
+    pixDataCairo = std::move(ndc);
+  } else if (nsurf) {
+    cairo_surface_destroy(nsurf);
   }
 }
 

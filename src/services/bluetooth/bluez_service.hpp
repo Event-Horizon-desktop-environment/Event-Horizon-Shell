@@ -116,7 +116,7 @@ private:
   void auto_reconnect_worker();
   void attempt_auto_reconnects();
 
-  mutable std::mutex mtx_{};
+  mutable std::recursive_mutex mtx_{};
   bool started_ = false;
   ChangeCallback on_change_{};
   std::chrono::steady_clock::time_point lastRefreshDebounce_{};

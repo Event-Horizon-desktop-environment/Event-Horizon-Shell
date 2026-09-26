@@ -59,6 +59,8 @@ private:
   void start_notifications_services();
   void stop_notifications_services();
   void sync_widget_registry();
+  void retry_deferred_child_respawns();
+  void sync_dock_child_with_enabled_setting();
 
   UnifiedShell& owner_;
   wl_display* display_ = nullptr;
@@ -84,6 +86,12 @@ private:
   uint64_t desktopLastRestartMs_ = 0;
   uint64_t dockLastRestartMs_ = 0;
   uint64_t taskbarLastRestartMs_ = 0;
+  // Deadline for a respawn that arrived inside the cooldown window; 0 = none
+  // pending. See retry_deferred_child_respawns().
+  uint64_t desktopRespawnAtMs_ = 0;
+  uint64_t dockRespawnAtMs_ = 0;
+  uint64_t taskbarRespawnAtMs_ = 0;
+  bool dockEnabledApplied_ = true;
 
   std::unique_ptr<DragPreviewUser> drag_preview_user_;
 

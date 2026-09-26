@@ -387,6 +387,15 @@ void dock_handle_media_anim_timer(DockApp& app) {
       app.pinDragKey.empty();
   app.nextFrameScope = safe_partial ? DockApp::DockFrameScope::MediaMarqueeOnly : DockApp::DockFrameScope::Full;
   dock_draw(app);
+  // Baseline refresh for the open media-player popup marquee (the vsync
+  // chain in frame_done carries the smooth motion; this keeps the marquee
+  // flag fresh and covers a stalled chain).
+  if (app.popupOpen && app.popupKind == DockApp::PopupKind::MediaPlayer &&
+      eh::shell::dock::popup::media_player::media_popup_marquee_active() &&
+      app.popupSurface) {
+    popup_draw_surface(app);
+    wl_display_flush(app.display);
+  }
 }
 
 
@@ -1155,12 +1164,18 @@ static void dock_warm_startup_caches(DockApp& app) {
   }
 }
 
+void dock_start_tray_async(DockApp& app) {
+  if (app.trayStartLaunched.exchange(true)) return;
+  if (app.trayStartThread.joinable()) app.trayStartThread.join();
+  app.trayStartThread = std::thread([]() { eh::tray::TrayManager::instance().start(); });
+}
+
 void dock_try_start_deferred_tray(DockApp& app) {
   MANGOWM_FN();
   if (!app.trayWatcherDeferPending) return;
   if (std::chrono::steady_clock::now() < app.trayWatcherDeferUntil) return;
   app.trayWatcherDeferPending = false;
-  eh::tray::TrayManager::instance().start();
+  dock_start_tray_async(app);
   dock_tray_init(app);
   dock_warm_startup_caches(app);
   if (eh_dock_bench() && shell_bench_have_init_t0()) {
@@ -1260,6 +1275,9 @@ void dock_maybe_reload_settings(DockApp& app, const char* source) {
   if (prev_show_dock != app.settings.dockShowDock) {
     eh::bench::bench_write("dock", app.settings.dockShowDock ? "turn_on" : "turn_off");
   }
+  if (prev_show_dock && !app.settings.dockShowDock) {
+    app.exitRequested = true;
+  }
   if (prev_show_dock && !app.settings.dockShowDock &&
       eh::dock::use_vulkan_backend(app)) {
     for (auto& up : app.dockLayers) {
@@ -1320,7 +1338,7 @@ void dock_maybe_reload_settings(DockApp& app, const char* source) {
   }
 }
 
-static void schedule_frame(DockApp& app);
+static bool schedule_frame(DockApp& app);
 
 // Kill switch for Weston-style partial damage: enabled by default,
 // EH_DOCK_PARTIAL_DAMAGE=0 forces full repaints everywhere.
@@ -1771,10 +1789,23 @@ void dock_draw(DockApp& app, bool* committed) {
 
   app.mediaMarqueeWantsFrame = media_mq;
 
+  // The open media-player popup scrolls long titles on the vsync frame
+  // chain (see frame_done): fold it into the marquee flag so the chain
+  // keeps running while it scrolls, and kick a frame if none is outstanding.
+  const bool popupMarquee =
+      app.popupOpen && app.popupKind == DockApp::PopupKind::MediaPlayer &&
+      eh::shell::dock::popup::media_player::media_popup_marquee_active();
+  if (popupMarquee) {
+    app.mediaMarqueeWantsFrame = true;
+    if (!app.frameCallback) schedule_frame(app);
+  }
+
   // Drive the media progress border from a slow timer instead of the vsync
   // frame chain. Only arm when no marquee scroll is active (scrolling keeps
   // the continuous chain, which repaints the dash as part of each frame).
-  if (any_commit && media_progress_tick && !media_mq && !dockHidden) {
+  // An open scrolling media-player popup also keeps the timer armed as a
+  // baseline (smooth motion comes from the frame chain kicked below).
+  if (any_commit && ((media_progress_tick && !media_mq) || popupMarquee) && !dockHidden) {
     dock_arm_media_anim_timer(app, eh_dock_media_progress_tick_ms());
   } else {
     dock_disarm_media_anim_timer(app);
@@ -1897,11 +1928,18 @@ static void dock_fps_log_on_vsync(uint32_t compositor_time_ms, bool pin_dragging
   gap_max_ms = 0.0;
 }
 
+// Consecutive unserviced frame callbacks. Reset by frame_done, i.e. by the one
+// signal that proves the compositor is still presenting, so the backoff below
+// only ever engages while frames are genuinely going missing.
+static uint32_t g_dock_frame_starve_streak = 0;
+
 static void frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms) {
   MANGOWM_FN();
   auto& app = *static_cast<DockApp*>(data);
   wl_callback_destroy(cb);
   app.frameCallback = nullptr;
+  app.frameCallbackAt = {};
+  g_dock_frame_starve_streak = 0;
   eh::gpu::touch_frame_activity();
 
   dock_fps_log_on_vsync(compositor_time_ms, app.pinDragging);
@@ -1942,6 +1980,14 @@ static void frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms)
 
   dock_draw(app);
   eh::shell::dashboard::dashboard_frame_draw(app);
+  // Smooth media-popup marquee: repaint the open player every vsync while
+  // its title/artist scrolls (the flag is refreshed by each paint).
+  if (app.popupOpen && app.popupKind == DockApp::PopupKind::MediaPlayer &&
+      eh::shell::dock::popup::media_player::media_popup_marquee_active() &&
+      app.popupSurface) {
+    popup_draw_surface(app);
+    wl_display_flush(app.display);
+  }
 
   static const bool dmg_stats = eh::debug_profile::env_int("EH_DOCK_DAMAGE_STATS", 0) != 0;
   if (dmg_stats) {
@@ -1997,22 +2043,35 @@ static bool dock_pick_frame_surface_ready(DockApp& app, wl_surface* surf) {
   return app.configured;
 }
 
-static void schedule_frame(DockApp& app) {
+// Returns true when a frame callback was actually requested.
+//
+// The bool is load-bearing: a caller that is holding a "needs redraw" intent
+// must only retire that intent once a frame is genuinely outstanding.
+// A false return means the request was dropped — either the surface is not
+// ready yet (a later configure/draw picks it up) or a callback is already
+// outstanding (dock_frame_watchdog picks it up). Retiring the intent on a
+// false return is what used to freeze the dock: the compositor's frame.done
+// is the only thing that can start the next frame, so a single lost done
+// (which is all it takes to strand the fast-start placeholder's deferred
+// full paint) left nothing behind to ever repaint.
+static bool schedule_frame(DockApp& app) {
   MANGOWM_FN();
   wl_surface* surf = dock_pick_frame_surface(app);
-  if (!surf || !dock_pick_frame_surface_ready(app, surf) || app.frameCallback) return;
+  if (!surf || !dock_pick_frame_surface_ready(app, surf) || app.frameCallback) return false;
   app.frameCallback = wl_surface_frame(surf);
+  app.frameCallbackAt = std::chrono::steady_clock::now();
   wl_callback_add_listener(app.frameCallback, &g_frame_listener, &app);
   wl_surface_commit(surf);
+  return true;
 }
 
-void dock_schedule_frame(DockApp& app) {
+bool dock_schedule_frame(DockApp& app) {
   MANGOWM_FN();
   // External callers (toplevel hooks etc.) request state changes that only a
   // full repaint can safely express; tag it so frame_done never classifies
   // the resulting frame as marquee-only.
   app.externalFrameRequest = true;
-  schedule_frame(app);
+  return schedule_frame(app);
 }
 
 void dock_sync_settings_from_drag_preview(DockApp& app) {
@@ -2482,7 +2541,7 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
       app.trayWatcherDeferUntil = std::chrono::steady_clock::now() + d;
       EH_ST_TRACE(std::cerr << "dock_init: tray session services deferred");
     } else {
-      eh::tray::TrayManager::instance().start();
+      dock_start_tray_async(app);
       dock_tray_init(app);
       if (eh_dock_bench() && shell_bench_have_init_t0()) {
         std::cerr << "[dock-bench] after TrayManager start (StatusNotifier D-Bus) cumulative=" << shell_bench_ms_since(shell_bench_init_t0())
@@ -2555,22 +2614,107 @@ void dock_install_loop_fds(DockApp& app) {
   MANGOWM_FN();
   if (app.settingsInotifyFd < 0) {
     app.settingsInotifyFd = dock_open_settings_inotify();
+    if (app.settingsInotifyFd < 0) {
+      std::cerr << "[dock-settings] inotify unavailable (" << std::strerror(errno)
+                << "); settings changes fall back to timer poll\n";
+    }
   }
 
   if (app.pollTimerFd < 0) {
-
     app.pollTimerFd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
-    if (app.pollTimerFd >= 0) {
-      if (app.settingsInotifyFd < 0) {
-        std::cerr << "[dock-settings] using 500ms poll fallback (no inotify fd)\n";
-      }
-      dock_apply_poll_timer_interval(app);
+    if (app.pollTimerFd < 0) {
+      std::cerr << "[dock] poll timer unavailable (" << std::strerror(errno)
+                << "); loop wakeups depend on display/ipc activity\n";
     }
+  }
+
+  if (app.pollTimerFd >= 0) {
+    if (app.settingsInotifyFd < 0) {
+      std::cerr << "[dock-settings] using 500ms poll fallback (no inotify fd)\n";
+    }
+    dock_apply_poll_timer_interval(app);
   }
 
   if (app.mediaAnimTimerFd < 0) {
     app.mediaAnimTimerFd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
   }
+}
+
+// Frame-callback starvation guard.
+//
+// schedule_frame() commits the surface to piggyback its frame request, but that
+// commit carries no new buffer whenever the request is made outside a present
+// (the fast-start placeholder, the poll-timer retry, a deferred redraw). The
+// compositor is then free to skip the surface until something damages it again
+// — and every path that could ask for another frame (schedule_frame itself, the
+// poll-timer retry below) is gated on `!frameCallback`, so a single unserviced
+// callback wedges the dock on whatever it last drew. That is a visible freeze:
+// the process stays alive and idle, no errors are logged, and the surface keeps
+// its stale content forever.
+//
+// So when the dock actually needs frames and the outstanding callback has been
+// pending too long, drop it and repaint. Destroying a wl_callback is safe
+// client-side: the compositor's late `done` is discarded with the proxy.
+static void dock_frame_watchdog(DockApp& app) {
+  if (!app.frameCallback || app.frameCallbackAt == std::chrono::steady_clock::time_point{}) return;
+
+  const auto pending = std::chrono::steady_clock::now() - app.frameCallbackAt;
+
+  // Only intervene when a frame is genuinely wanted; an idle dock with a
+  // pending callback is harmless, and tearing it down needlessly would just
+  // churn requests at 4Hz on a compositor that is not presenting.
+  const bool wants_frame = app.deferDockRedraw || app.pendingRedraw || app.sizeDirty ||
+                           app.shellAnim.has_active() || app.wsStripAnim.active;
+  if (!wants_frame) {
+    // Idle escape. The fast path above can't cover this state: a stranded
+    // callback blocks every later wl_surface_frame, so a dock that goes idle
+    // while one is in flight can never paint again even after input or a clock
+    // tick asks for a repaint. Dropping the proxy costs nothing (the late done
+    // is discarded with it) and restores the ability to request frames.
+    static const int64_t kIdleMs = [] {
+      const int64_t v = eh::debug_profile::env_int("EH_DOCK_FRAME_IDLE_MS", 2000);
+      return v > 0 ? v : 2000;
+    }();
+    if (pending < std::chrono::milliseconds(kIdleMs)) return;
+
+    static uint32_t s_idle_drop_count = 0;
+    ++s_idle_drop_count;
+    std::cerr << "[dock-frame] dropping idle frame callback after "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(pending).count() << "ms (idle_drops="
+              << s_idle_drop_count << ")\n";
+    wl_callback_destroy(app.frameCallback);
+    app.frameCallback = nullptr;
+    app.frameCallbackAt = {};
+    return;
+  }
+
+  static const int64_t kStaleMs = [] {
+    const int64_t v = eh::debug_profile::env_int("EH_DOCK_FRAME_STALE_MS", 250);
+    return v > 0 ? v : 250;
+  }();
+  // Back off while frames keep going missing so a compositor that has stopped
+  // presenting altogether degrades to an occasional repaint instead of a 4Hz
+  // present loop. One serviced frame (frame_done) clears the streak.
+  const int64_t staleMs = kStaleMs << std::min<uint32_t>(g_dock_frame_starve_streak, 3);
+  if (pending < std::chrono::milliseconds(staleMs)) return;
+  ++g_dock_frame_starve_streak;
+
+  static uint32_t s_drop_count = 0;
+  ++s_drop_count;
+  std::cerr << "[dock-frame] dropping stale frame callback after "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(pending).count()
+            << "ms (drops=" << s_drop_count << " streak=" << g_dock_frame_starve_streak << ") defer="
+            << (app.deferDockRedraw ? 1 : 0) << " anim=" << (app.shellAnim.has_active() ? 1 : 0) << "\n";
+
+  wl_callback_destroy(app.frameCallback);
+  app.frameCallback = nullptr;
+  app.frameCallbackAt = {};
+  // Paint directly rather than re-requesting a frame: a frame request only
+  // asks for the *next* frame, it never produces one, so re-arming here would
+  // spin without ever drawing. dock_draw presents a fresh buffer, which both
+  // repaints the dock and gives the compositor the damage it needs to service
+  // any callback requested afterwards.
+  dock_draw(app);
 }
 
 void dock_handle_timer(DockApp& app) {
@@ -2581,6 +2725,11 @@ void dock_handle_timer(DockApp& app) {
   dock_try_start_deferred_tray(app);
   uint64_t expirations = 0;
   (void)read(app.pollTimerFd, &expirations, sizeof(expirations));
+  dock_frame_watchdog(app);
+  // Re-arm whenever a redraw is still owed. The watchdog above may have just
+  // dropped a stranded callback, and deferDockRedraw survives a declined
+  // schedule_frame on purpose (see dock_after_display_dispatch), so this is
+  // the path that turns a wedged dock back into a painting one.
   if (app.deferDockRedraw && !app.frameCallback) schedule_frame(app);
   bool drew = false;
   bool drewDock = false;
@@ -2716,6 +2865,11 @@ void dock_after_display_dispatch(DockApp& app) {
       app.deferDockRedraw = false;
       return;
     }
+    // A frame is already in flight, so the redraw this intent refers to is
+    // already accounted for — arming is impossible until that callback lands,
+    // and dock_handle_timer owns re-arming. Bail before the rate-limit dance so
+    // a sticky intent can't turn a burst of display dispatches into a spin.
+    if (app.frameCallback) return;
     // Rate-limit redraws: cap at ~30fps (33ms) to avoid GPU contention
     // during event bursts (e.g., RS3/Proton toplevel floods on high-refresh displays)
     auto now = std::chrono::steady_clock::now();
@@ -2727,16 +2881,26 @@ void dock_after_display_dispatch(DockApp& app) {
       usleep(5000); // 5ms
       return;
     }
-    app.deferDockRedraw = false;
     app.lastDockDrawTime = now;
     EH_ST_TRACE(std::cerr << "dock_after_display_dispatch: deferDockRedraw → schedule_frame");
-    dock_schedule_frame(app);
+    // Only retire the redraw intent once a frame is genuinely outstanding.
+    // If schedule_frame declined (surface not configured yet) the intent has to
+    // survive: nothing else will ask for this repaint, and a frame request that
+    // was never made is indistinguishable from one the compositor already
+    // satisfied. Leaving the flag set keeps the dock on the poll-timer path,
+    // where the next tick either arms the frame or lets dock_frame_watchdog
+    // clear a callback the compositor never serviced.
+    if (dock_schedule_frame(app)) app.deferDockRedraw = false;
   }
 }
 
 void dock_cleanup(DockApp& app, bool disconnect_display) {
   MANGOWM_FN();
   MANGOWM_INFO("dock_cleanup app=%p disconnect=%d", (void*)&app, (int)disconnect_display);
+
+  // The tray worker touches TrayManager singletons; let it finish (its D-Bus
+  // calls are timeout-bounded) before anything is torn down.
+  if (app.trayStartThread.joinable()) app.trayStartThread.join();
 
   // Tear down the dashboard layer surface while the display is still known
   // to be healthy (the error branch below nulls app.display first).

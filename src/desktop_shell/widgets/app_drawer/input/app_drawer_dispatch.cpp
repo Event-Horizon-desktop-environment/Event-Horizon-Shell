@@ -10,6 +10,7 @@
 #include "desktop_shell/widgets/app_drawer/trace/app_drawer_trace.hpp"
 #include "desktop_shell/power_confirm/power_confirm.hpp"
 #include "desktop_shell/dock/pinned/dock_pinned.h"
+#include "desktop_shell/controlcenter/input/control_center_bus_hook.hpp"
 #include "desktop_shell/dock/core/dock_settings.hpp"
 
 #include <string>
@@ -294,7 +295,11 @@ bool app_drawer_handle_click(DockApp& app, bool left, bool right) {
         if (next) app.gammaService_->set_temperature(4000);
         eh_app_drawer_set_nightlight_active(next);
       } else {
+        // Split-out child: no gamma control here. Flip the paint state
+        // optimistically and route the real toggle to the supervisor, which
+        // owns gamma + the config snapshot (same pattern as PearCenter).
         eh_app_drawer_set_nightlight_active(!eh_app_drawer_get_nightlight_active());
+        eh::shell::dock::control_center::control_center_bus_publish("nightlight.toggle");
       }
       popup_draw_surface(app);
       wl_display_flush(app.display);

@@ -243,7 +243,7 @@ struct Settings {
   int launchpadCellGapPx = 0;
   int launchpadIconFillPct = 58;
   int launchpadLayoutScalePct = 100;
-  int launchpadViewMode = 1;
+  int launchpadViewMode = 0; // Tahoe default: Icons grid (1 = List)
   int launchpadFolderSizePct = 100;
   int launchpadFolderGapPx = 16;
   int launchpadFolderColumns = 3;

@@ -97,6 +97,7 @@ bool VramBoostManager::only_fullscreen() const {
 }
 
 void VramBoostManager::reevaluate() {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   if (!available_ || !enabled()) {
     clear_boost();
     return;
@@ -139,6 +140,7 @@ void VramBoostManager::reevaluate() {
 }
 
 void VramBoostManager::apply_boost(const void* handle, const std::string& appId, bool fullscreen) {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   boostedHandle_ = handle;
   boostedAppId_ = appId;
 
@@ -156,6 +158,10 @@ void VramBoostManager::apply_boost(const void* handle, const std::string& appId,
       std::string dir = cgroup_dir_for_pid(pid);
       if (!dir.empty() && seen.insert(dir).second) targetDirs.push_back(std::move(dir));
     }
+  }
+  if (normalized.empty() && !fullscreen) {
+    clear_boost();
+    return;
   }
   if (targetDirs.empty()) {
     const std::string fallbackDir = detect_heaviest_app_scope();
@@ -197,6 +203,7 @@ void VramBoostManager::apply_boost(const void* handle, const std::string& appId,
     if (!write_dmem_limit(cg.dir, "dmem.min", bytes)) {
       warn_once_no_permission();
       if (!cg.prevMin.empty()) (void)write_raw(cg.dir, "dmem.min", cg.prevMin);
+      if (!cg.prevLow.empty()) (void)write_raw(cg.dir, "dmem.low", cg.prevLow);
       continue;
     }
     applied.push_back(std::move(cg));
@@ -214,6 +221,7 @@ void VramBoostManager::apply_boost(const void* handle, const std::string& appId,
 }
 
 void VramBoostManager::refresh_boost() {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   for (auto& cg : boosted_) {
     uint64_t bytes = 0;
     if (!read_usage_bytes(cg.dir, &bytes)) continue;
@@ -226,6 +234,7 @@ void VramBoostManager::refresh_boost() {
 }
 
 void VramBoostManager::clear_boost() {
+  std::lock_guard<std::recursive_mutex> lock(mu_);
   if (boosted_.empty() && boostedHandle_ == nullptr && boostedAppId_.empty()) return;
   for (const auto& cg : boosted_) {
     if (!cg.prevMin.empty()) {
@@ -339,6 +348,7 @@ bool VramBoostManager::enable_dmem_subtree(const std::string& cgroupDir) const {
   bool any = false;
   std::string cur(kCgroupFsRoot);
   std::string_view rest = rel;
+  if (!rest.empty() && rest.front() == '/') rest.remove_prefix(1);
   for (;;) {
     const size_t slash = rest.find('/');
     const std::string_view comp = slash == std::string_view::npos ? rest : rest.substr(0, slash);
@@ -360,20 +370,62 @@ bool VramBoostManager::enable_dmem_subtree(const std::string& cgroupDir) const {
 }
 
 bool VramBoostManager::write_dmem_limit(const std::string& cgroupDir, const char* file, uint64_t bytes) const {
+  const std::string prefix = region_ + " ";
+  const std::string replacement = prefix + std::to_string(bytes);
+  std::string current;
+  if (read_text_file(cgroupDir + "/" + file, current) && !current.empty()) {
+    std::string out;
+    bool found = false;
+    std::string::size_type pos = 0;
+    while (pos <= current.size()) {
+      const auto nl = current.find('\n', pos);
+      std::string line = (nl == std::string::npos) ? current.substr(pos) : current.substr(pos, nl - pos);
+      if (!found && line.compare(0, prefix.size(), prefix) == 0) {
+        line = replacement;
+        found = true;
+      }
+      if (!line.empty()) {
+        out += line;
+        out.push_back('\n');
+      }
+      if (nl == std::string::npos) break;
+      pos = nl + 1;
+    }
+    if (!found) {
+      out += replacement;
+      out.push_back('\n');
+    }
+    return write_raw(cgroupDir, file, out);
+  }
   return write_raw(cgroupDir, file, region_ + " " + std::to_string(bytes) + "\n");
 }
 
 bool VramBoostManager::write_raw(const std::string& cgroupDir, const char* file, std::string_view content) const {
   const std::string path = cgroupDir + "/" + file;
-  const int fd = ::open(path.c_str(), O_WRONLY);
+  const int fd = ::open(path.c_str(), O_WRONLY | O_CLOEXEC);
   if (fd < 0) {
     vram_trace("write " + path + " open failed: " + std::strerror(errno));
     return false;
   }
-  const ssize_t written = ::write(fd, content.data(), content.size());
-  const int savedErrno = errno;
+  size_t off = 0;
+  bool ok = true;
+  int savedErrno = 0;
+  while (off < content.size()) {
+    const ssize_t n = ::write(fd, content.data() + off, content.size() - off);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      savedErrno = errno;
+      ok = false;
+      break;
+    }
+    if (n == 0) {
+      ok = false;
+      break;
+    }
+    off += static_cast<size_t>(n);
+  }
   ::close(fd);
-  if (written < 0) {
+  if (!ok) {
     vram_trace("write " + path + " failed: " + std::strerror(savedErrno));
     return false;
   }

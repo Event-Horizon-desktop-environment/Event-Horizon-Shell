@@ -1,39 +1,41 @@
 #pragma once
+// Create Partition — GParted-style: preceding/size/following + type + fs.
 
+#include <cstdint>
 #include <string>
+
+#include "ux/disks/app_types.hpp"
 
 namespace eh::disks {
 
-inline constexpr int kCreatePartDlgW = 420;
-inline constexpr int kCreatePartDlgH = 380;
+inline constexpr int kCreatePartDlgW = 480;
+inline constexpr int kCreatePartDlgH = 560;
 
 struct CreatePartitionDialog {
   bool open = false;
-
-  int page = 0; // 0=size, 1=fs, 2=confirm
-
-  // Page 0: size
-  int size_pct = 100; // percent of free space
-
-  // Page 1: filesystem
-  int selected_fs = 0;
-
-  // Page 2: confirm
-  std::string name;
+  uint64_t free_offset = 0;
+  uint64_t free_size = 0;
+  uint64_t size = 0;  // chosen size
+  int create_as = 0;  // 0=primary,1=extended,2=logical
+  TextField name;
+  int fs_idx = 0;
+  TextField label;
   bool encrypt = false;
-
-  // Hover tracking
-  int hover_item = -1;
-  bool hover_cancel = false;
-  bool hover_next = false;
-  bool hover_back = false;
-  bool hover_create = false;
+  int focus = 0;  // 0=size slider area,1=name,2=label
+  double slider_grab = -1;  // -1 none, else 0..1 handle drag
+  int hover_create_as = -1;
+  int hover_fs = -1;
   bool hover_encrypt = false;
-  int hover_pct = -1;
-
+  bool hover_cancel = false;
+  bool hover_create = false;
   bool pending = false;
-  bool result_ok = false;
+  std::string error;
 };
 
-}
+void draw_create_partition_dialog(struct AppState& app, cairo_t* cr);
+bool create_partition_dialog_click(struct AppState& app, int x, int y);
+void create_partition_dialog_move(struct AppState& app, int x, int y);
+bool create_partition_dialog_key(struct AppState& app, uint32_t sym, const char* utf8,
+                                 int len);
 
+}  // namespace eh::disks

@@ -208,8 +208,8 @@ private:
   void refresh_default_nodes_locked();
   void rebuild_snapshot_locked();
   void emit_change_locked();
+  void teardown_connection();
 
-  void sync_and_wait_locked();
 
   mutable std::recursive_mutex mtx_{};
   bool started_ = false;

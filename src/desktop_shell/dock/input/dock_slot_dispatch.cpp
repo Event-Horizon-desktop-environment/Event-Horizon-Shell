@@ -87,11 +87,18 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
   }
 
   if (hit.kind == PickSlot::Kind::Media) {
-    if (!app.mpris) return;
+    if (!app.mpris) {
+      eh::shell_log::mpris_dbus("dock media click dropped: mpris is null");
+      return;
+    }
     const auto xw = dock_strip_slot_xw(app, pr, pr.idx);
-    const int zone = eh::mpris::DockMpris::media_hit_zone(
-        app.pointerX - xw.first, xw.second,
-        static_cast<double>(dock_effective_icon_px(app.settings)));
+    const double localX = app.pointerX - xw.first;
+    const double iconPx = static_cast<double>(dock_effective_icon_px(app.settings));
+    const int zone = eh::mpris::DockMpris::media_hit_zone(localX, xw.second, iconPx);
+    // Distinguishes a hit-test miss (zone -1 opens the popup) from an action that
+    // was dispatched but never reached the player.
+    eh::shell_log::mpris_dbus("dock media click: zone=", zone, " localX=", localX,
+                              " slotX=", xw.first, " slotW=", xw.second, " iconPx=", iconPx);
     if (zone == 0) app.mpris->previous();
     else if (zone == 2) app.mpris->next();
     else if (zone == 1) app.mpris->play_pause();
@@ -170,13 +177,17 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
   }
 
   if (hit.kind == PickSlot::Kind::Spotlight || hit.key == kSlotKeySpotlight) {
-    std::cout << "[input] spotlight_popup\n";
-    if (app.popupOpen && app.popupKind == DockApp::PopupKind::Spotlight) {
+    // Tahoe unification: Spotlight IS the Applications window now (search
+    // filters the grid live), so the Spotlight slot opens the same popup.
+    std::cout << "[input] spotlight_popup_unified\n";
+    if (app.popupOpen && app.popupKind == DockApp::PopupKind::AppMenu) {
       popup_close(app);
       wl_display_flush(app.display);
       return;
     }
-    popup_open_spotlight(app, static_cast<int>(app.pointerX), serial);
+    app.appMenuSmenuMode = false;
+    eh_app_drawer_update_categories(app);
+    popup_open_app_menu(app, static_cast<int>(app.pointerX), serial);
     return;
   }
 
@@ -198,7 +209,7 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
   if (hit.kind == PickSlot::Kind::AppMenu || hit.key == kSlotKeyAppMenu || hit.kind == PickSlot::Kind::AppDrawer ||
       hit.key == kSlotKeyAppDrawer || hit.kind == PickSlot::Kind::Smenu) {
     app.appMenuSmenuMode = (hit.kind == PickSlot::Kind::Smenu);
-    if (app.appMenuSmenuMode) eh_app_drawer_update_categories(app);
+    eh_app_drawer_update_categories(app);
     std::cout << "[input] app_menu_popup\n";
     if (eh_app_drawer_debug_level() >= 1) {
       app_drawer::trace_line(1, "dock",

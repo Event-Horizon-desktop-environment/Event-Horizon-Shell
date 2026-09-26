@@ -16,6 +16,10 @@ template<typename A>
 void dock_vpn_popup_paint(const A& app, cairo_t* cr, const eh::config::ShellConfig& sc);
 
 void dock_vpn_popup_handle_click(DockApp& app, double x, double y, uint32_t serial);
+
+enum class VpnPopupClick { None, Close, Redraw, Reopen };
+
+[[nodiscard]] VpnPopupClick vpn_popup_click_action(double x, double y);
 }
 
 namespace eh::widgets::popup::vpn {

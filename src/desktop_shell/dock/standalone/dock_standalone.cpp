@@ -211,6 +211,7 @@ int run_dock_standalone() {
           dock_sync_settings_from_drag_preview(app);
           eh::config::shell_config_reload_from_disk_now();
           dock_maybe_reload_settings(app, "applied");
+          eh_app_drawer_set_nightlight_active(eh::config::shell_config_snapshot().nightLight.enabled);
           dock_schedule_frame(app);
         } else if (topic == "command.request") {
           if (is_settings_command(payload)) {
@@ -264,6 +265,22 @@ int run_dock_standalone() {
     return running && app.running;
   };
   mux.on_idle_flush = [&](bool did_display_event) {
+    if (app.exitRequested) {
+      std::cerr << "[horizon-dock] show_dock disabled, exiting\n";
+      running = false;
+      app.running = false;
+      return;
+    }
+    {
+      static uint64_t lastFdHealMs = 0;
+      const uint64_t nowMs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+              .count());
+      if ((app.pollTimerFd < 0 || app.settingsInotifyFd < 0) && nowMs - lastFdHealMs > 5000) {
+        lastFdHealMs = nowMs;
+        dock_install_loop_fds(app);
+      }
+    }
     if (!deferred_done) {
       deferred_done = true;
       dock_boot_step("deferred startup begin (first idle)");

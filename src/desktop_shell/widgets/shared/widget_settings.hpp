@@ -13,4 +13,11 @@ inline std::string widget_setting(const eh::config::ShellConfig& sc, std::string
   return jt->second;
 }
 
+inline bool parse_bool_setting(const std::string& v, bool fallback) {
+  if (v.empty()) return fallback;
+  if (v == "1" || v == "true" || v == "True" || v == "yes" || v == "Yes") return true;
+  if (v == "0" || v == "false" || v == "False" || v == "no" || v == "No") return false;
+  return fallback;
+}
+
 }

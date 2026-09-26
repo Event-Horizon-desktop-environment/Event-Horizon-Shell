@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include <stdexcept>
 #include <system_error>
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/err.h>
@@ -47,6 +49,22 @@ constexpr int kAesGcmIvLen = 12;
 constexpr int kAesGcmTagLen = 16;
 constexpr int kSaltLen = 16;
 constexpr int kPbkdf2Iterations = 100000;
+constexpr int kPbkdf2Sha256Iterations = 210000;
+
+void cleanse_bytes(std::vector<uint8_t>& v) {
+  if (!v.empty()) OPENSSL_cleanse(v.data(), v.size());
+}
+
+
+std::vector<uint8_t> derive_key_sha256(const std::string& password, const std::vector<uint8_t>& salt) {
+  std::vector<uint8_t> key(kAesGcmKeyLen);
+  if (PKCS5_PBKDF2_HMAC(password.c_str(), static_cast<int>(password.size()), salt.data(),
+                         static_cast<int>(salt.size()), kPbkdf2Sha256Iterations, EVP_sha256(),
+                         static_cast<int>(key.size()), key.data()) != 1) {
+    throw std::runtime_error("PBKDF2-SHA256 key derivation failed");
+  }
+  return key;
+}
 
 struct EvpCipherCtxDeleter {
   void operator()(EVP_CIPHER_CTX* p) const noexcept { EVP_CIPHER_CTX_free(p); }
@@ -63,11 +81,23 @@ std::string bytesToHex(const std::vector<uint8_t>& data) {
 std::vector<uint8_t> hexToBytes(const std::string& hex) {
    
   std::vector<uint8_t> bytes;
-  for (size_t i = 0; i + 1 < hex.size(); i += 2) {
-    unsigned int byte;
-    if (std::sscanf(hex.c_str() + i, "%2x", &byte) == 1) {
-      bytes.push_back(static_cast<uint8_t>(byte));
+  if (hex.size() % 2 != 0) return bytes;
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    unsigned int byte = 0;
+    bool ok = false;
+    for (int k = 0; k < 2; ++k) {
+      const char c = hex[i + static_cast<size_t>(k)];
+      unsigned int nibble = 0;
+      if (c >= '0' && c <= '9') nibble = static_cast<unsigned int>(c - '0');
+      else if (c >= 'a' && c <= 'f') nibble = static_cast<unsigned int>(c - 'a' + 10);
+      else if (c >= 'A' && c <= 'F') nibble = static_cast<unsigned int>(c - 'A' + 10);
+      else return std::vector<uint8_t>{};
+      if (k == 0) byte = nibble << 4;
+      else byte |= nibble;
+      ok = true;
     }
+    if (!ok) return std::vector<uint8_t>{};
+    bytes.push_back(static_cast<uint8_t>(byte));
   }
   return bytes;
 }
@@ -82,10 +112,34 @@ bool readFile(const std::string& path, std::vector<uint8_t>& out) {
   return in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(sz)).good();
 }
 
-void writeFile(const std::string& path, const std::vector<uint8_t>& data) {
+bool writeFile(const std::string& path, const std::vector<uint8_t>& data) {
    
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+  const std::string tmp = path + ".tmp";
+  const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (fd < 0) return false;
+  size_t off = 0;
+  bool ok = true;
+  while (off < data.size()) {
+    const ssize_t n = ::write(fd, data.data() + off, data.size() - off);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      ok = false;
+      break;
+    }
+    off += static_cast<size_t>(n);
+  }
+  if (ok && ::fchmod(fd, 0600) != 0) ok = false;
+  if (ok && ::fsync(fd) != 0) ok = false;
+  if (::close(fd) != 0) ok = false;
+  if (!ok) {
+    ::unlink(tmp.c_str());
+    return false;
+  }
+  if (::rename(tmp.c_str(), path.c_str()) != 0) {
+    ::unlink(tmp.c_str());
+    return false;
+  }
+  return true;
 }
 
 } // anonymous namespace
@@ -160,6 +214,14 @@ void SecretServiceDaemon::stop() {
   collectionObj_.reset();
   sessions_.clear();
   bus_.reset();
+  std::lock_guard<std::mutex> lock(mutex_);
+  cleanse_bytes(masterKey_);
+  masterKey_.clear();
+  cleanse_bytes(salt_);
+  salt_.clear();
+  for (auto& [id, data] : items_) cleanse_bytes(data.secret);
+  items_.clear();
+  state_ = State::Locked;
 }
 
 SecretServiceDaemon::State SecretServiceDaemon::state() const {
@@ -188,7 +250,7 @@ bool SecretServiceDaemon::create_keyring(const std::string& password) {
   }
 
   // Derive key
-  masterKey_ = deriveKey(password, salt_);
+  masterKey_ = derive_key_sha256(password, salt_);
 
   // Write empty DB file with salt prepended
   std::vector<uint8_t> db;
@@ -221,15 +283,17 @@ bool SecretServiceDaemon::unlock_keyring(const std::string& password) {
   // Extract salt
   salt_.assign(db.begin(), db.begin() + kSaltLen);
 
-  // Derive key from provided password
-  auto key = deriveKey(password, salt_);
-
-  // Try to decrypt — extract encrypted portion (after salt)
   std::vector<uint8_t> encrypted(db.begin() + kSaltLen, db.end());
-  auto decrypted = aes256GcmDecrypt(encrypted, key);
+  auto decrypted = aes256GcmDecrypt(encrypted, derive_key_sha256(password, salt_));
+  bool upgraded = false;
   if (!decrypted) {
-    std::cerr << "[keyring] Wrong password or corrupted keyring\n";
-    return false;
+    auto legacy = aes256GcmDecrypt(encrypted, deriveKey(password, salt_));
+    if (!legacy) {
+      std::cerr << "[keyring] Wrong password or corrupted keyring\n";
+      return false;
+    }
+    decrypted = std::move(legacy);
+    upgraded = true;
   }
 
   // Parse JSON
@@ -250,42 +314,52 @@ bool SecretServiceDaemon::unlock_keyring(const std::string& password) {
     return false;
   }
 
-  masterKey_ = std::move(key);
+  masterKey_ = derive_key_sha256(password, salt_);
   state_ = State::Unlocked;
   std::cerr << "[keyring] Keyring unlocked (" << items_.size() << " items)\n";
+  if (upgraded) saveDb();
   return true;
 }
 
 void SecretServiceDaemon::lock_keyring() {
    
   std::lock_guard<std::mutex> lock(mutex_);
+  cleanse_bytes(masterKey_);
   masterKey_.clear();
+  cleanse_bytes(salt_);
   salt_.clear();
+  for (auto& [id, data] : items_) cleanse_bytes(data.secret);
+  items_.clear();
   state_ = State::Locked;
   std::cerr << "[keyring] Keyring locked\n";
 }
 
-bool SecretServiceDaemon::change_keyring_password(const std::string& /*old_password*/, const std::string& new_password) {
+bool SecretServiceDaemon::change_keyring_password(const std::string& old_password, const std::string& new_password) {
    
-  // Must be unlocked with the old password first
   if (state() != State::Unlocked) return false;
 
   std::lock_guard<std::mutex> lock(mutex_);
   if (state_ != State::Unlocked) return false;
 
-  // Verify old password by checking the stored salt
-  // (We already have masterKey_ cached, so we just re-save with new key)
+  std::vector<uint8_t> db;
+  if (!readFile(dbPath_, db) || db.size() < static_cast<size_t>(kSaltLen)) return false;
+  std::vector<uint8_t> stored(db.begin() + kSaltLen, db.end());
+  auto trial256 = aes256GcmDecrypt(stored, derive_key_sha256(old_password, salt_));
+  if (!trial256) {
+    auto trial1 = aes256GcmDecrypt(stored, deriveKey(old_password, salt_));
+    if (!trial1) return false;
+  }
 
-  // Generate new salt
   std::vector<uint8_t> newSalt(kSaltLen);
   if (RAND_bytes(newSalt.data(), static_cast<int>(newSalt.size())) != 1) return false;
 
-  auto newKey = deriveKey(new_password, newSalt);
+  auto newKey = derive_key_sha256(new_password, newSalt);
 
-  // Re-encrypt existing items with new key
   saveDbWithKey(newKey, newSalt);
 
+  cleanse_bytes(masterKey_);
   masterKey_ = std::move(newKey);
+  cleanse_bytes(salt_);
   salt_ = std::move(newSalt);
   std::cerr << "[keyring] Keyring password changed\n";
   return true;
@@ -523,7 +597,10 @@ void SecretServiceDaemon::saveDbWithKey(const std::vector<uint8_t>& key, const s
 std::string SecretServiceDaemon::generateId() {
    
   std::vector<uint8_t> bytes(16);
-  RAND_bytes(bytes.data(), static_cast<int>(bytes.size()));
+  if (RAND_bytes(bytes.data(), static_cast<int>(bytes.size())) != 1) {
+    std::random_device rd;
+    for (auto& b : bytes) b = static_cast<uint8_t>(rd() & 0xFF);
+  }
   return bytesToHex(bytes);
 }
 
@@ -570,6 +647,7 @@ void SecretServiceDaemon::registerServiceInterface() {
           .withOutputParamNames("unlocked", "locked")
           .implementedAs([this](const std::map<std::string, std::string>& attributes) {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (state_ != State::Unlocked) return std::make_tuple(std::vector<sdbus::ObjectPath>{}, std::vector<sdbus::ObjectPath>{});
             std::vector<sdbus::ObjectPath> unlocked;
             std::vector<sdbus::ObjectPath> locked;
             for (const auto& [id, data] : items_) {
@@ -606,6 +684,7 @@ void SecretServiceDaemon::registerServiceInterface() {
                                  const sdbus::ObjectPath& /*session*/) {
              
             std::lock_guard<std::mutex> lock(mutex_);
+            if (state_ != State::Unlocked) return std::map<sdbus::ObjectPath, std::tuple<sdbus::ObjectPath, std::vector<uint8_t>, std::vector<uint8_t>, std::string>>{};
             std::map<sdbus::ObjectPath,
                      std::tuple<sdbus::ObjectPath, std::vector<uint8_t>,
                                 std::vector<uint8_t>, std::string>> result;
@@ -660,6 +739,7 @@ void SecretServiceDaemon::registerCollectionInterface(sdbus::IObject& obj) {
           .withOutputParamNames("items")
           .implementedAs([this](const std::map<std::string, std::string>& attributes) {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (state_ != State::Unlocked) return std::vector<sdbus::ObjectPath>{};
             std::vector<sdbus::ObjectPath> result;
             for (const auto& [id, data] : items_) {
               bool match = true;
@@ -747,11 +827,13 @@ void SecretServiceDaemon::registerCollectionInterface(sdbus::IObject& obj) {
       sdbus::registerProperty("ItemCount")
           .withGetter([this]() -> uint32_t {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (state_ != State::Unlocked) return 0;
             return static_cast<uint32_t>(items_.size());
           }),
       sdbus::registerProperty("Items")
           .withGetter([this]() -> std::vector<sdbus::ObjectPath> {
             std::lock_guard<std::mutex> lock(mutex_);
+            if (state_ != State::Unlocked) return std::vector<sdbus::ObjectPath>{};
             std::vector<sdbus::ObjectPath> result;
             for (const auto& [id, _] : items_) {
               result.emplace_back("/org/freedesktop/secrets/item/" + id);

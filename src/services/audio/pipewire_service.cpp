@@ -711,26 +711,47 @@ PipeWireService& PipeWireService::instance() {
 }
 
 PipeWireService::PipeWireService() = default;
-PipeWireService::~PipeWireService() {
-   
+void PipeWireService::teardown_connection() {
+  pw_thread_loop* loop = nullptr;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    loop = loop_;
+    loop_ = nullptr;
+    started_ = false;
+  }
+  if (loop) pw_thread_loop_stop(loop);
   std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (loop_ && started_) pw_thread_loop_stop(loop_);
   for (auto& [id, ns] : nodes_) {
     if (ns.proxy) pw_proxy_destroy(ns.proxy);
     delete ns.hook;
     delete static_cast<NodeListenerData*>(ns.listener_data);
   }
   nodes_.clear();
-  if (metadata_)
+  clients_.clear();
+  default_sink_ = 0;
+  default_source_ = 0;
+  if (metadata_) {
     pw_proxy_destroy(reinterpret_cast<pw_proxy*>(metadata_));
-  if (reg_)
+    metadata_ = nullptr;
+  }
+  if (reg_) {
     pw_proxy_destroy(reinterpret_cast<pw_proxy*>(reg_));
+    reg_ = nullptr;
+  }
   delete reg_hook_;
+  reg_hook_ = nullptr;
   if (core_) pw_core_disconnect(core_);
+  core_ = nullptr;
   delete core_hook_;
+  core_hook_ = nullptr;
   if (ctx_) pw_context_destroy(ctx_);
-  if (loop_) pw_thread_loop_destroy(loop_);
+  ctx_ = nullptr;
+  if (loop) pw_thread_loop_destroy(loop);
   pw_deinit();
+}
+
+PipeWireService::~PipeWireService() {
+  teardown_connection();
 }
 
 void PipeWireService::start() {
@@ -748,8 +769,8 @@ void PipeWireService::start() {
   }
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (started_) return;
-  started_ = true;
   init_locked();
+  started_ = (loop_ != nullptr && ctx_ != nullptr && core_ != nullptr && reg_ != nullptr);
 }
 
 bool PipeWireService::started() const {
@@ -774,14 +795,6 @@ void PipeWireService::emit_change_locked() {
    
   rebuild_snapshot_locked();
   if (on_change_) on_change_();
-}
-
-void PipeWireService::sync_and_wait_locked() {
-   
-  if (!core_ || !loop_) return;
-  const int seq = pw_core_sync(core_, PW_ID_CORE, 0);
-  (void)seq;
-
 }
 
 void PipeWireService::init_locked() {
@@ -1087,7 +1100,7 @@ void PipeWireService::set_node_volume(std::uint32_t node_id, double normalized_0
     const int pct = pct_from_norm(normalized_0_1);
     it->second.volume_pct = pct;
     const float v = std::clamp(static_cast<float>(pct) / 100.0f, 0.0f, 1.5f);
-    const int ch = std::max(1, it->second.channels);
+    const int ch = std::clamp(it->second.channels, 1, 64);
     std::vector<float> vols(static_cast<size_t>(ch), v);
 
     spa_pod_builder_init(&b, buf, sizeof(buf));
@@ -1128,7 +1141,7 @@ void PipeWireService::set_node_mute(std::uint32_t node_id, bool muted) {
     if (!it->second.proxy) return;
     it->second.muted = muted;
     const float v = std::clamp(static_cast<float>(it->second.volume_pct) / 100.0f, 0.0f, 1.5f);
-    const int ch = std::max(1, it->second.channels);
+    const int ch = std::clamp(it->second.channels, 1, 64);
     std::vector<float> vols(static_cast<size_t>(ch), v);
 
     spa_pod_builder_init(&b, buf, sizeof(buf));
@@ -1324,8 +1337,6 @@ void PipeWireService::apply_engine_clock_rate_hz(int hz) {
   (void)spawn_exec_wait_owned({pmd, "-n", "settings", "0", "clock.allowed-rates", allowed_meta});
   const std::string hz_s = std::to_string(hz);
   (void)spawn_exec_wait_owned({pmd, "-n", "settings", "0", "clock.rate", hz_s});
-
-  (void)spawn_exec_wait_owned({pmd, "-n", "settings", "0", "clock.force-rate", hz_s});
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   emit_change_locked();
 }
@@ -1372,10 +1383,13 @@ void PipeWireService::apply_engine_force_quantum(int quantum) {
 
 bool PipeWireService::restart_services() {
    
-  // Restart the user PipeWire stack. Any live pw_context connection in this
-  // process is dropped by the restart; CLI-based queries (pw-metadata, pactl,
-  // pw-link) keep working against the fresh daemons.
-  return spawn_exec_wait_owned({"systemctl", "--user", "restart", "pipewire", "pipewire-pulse", "wireplumber"});
+  if (!spawn_exec_wait_owned({"systemctl", "--user", "restart", "pipewire", "pipewire-pulse", "wireplumber"}))
+    return false;
+  teardown_connection();
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  init_locked();
+  started_ = (loop_ != nullptr && ctx_ != nullptr && core_ != nullptr && reg_ != nullptr);
+  return started_;
 }
 
 namespace {

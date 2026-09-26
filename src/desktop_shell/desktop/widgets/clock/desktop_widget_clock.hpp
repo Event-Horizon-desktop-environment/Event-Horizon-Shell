@@ -25,7 +25,6 @@ private:
   int m_fontSize;
   int m_width = 0;
   int m_height = 0;
-  std::string m_lastText;
 };
 
 }

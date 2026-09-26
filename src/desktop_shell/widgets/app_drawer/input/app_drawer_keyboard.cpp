@@ -5,6 +5,8 @@
 #include "desktop_shell/dock/launch/dock_launch_feedback.hpp"
 #include "desktop_shell/widgets/app_drawer/trace/app_drawer_trace.hpp"
 #include "desktop_shell/widgets/start_menu/start_menu.hpp"
+#include "configuration/shell_config.hpp"
+#include "desktop_shell/widgets/app_drawer/tahoe/tahoe_launcher.hpp"
 #include "desktop_shell/widgets/app_drawer/power/app_drawer_power_exec.hpp"
 #include "desktop_shell/common/fs/string_util.hpp"
 #include "desktop_shell/common/bench/shell_bench.hpp"
@@ -112,14 +114,37 @@ bool app_drawer_handle_keyboard(DockApp& app, xkb_keysym_t sym, uint32_t keycode
     }
   }
 
+  // Tahoe grid: arrows move in 2D; Up from the first row returns focus to
+  // the search field. List mode keeps the old linear behavior.
+  const bool gridMode =
+      eh::config::shell_config_snapshot().appearance.launchpadViewMode == 0;
+  const int cols = eh::shell::tahoe::kTahoeCols;
+  auto grid_move = [&](int dSel) {
+    if (app.appMenuHits.empty()) return;
+    const int n = static_cast<int>(app.appMenuHits.size());
+    if (app.appMenuSel < 0) {
+      app.appMenuSel = (dSel < 0) ? n - 1 : 0;
+    } else {
+      app.appMenuSel += dSel;
+      if (app.appMenuSel < 0) app.appMenuSel = 0;
+      if (app.appMenuSel >= n) app.appMenuSel = n - 1;
+    }
+    eh_app_drawer_ensure_sel_visible(app);
+  };
   if (sym == XKB_KEY_Up) {
-    if (!app.appMenuHits.empty()) {
-      if (app.appMenuSel <= 0) {
+    if (gridMode && !app.appMenuSearchFocused && app.appMenuSel >= 0 &&
+        app.appMenuSel < cols) {
+      app.appMenuSearchFocused = true;
+    } else if (!app.appMenuHits.empty()) {
+      if (gridMode) {
+        grid_move(-cols);
+      } else if (app.appMenuSel <= 0) {
         app.appMenuSel = static_cast<int>(app.appMenuHits.size()) - 1;
+        eh_app_drawer_ensure_sel_visible(app);
       } else {
         app.appMenuSel--;
+        eh_app_drawer_ensure_sel_visible(app);
       }
-      eh_app_drawer_ensure_sel_visible(app);
     }
     popup_draw_surface(app);
     wl_display_flush(app.display);
@@ -127,15 +152,26 @@ bool app_drawer_handle_keyboard(DockApp& app, xkb_keysym_t sym, uint32_t keycode
   }
   if (sym == XKB_KEY_Down) {
     if (!app.appMenuHits.empty()) {
-      if (app.appMenuSel < 0) {
+      if (gridMode) {
+        grid_move(cols);
+        app.appMenuSearchFocused = false;
+      } else if (app.appMenuSel < 0) {
         app.appMenuSel = 0;
+        eh_app_drawer_ensure_sel_visible(app);
       } else if (app.appMenuSel >= static_cast<int>(app.appMenuHits.size()) - 1) {
         app.appMenuSel = 0;
+        eh_app_drawer_ensure_sel_visible(app);
       } else {
         app.appMenuSel++;
+        eh_app_drawer_ensure_sel_visible(app);
       }
-      eh_app_drawer_ensure_sel_visible(app);
     }
+    popup_draw_surface(app);
+    wl_display_flush(app.display);
+    return true;
+  }
+  if ((sym == XKB_KEY_Left || sym == XKB_KEY_Right) && gridMode && !app.appMenuSearchFocused) {
+    grid_move(sym == XKB_KEY_Left ? -1 : 1);
     popup_draw_surface(app);
     wl_display_flush(app.display);
     return true;

@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <sys/prctl.h>
 #include <csignal>
 #include <unistd.h>
@@ -13,7 +14,13 @@ namespace eh::proc {
 // a kernel-level "die with my parent" contract that holds even when the
 // supervisor is SIGKILLed (PDEATHSIG fires on parent exit, unrelated to sessions
 // or process groups).
+inline std::mutex& spawn_env_mutex() {
+  static std::mutex m;
+  return m;
+}
+
 inline void mark_child_parent_pid() {
+  spawn_env_mutex().lock();
   char buf[32];
   const int n = std::snprintf(buf, sizeof(buf), "%d", static_cast<int>(::getpid()));
   if (n > 0) ::setenv("EH_SUPERVISOR_PID", buf, 1);
@@ -21,6 +28,7 @@ inline void mark_child_parent_pid() {
 
 inline void clear_child_parent_pid() {
   ::unsetenv("EH_SUPERVISOR_PID");
+  spawn_env_mutex().unlock();
 }
 
 // Call at the very start of a child's entry point. If the supervisor spawned us,
@@ -37,10 +45,13 @@ inline void clear_child_parent_pid() {
 inline void install_parent_death_guard() {
   const char* p = std::getenv("EH_SUPERVISOR_PID");
   if (!p || *p == '\0') return;
-  const pid_t expected = static_cast<pid_t>(std::strtol(p, nullptr, 10));
-  if (expected <= 1) return;
-  (void)::prctl(PR_SET_PDEATHSIG, SIGKILL);
-  if (::getppid() != expected) ::_exit(0);
+  char* end = nullptr;
+  const long v = std::strtol(p, &end, 10);
+  if (end == p || *end != '\0' || v <= 1 || v > 4194304) return;
+  const pid_t expected = static_cast<pid_t>(v);
+  ::unsetenv("EH_SUPERVISOR_PID");
+  if (::prctl(PR_SET_PDEATHSIG, SIGKILL) != 0) ::_exit(1);
+  if (::getppid() != expected) ::_exit(1);
 }
 
 }  // namespace eh::proc

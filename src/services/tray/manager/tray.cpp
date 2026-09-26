@@ -48,6 +48,7 @@ void dock_tray_init(DockApp& app) {
   }
   try {
     app.trayBus = sdbus::createSessionBusConnection();
+    if (app.trayBus) app.trayBus->setMethodCallTimeout(eh::tray::kTrayMethodCallTimeout);
   } catch (const std::exception& e) {
     std::cerr << "[dock-tray] bus connection failed: " << e.what() << "\n";
   }

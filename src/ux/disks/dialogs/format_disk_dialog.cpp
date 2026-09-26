@@ -1,232 +1,222 @@
-#include "format_disk_dialog.hpp"
+#include "ux/disks/dialogs/format_disk_dialog.hpp"
 
 #include <cairo/cairo.h>
+#include <xkbcommon/xkbcommon.h>
 
-#include "../app.hpp"
-#include "../drive.hpp"
-#include "../manager.hpp"
+#include "ux/disks/app.hpp"
+#include "ux/disks/block.hpp"
+#include "ux/disks/drive.hpp"
+#include "ux/disks/jobs.hpp"
+#include "ux/disks/manager.hpp"
+#include "ux/disks/ui/icons.hpp"
+#include "ux/disks/ui/layout.hpp"
+#include "ux/disks/ui/theme.hpp"
+#include "ux/disks/ui/widgets.hpp"
 
 namespace eh::disks {
+namespace W = widgets;
+namespace T = theme;
+namespace L = layout;
 
-static const char* kSchemes[] = {
-  "GPT", "DOS (MBR)",
-};
+static W::RGB txt(const AppState& a) { return {a.textR, a.textG, a.textB}; }
+static W::RGB sec(const AppState& a) { return {a.textSecR, a.textSecG, a.textSecB}; }
 
-static const char* kSchemeDesc[] = {
-  "GUID Partition Table — modern, UEFI",
-  "Master Boot Record — legacy, BIOS",
-};
+static L::Rect dlg_rect(const AppState& app) {
+  return L::dialog_rect(app, kFormatDiskDlgW, kFormatDiskDlgH);
+}
 
 void draw_format_disk_dialog(AppState& app, cairo_t* cr) {
-  auto& dlg = app.fmtDiskDlg;
-  if (!dlg.open) return;
-
-  int w = app.width, h = app.height;
-  int dw = kFormatDiskDialogW, dh = kFormatDiskDialogH;
-  int dx = (w - dw) / 2, dy = (h - dh) / 2;
-
-  set_rgba(cr, 0, 0, 0, 0.45);
-  cairo_rectangle(cr, 0, 0, w, h);
+  auto& d = *app.fmtDiskDlg;
+  if (!d.open) return;
+  auto r = dlg_rect(app);
+  cairo_set_source_rgba(cr, 0, 0, 0, T::kAlphaScrim);
+  cairo_rectangle(cr, 0, 0, app.width, app.height);
   cairo_fill(cr);
+  W::card(cr, app, r.x, r.y, r.w, r.h);
+  W::text(cr, "Format Disk", r.x + 16, r.y + 28, 15, txt(app), 1);
+  W::hairline_h(cr, r.x + 12, r.x + r.w - 12, r.y + 40, {app.outlineR, app.outlineG, app.outlineB});
 
-  set_rgb(cr, 0.18, 0.18, 0.20);
-  draw_rounded_rect(cr, dx, dy, dw, dh, 10);
-  cairo_fill(cr);
-
-  set_rgb(cr, 0.30, 0.32, 0.34);
-  cairo_set_line_width(cr, 1);
-  draw_rounded_rect(cr, dx, dy, dw, dh, 10);
-  cairo_stroke(cr);
-
-  // Title
-  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, 15);
-  set_rgb(cr, app.textR, app.textG, app.textB);
-  cairo_move_to(cr, dx + 16, dy + 26);
-  cairo_show_text(cr, "Format Disk");
-
-  set_rgb(cr, 0.25, 0.25, 0.27);
-  cairo_set_line_width(cr, 1);
-  cairo_move_to(cr, dx + 12, dy + 36);
-  cairo_line_to(cr, dx + dw - 12, dy + 36);
-  cairo_stroke(cr);
-
-  // Scheme list
-  int ly = dy + 52;
-  cairo_set_font_size(cr, 11);
-  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-  set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-  cairo_move_to(cr, dx + 16, ly);
-  cairo_show_text(cr, "Partition Table:");
-  ly += 20;
-
-  int item_h = 44;
+  double y = r.y + 62;
+  W::text(cr, "Erase", r.x + 16, y, 11, sec(app), 1);
+  y += 6;
+  const char* erase[2] = {"Don't overwrite existing data (quick)", "Overwrite with zeros (slow)"};
   for (int i = 0; i < 2; ++i) {
-    int ix = dx + 16, iy = ly + i * item_h;
-    bool sel = i == dlg.selected_scheme;
-    bool hov = i == dlg.hover_item;
-
-    if (hov || sel) {
-      set_rgba(cr, app.accentR, app.accentG, app.accentB, sel ? 0.20 : 0.08);
-      draw_rounded_rect(cr, ix, iy, dw - 32, item_h, 6);
-      cairo_fill(cr);
-    }
-
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 12);
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_move_to(cr, ix + 12, iy + 18);
-    cairo_show_text(cr, kSchemes[i]);
-
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 10);
-    set_rgb(cr, app.textSecR, app.textSecG, app.textSecB);
-    cairo_move_to(cr, ix + 12, iy + 36);
-    cairo_show_text(cr, kSchemeDesc[i]);
+    double iy = y + i * 30;
+    bool hov = d.hover_radio_erase == i;
+    if (hov) W::fill_rounded(cr, r.x + 8, iy - 2, r.w - 16, 28, 7, {1, 1, 1, 0.05});
+    W::radio_dot(cr, app, r.x + 24, iy + 12, 7, d.erase_mode == i);
+    W::text(cr, erase[i], r.x + 40, iy + 16, 12, txt(app), 0);
   }
-
+  y += 64;
+  W::text(cr, "Partitioning", r.x + 16, y, 11, sec(app), 1);
+  y += 6;
+  const char* sch[2] = {"GPT — modern systems, UEFI", "MBR / DOS — legacy BIOS"};
+  for (int i = 0; i < 2; ++i) {
+    double iy = y + i * 30;
+    bool hov = d.hover_scheme == i;
+    if (hov) W::fill_rounded(cr, r.x + 8, iy - 2, r.w - 16, 28, 7, {1, 1, 1, 0.05});
+    W::radio_dot(cr, app, r.x + 24, iy + 12, 7, d.scheme == i);
+    W::text(cr, i == 0 ? "GUID Partition Table (GPT)" : "Master Boot Record (DOS)", r.x + 40,
+            iy + 16, 12, txt(app), 1);
+    W::text(cr, sch[i], r.x + 40, iy + 16, 11, sec(app), 0);  // right side appended below
+    // Draw desc right-aligned to avoid overlap: measure title first.
+    double tw = W::text_w(cr, i == 0 ? "GUID Partition Table (GPT)" : "Master Boot Record (DOS)", 12, 1);
+    W::text(cr, sch[i], r.x + 40 + tw + 8, iy + 16, 11, sec(app), 0);
+  }
+  y += 64;
   // Warning
+  W::fill_rounded(cr, r.x + 16, y, r.w - 32, 40, 8, {0.85, 0.45, 0.20, 0.12});
+  if (app.svg.warn)
+    icons::paint_svg(cr, app.svg.warn, r.x + 28, y + 12, 16, {0.95, 0.70, 0.40});
+  else
+    W::text(cr, "⚠", r.x + 28, y + 25, 12, {0.95, 0.70, 0.40}, 1);
+  W::text(cr, "All data on the disk will be lost.", r.x + 50, y + 25, 12,
+          {0.95, 0.70, 0.40}, 1);
+  y += 52;
+  // Confirm
   {
-    int wy = dy + 52 + 2 * item_h + 12;
-    cairo_set_font_size(cr, 10);
-    set_rgba(cr, 0.95, 0.70, 0.30, 0.80);
-    cairo_move_to(cr, dx + 16, wy);
-    cairo_show_text(cr, "This will erase all data on the disk.");
+    bool hov = d.hover_confirm;
+    if (hov) W::fill_rounded(cr, r.x + 8, y - 4, r.w - 16, 28, 7, {1, 1, 1, 0.05});
+    W::checkbox(cr, app, r.x + 16, y, 18, d.confirm, hov);
+    W::text(cr, "I understand, format this disk", r.x + 42, y + 14, 12, txt(app), 0);
   }
-
   // Buttons
-  int btn_w = 90, btn_h = 32;
-  int btn_y = dy + dh - 16 - btn_h;
-
-  {
-    int bx = dx + dw - 16 - btn_w * 2 - 8;
-    set_rgba(cr, 0, 0, 0, dlg.hover_cancel ? 0.30 : 0.20);
-    draw_rounded_rect(cr, bx, btn_y, btn_w, btn_h, 6);
-    cairo_fill(cr);
-    set_rgb(cr, app.textR, app.textG, app.textB);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 12);
-    cairo_move_to(cr, bx + 28, btn_y + 22);
-    cairo_show_text(cr, "Cancel");
-  }
-
-  {
-    int bx = dx + dw - 16 - btn_w;
-    set_rgb(cr, dlg.hover_format ? 0.55 : 0.40, 0.10, 0.10);
-    draw_rounded_rect(cr, bx, btn_y, btn_w, btn_h, 6);
-    cairo_fill(cr);
-    set_rgb(cr, 0.95, 0.70, 0.70);
-    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 12);
-    cairo_move_to(cr, bx + 20, btn_y + 22);
-    cairo_show_text(cr, "Format");
+  double by = r.y + r.h - 16 - 34;
+  if (d.pending) {
+    W::spinner(cr, r.x + r.w / 2, by + 17, 9, {app.accentR, app.accentG, app.accentB},
+               app.spinner_phase);
+    W::text(cr, "Working…", r.x + r.w / 2 + 16, by + 22, 12, sec(app), 0);
+  } else {
+    W::pill_button(cr, app, r.x + r.w - 16 - 200, by, 96, 34, "Cancel", d.hover_cancel,
+                   false, false, false, false);
+    W::pill_button(cr, app, r.x + r.w - 16 - 96, by, 96, 34, "Format", d.hover_format,
+                   false, false, true, !d.confirm);
   }
 }
 
-bool handle_format_disk_dialog_click(AppState& app, int x, int y) {
-  auto& dlg = app.fmtDiskDlg;
-  if (!dlg.open) return false;
-
-  int w = app.width, h = app.height;
-  int dw = kFormatDiskDialogW, dh = kFormatDiskDialogH;
-  int dx = (w - dw) / 2, dy = (h - dh) / 2;
-
-  if (x < dx || x > dx + dw || y < dy || y > dy + dh) {
-    dlg.open = false;
+bool format_disk_dialog_click(AppState& app, int x, int y) {
+  auto& d = *app.fmtDiskDlg;
+  if (!d.open) return false;
+  auto r = dlg_rect(app);
+  L::Rect rr{r.x, r.y, r.w, r.h};
+  if (!rr.contains(x, y)) {
+    if (!d.pending) d.open = false;
     schedule_frame(app);
     return true;
   }
-
-  int item_h = 44;
-  int ly = dy + 52 + 20;
+  if (d.pending) return true;
+  double ey = r.y + 68;
   for (int i = 0; i < 2; ++i) {
-    int ix = dx + 16, iy = ly + i * item_h;
-    if (x >= ix && x < ix + dw - 32 && y >= iy && y < iy + item_h) {
-      dlg.selected_scheme = i;
+    L::Rect row{r.x + 8, int(ey + i * 30 - 2), r.w - 16, 28};
+    if (row.contains(x, y)) {
+      d.erase_mode = i;
       schedule_frame(app);
       return true;
     }
   }
-
-  int btn_w = 90, btn_h = 32;
-  int btn_y = dy + dh - 16 - btn_h;
-
-  {
-    int bx = dx + dw - 16 - btn_w * 2 - 8;
-    if (x >= bx && x < bx + btn_w && y >= btn_y && y < btn_y + btn_h) {
-      dlg.open = false;
+  double sy = r.y + 68 + 64 + 6;
+  for (int i = 0; i < 2; ++i) {
+    L::Rect row{r.x + 8, int(sy + i * 30 - 2), r.w - 16, 28};
+    if (row.contains(x, y)) {
+      d.scheme = i;
       schedule_frame(app);
       return true;
     }
   }
-
   {
-    int bx = dx + dw - 16 - btn_w;
-    if (x >= bx && x < bx + btn_w && y >= btn_y && y < btn_y + btn_h) {
-      if (!dlg.pending) {
-        dlg.pending = true;
-        auto drives = Manager::instance().get_drives();
-        if (app.selected_drive >= 0 && app.selected_drive < static_cast<int>(drives.size())) {
-          auto& drive = drives[app.selected_drive];
-          auto blocks = drive->blocks();
-          if (!blocks.empty()) {
-            auto block = blocks[0];
-            std::string scheme = dlg.selected_scheme == 0 ? "gpt" : "dos";
-            block->create_partition_table_async(scheme,
-              [&app](bool ok) {
-                app.fmtDiskDlg.pending = false;
-                app.fmtDiskDlg.result_ok = ok;
-                app.fmtDiskDlg.open = false;
-                schedule_frame(app);
-              });
-          }
-        }
+    L::Rect row{r.x + 8, int(r.y + 68 + 64 + 64 + 52 - 4), r.w - 16, 28};
+    if (row.contains(x, y)) {
+      d.confirm = !d.confirm;
+      schedule_frame(app);
+      return true;
+    }
+  }
+  double by = r.y + r.h - 16 - 34;
+  L::Rect cancel{r.x + r.w - 16 - 200, int(by), 96, 34};
+  L::Rect go{r.x + r.w - 16 - 96, int(by), 96, 34};
+  if (cancel.contains(x, y)) {
+    d.open = false;
+    schedule_frame(app);
+    return true;
+  }
+  if (go.contains(x, y)) {
+    if (!d.confirm) return true;
+    d.pending = true;
+    auto drives = filtered_drives(Manager::instance().get_drives(), app.search.text);
+    std::shared_ptr<Drive> drive;
+    if (app.selected_drive >= 0 && app.selected_drive < int(drives.size()))
+      drive = drives[size_t(app.selected_drive)];
+    if (!drive) {
+      d.pending = false;
+      schedule_frame(app);
+      return true;
+    }
+    // Whole-disk block: first without Partition interface.
+    std::shared_ptr<Block> whole;
+    for (auto& b : drive->blocks())
+      if (!b->has_partition()) {
+        whole = b;
+        break;
       }
+    if (!whole && !drive->blocks().empty()) whole = drive->blocks()[0];
+    if (!whole) {
+      d.pending = false;
+      toast(app, "No block device found", true);
       schedule_frame(app);
       return true;
     }
+    std::string scheme = d.scheme == 0 ? "gpt" : "dos";
+    auto job = JobTracker::instance().start("Formatting disk (" + scheme + ")…", "", false);
+    whole->create_partition_table_async(scheme, [&app, job](bool ok) {
+      JobTracker::instance().finish(job->id, ok, ok ? "Disk formatted" : "Format failed");
+      app.fmtDiskDlg->pending = false;
+      app.fmtDiskDlg->open = false;
+      toast(app, ok ? "Disk formatted" : "Format failed", !ok);
+      schedule_frame(app);
+    });
+    schedule_frame(app);
+    return true;
   }
-
   return true;
 }
 
-void handle_format_disk_dialog_move(AppState& app, int x, int y) {
-  auto& dlg = app.fmtDiskDlg;
-  if (!dlg.open) return;
-
-  dlg.hover_item = -1;
-  dlg.hover_cancel = false;
-  dlg.hover_format = false;
-
-  int w = app.width, h = app.height;
-  int dw = kFormatDiskDialogW, dh = kFormatDiskDialogH;
-  int dx = (w - dw) / 2, dy = (h - dh) / 2;
-
-  int item_h = 44;
-  int ly = dy + 52 + 20;
+void format_disk_dialog_move(AppState& app, int x, int y) {
+  auto& d = *app.fmtDiskDlg;
+  if (!d.open) return;
+  d.hover_radio_erase = -1;
+  d.hover_scheme = -1;
+  d.hover_confirm = false;
+  d.hover_cancel = false;
+  d.hover_format = false;
+  auto r = dlg_rect(app);
+  double ey = r.y + 68;
   for (int i = 0; i < 2; ++i) {
-    int ix = dx + 16, iy = ly + i * item_h;
-    if (x >= ix && x < ix + dw - 32 && y >= iy && y < iy + item_h) {
-      dlg.hover_item = i;
-      return;
-    }
+    L::Rect row{r.x + 8, int(ey + i * 30 - 2), r.w - 16, 28};
+    if (row.contains(x, y)) d.hover_radio_erase = i;
   }
-
-  int btn_w = 90, btn_h = 32;
-  int btn_y = dy + dh - 16 - btn_h;
-
-  int bx_c = dx + dw - 16 - btn_w * 2 - 8;
-  if (x >= bx_c && x < bx_c + btn_w && y >= btn_y && y < btn_y + btn_h) {
-    dlg.hover_cancel = true;
-    return;
+  double sy = r.y + 68 + 64 + 6;
+  for (int i = 0; i < 2; ++i) {
+    L::Rect row{r.x + 8, int(sy + i * 30 - 2), r.w - 16, 28};
+    if (row.contains(x, y)) d.hover_scheme = i;
   }
-
-  int bx_f = dx + dw - 16 - btn_w;
-  if (x >= bx_f && x < bx_f + btn_w && y >= btn_y && y < btn_y + btn_h) {
-    dlg.hover_format = true;
-    return;
+  {
+    L::Rect row{r.x + 8, int(r.y + 68 + 64 + 64 + 52 - 4), r.w - 16, 28};
+    if (row.contains(x, y)) d.hover_confirm = true;
   }
+  double by = r.y + r.h - 16 - 34;
+  if (L::Rect{r.x + r.w - 16 - 200, int(by), 96, 34}.contains(x, y)) d.hover_cancel = true;
+  if (L::Rect{r.x + r.w - 16 - 96, int(by), 96, 34}.contains(x, y)) d.hover_format = true;
 }
 
+bool format_disk_dialog_key(AppState& app, uint32_t sym) {
+  auto& d = *app.fmtDiskDlg;
+  if (!d.open) return false;
+  if (sym == XKB_KEY_Escape) {
+    if (!d.pending) d.open = false;
+    schedule_frame(app);
+    return true;
+  }
+  return false;
 }
 
+}  // namespace eh::disks

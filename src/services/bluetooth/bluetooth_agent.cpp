@@ -1,6 +1,7 @@
 #include "services/bluetooth/bluetooth_agent.hpp"
 
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IConnection.h>
@@ -26,6 +27,7 @@ const sdbus::Error::Name kErrCanceled{"org.bluez.Error.Canceled"};
 }
 
 struct BluetoothAgent::Impl {
+  mutable std::recursive_mutex mu_;
   sdbus::IConnection& bus;
   std::unique_ptr<sdbus::IObject> object;
   BluetoothAgent::RequestCallback requestCallback;
@@ -40,16 +42,19 @@ struct BluetoothAgent::Impl {
   }
 
   [[nodiscard]] bool hasPending() const noexcept {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
     return pendingString.has_value() || pendingUint.has_value() || pendingVoid.has_value();
   }
 
   void rejectIfBusy(auto& result, const char* what) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     std::cerr << "[bluetooth] " << what << " while another request pending -> rejected" << std::endl;
     result.returnError(sdbus::Error{kErrRejected, "another pairing request is already pending"});
   }
 
   void clearPending() {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     pending = BluetoothPairingRequest{};
     pendingString.reset();
@@ -58,6 +63,7 @@ struct BluetoothAgent::Impl {
   }
 
   void fireCallback() {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (requestCallback) {
       requestCallback(pending);
@@ -68,6 +74,7 @@ struct BluetoothAgent::Impl {
   }
 
   void cancelPending() {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (pendingString) {
       pendingString->returnError(sdbus::Error{kErrCanceled, "user canceled"});
@@ -76,12 +83,13 @@ struct BluetoothAgent::Impl {
       pendingUint->returnError(sdbus::Error{kErrCanceled, "user canceled"});
     }
     if (pendingVoid) {
-      pendingVoid->returnError(sdbus::Error{kErrRejected, "user canceled"});
+      pendingVoid->returnError(sdbus::Error{kErrCanceled, "user canceled"});
     }
     clearPending();
   }
 
   void onRequestPinCode(sdbus::Result<std::string>&& result, sdbus::ObjectPath device) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (hasPending()) { rejectIfBusy(result, "RequestPinCode"); return; }
     pending.kind = BluetoothPairingKind::PinCode;
@@ -91,6 +99,7 @@ struct BluetoothAgent::Impl {
   }
 
   void onDisplayPinCode(sdbus::Result<>&& result, sdbus::ObjectPath device, std::string pincode) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (hasPending()) { rejectIfBusy(result, "DisplayPinCode"); return; }
     pending.kind = BluetoothPairingKind::DisplayPinCode;
@@ -101,6 +110,7 @@ struct BluetoothAgent::Impl {
   }
 
   void onRequestPasskey(sdbus::Result<std::uint32_t>&& result, sdbus::ObjectPath device) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (hasPending()) { rejectIfBusy(result, "RequestPasskey"); return; }
     pending.kind = BluetoothPairingKind::Passkey;
@@ -110,6 +120,7 @@ struct BluetoothAgent::Impl {
   }
 
   void onDisplayPasskey(sdbus::ObjectPath device, std::uint32_t passkey, std::uint16_t entered) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (pending.kind == BluetoothPairingKind::DisplayPasskey && pending.devicePath == std::string(device)) {
       pending.passkey = passkey;
@@ -126,6 +137,7 @@ struct BluetoothAgent::Impl {
   }
 
   void onRequestConfirmation(sdbus::Result<>&& result, sdbus::ObjectPath device, std::uint32_t passkey) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (hasPending()) { rejectIfBusy(result, "RequestConfirmation"); return; }
     pending.kind = BluetoothPairingKind::Confirm;
@@ -136,6 +148,7 @@ struct BluetoothAgent::Impl {
   }
 
   void onRequestAuthorization(sdbus::Result<>&& result, sdbus::ObjectPath device) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (hasPending()) { rejectIfBusy(result, "RequestAuthorization"); return; }
     pending.kind = BluetoothPairingKind::Authorize;
@@ -145,6 +158,7 @@ struct BluetoothAgent::Impl {
   }
 
   void onAuthorizeService(sdbus::Result<>&& result, sdbus::ObjectPath device, std::string uuid) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
     if (hasPending()) { rejectIfBusy(result, "AuthorizeService"); return; }
     pending.kind = BluetoothPairingKind::AuthorizeService;
@@ -155,8 +169,15 @@ struct BluetoothAgent::Impl {
   }
 
   void onCancel() {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
      
-    if (!hasPending()) return;
+    if (!hasPending()) {
+      if (pending.kind == BluetoothPairingKind::DisplayPasskey ||
+          pending.kind == BluetoothPairingKind::DisplayPinCode) {
+        clearPending();
+      }
+      return;
+    }
     std::cerr << "[bluetooth] BlueZ canceled pending pairing" << std::endl;
     cancelPending();
   }
@@ -236,47 +257,51 @@ BluetoothAgent::~BluetoothAgent() {
 }
 
 void BluetoothAgent::setRequestCallback(RequestCallback callback) {
-   
-  if (m_impl != nullptr) m_impl->requestCallback = std::move(callback);
+  if (m_impl != nullptr) { std::lock_guard<std::recursive_mutex> lock(m_impl->mu_); m_impl->requestCallback = std::move(callback); }
 }
 
 void BluetoothAgent::acceptConfirm() {
-   
-  if (m_impl == nullptr || !m_impl->pendingVoid) { m_impl->clearPending(); return; }
+  if (m_impl == nullptr) return;
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
+  if (!m_impl->pendingVoid) { m_impl->clearPending(); return; }
   m_impl->pendingVoid->returnResults();
   m_impl->clearPending();
 }
 
 void BluetoothAgent::rejectConfirm() {
-   
   if (m_impl == nullptr) return;
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
   m_impl->cancelPending();
 }
 
 void BluetoothAgent::submitPin(const std::string& pin) {
-   
-  if (m_impl == nullptr || !m_impl->pendingString) return;
+  if (m_impl == nullptr) return;
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
+  if (!m_impl->pendingString) return;
   m_impl->pendingString->returnResults(pin);
   m_impl->clearPending();
 }
 
 void BluetoothAgent::submitPasskey(std::uint32_t passkey) {
-   
-  if (m_impl == nullptr || !m_impl->pendingUint) return;
+  if (m_impl == nullptr) return;
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
+  if (!m_impl->pendingUint) return;
   m_impl->pendingUint->returnResults(passkey);
   m_impl->clearPending();
 }
 
 void BluetoothAgent::cancelPending() {
-   
-  if (m_impl != nullptr) m_impl->cancelPending();
+  if (m_impl == nullptr) return;
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
+  m_impl->cancelPending();
 }
 
 bool BluetoothAgent::hasPendingRequest() const noexcept { return m_impl != nullptr && m_impl->hasPending(); }
 
 BluetoothPairingRequest BluetoothAgent::pendingRequest() const {
-   
-  return m_impl != nullptr ? m_impl->pending : BluetoothPairingRequest{};
+  if (m_impl == nullptr) return BluetoothPairingRequest{};
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
+  return m_impl->pending;
 }
 
 }

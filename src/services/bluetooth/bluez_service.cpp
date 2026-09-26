@@ -128,29 +128,28 @@ BluezService::~BluezService() {
 
 void BluezService::start() {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (started_) return;
+  try {
+    bus_ = sdbus::createSystemBusConnection();
+    objmgr_ = sdbus::createProxy(*bus_, kBluez, kBluezRoot);
+    autoReconnect_.store(eh::config::shell_config_snapshot().bluetooth.autoReconnect,
+                         std::memory_order_relaxed);
+    bind_signals_locked();
+    refresh_locked();
+    bus_->enterEventLoopAsync();
+    worker_ = std::thread([this]() { auto_reconnect_worker(); });
+  } catch (const std::exception&) {
+    bus_.reset();
+    objmgr_.reset();
+    return;
+  }
   started_ = true;
-
-  bus_ = sdbus::createSystemBusConnection();
-  objmgr_ = sdbus::createProxy(*bus_, kBluez, kBluezRoot);
-
-  // Seed the auto-reconnect preference from persisted config; the Settings UI
-  // overrides it live via set_auto_reconnect().
-  autoReconnect_.store(eh::config::shell_config_snapshot().bluetooth.autoReconnect,
-                       std::memory_order_relaxed);
-
-  bind_signals_locked();
-  refresh_locked();
-
-  bus_->enterEventLoopAsync();
-
-  worker_ = std::thread([this]() { auto_reconnect_worker(); });
 }
 
 void BluezService::start_discovery() {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_ || snap_.adapter_path.empty()) return;
   try {
     if (!adapter_proxy_) {
@@ -164,7 +163,7 @@ void BluezService::start_discovery() {
 
 void BluezService::stop_discovery() {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_ || snap_.adapter_path.empty()) return;
   try {
     if (!adapter_proxy_) {
@@ -178,7 +177,7 @@ void BluezService::stop_discovery() {
 
 void BluezService::set_powered(bool on) {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_ || snap_.adapter_path.empty()) return;
   try {
     if (!adapter_proxy_) {
@@ -194,31 +193,31 @@ void BluezService::set_powered(bool on) {
 
 void BluezService::refresh() {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (started_ && objmgr_) refresh_locked();
 }
 
 void BluezService::set_change_callback(ChangeCallback cb) {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   on_change_ = std::move(cb);
 }
 
 Snapshot BluezService::snapshot() const {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   return snap_;
 }
 
 std::vector<DeviceInfo> BluezService::devices() const {
     
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   return devices_;
 }
 
 FullState BluezService::full_state() const {
     
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   return {snap_, devices_};
 }
 
@@ -233,7 +232,7 @@ void BluezService::bind_signals_locked() {
   objmgr_->uponSignal("InterfacesAdded").onInterface(kObjMgr).call(
       [this, debounce_ms](const sdbus::ObjectPath& path,
                           const std::map<std::string, IfaceProps>& interfaces) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     auto devIt = interfaces.find(kDevice);
     if (devIt != interfaces.end() && !snap_.adapter_path.empty() &&
         std::string(path).rfind(snap_.adapter_path + "/", 0) == 0) {
@@ -273,7 +272,7 @@ void BluezService::bind_signals_locked() {
   objmgr_->uponSignal("InterfacesRemoved").onInterface(kObjMgr).call(
       [this, debounce_ms](const sdbus::ObjectPath& path,
                           const std::vector<std::string>& ) {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     bool removed = false;
     for (auto it = devices_.begin(); it != devices_.end(); ++it) {
       if (it->path == std::string(path)) {
@@ -305,7 +304,7 @@ void BluezService::bind_signals_locked() {
                           const std::map<std::string, sdbus::Variant>& props,
                           const std::vector<std::string>& ) {
     if (iface != kAdapter && iface != kDevice && iface != kBattery) return;
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     if (iface == kAdapter) {
       auto pit = props.find("Powered");
       if (pit != props.end()) {
@@ -536,7 +535,7 @@ void BluezService::refresh_locked() {
 
 void BluezService::connect_device(const std::string& path) {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_) return;
   try {
     auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
@@ -547,7 +546,7 @@ void BluezService::connect_device(const std::string& path) {
 
 void BluezService::disconnect_device(const std::string& path) {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_) return;
   // Honour explicit disconnects: keep auto-reconnect away from this device for
   // a few minutes instead of immediately bringing it back.
@@ -566,7 +565,7 @@ void BluezService::disconnect_device(const std::string& path) {
 
 void BluezService::forget_device(const std::string& path) {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_ || snap_.adapter_path.empty()) return;
   try {
     if (!adapter_proxy_) {
@@ -580,7 +579,7 @@ void BluezService::forget_device(const std::string& path) {
 
 void BluezService::pair_device(const std::string& path) {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_) return;
   try {
     auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
@@ -591,7 +590,7 @@ void BluezService::pair_device(const std::string& path) {
 
 void BluezService::set_device_trust(const std::string& path, bool trusted) {
    
-  std::lock_guard<std::mutex> lock(mtx_);
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
   if (!started_) return;
   try {
     auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
@@ -644,7 +643,7 @@ void BluezService::attempt_auto_reconnects() {
   };
   std::vector<Candidate> candidates;
   {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     if (!started_ || !bus_ || !snap_.available || !snap_.powered || snap_.scanning) return;
     const auto now = std::chrono::steady_clock::now();
     for (const auto& d : devices_) {
@@ -669,7 +668,7 @@ void BluezService::attempt_auto_reconnects() {
     // One attempt per minute per device keeps the radio quiet while a device
     // is out of range, but reconnects promptly once it comes back.
     const auto after = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
     reconnectCooldown_[c.address] = after + std::chrono::seconds(60);
   }
 }

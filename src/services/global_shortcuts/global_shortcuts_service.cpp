@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
+#include <unistd.h>
 #include <ranges>
 #include <tuple>
 
@@ -23,15 +26,16 @@ constexpr auto kInterface = "org.freedesktop.impl.portal.GlobalShortcuts";
 constexpr uint32_t kResponseSuccess = 0;
 constexpr uint32_t kResponseFailed = 1;
 
-uint32_t next_session_id() {
+std::string make_session_handle(std::atomic<uint32_t>& ctr) {
    
-  static uint32_t id = 0;
-  return ++id;
-}
-
-std::string make_session_handle() {
-   
-  return "/org/freedesktop/portal/desktop/session/" + std::to_string(next_session_id());
+  uint32_t n = ctr.fetch_add(1, std::memory_order_relaxed);
+  uint32_t r = 0;
+  std::ifstream urandom("/dev/urandom", std::ios::binary);
+  if (urandom) urandom.read(reinterpret_cast<char*>(&r), sizeof(r));
+  if (r == 0) r = static_cast<uint32_t>(::getpid()) ^ 0x9e3779b9u;
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), "%x_%x", n, r);
+  return "/org/freedesktop/portal/desktop/session/" + std::string(buf);
 }
 
 }
@@ -49,13 +53,18 @@ GlobalShortcutsService::GlobalShortcutsService() {
   create_session.outputSignature = sdbus::Signature{"ua{sv}"};
   create_session.outputParamNames = {"result", "results"};
   create_session.callbackHandler = [this](sdbus::MethodCall call) {
+    std::string sender;
+    try {
+      sender = call.getSender() ? call.getSender() : "";
+    } catch (const std::exception&) {
+    }
     std::string session_handle;
     std::map<std::string, sdbus::Variant> session_details;
     std::map<std::string, sdbus::Variant> options;
     call >> session_handle >> session_details >> options;
 
     std::map<std::string, sdbus::Variant> results;
-    auto rc = onCreateSession(session_handle, session_details, options, results);
+    auto rc = onCreateSession(sender, session_handle, session_details, options, results);
 
     auto reply = call.createReply();
     reply << rc << results;
@@ -69,6 +78,11 @@ GlobalShortcutsService::GlobalShortcutsService() {
   bind_shortcuts.outputSignature = sdbus::Signature{"ua{sv}"};
   bind_shortcuts.outputParamNames = {"result", "results"};
   bind_shortcuts.callbackHandler = [this](sdbus::MethodCall call) {
+    std::string sender;
+    try {
+      sender = call.getSender() ? call.getSender() : "";
+    } catch (const std::exception&) {
+    }
     std::string session_handle;
     std::vector<std::tuple<std::string, std::map<std::string, sdbus::Variant>>> shortcuts;
     std::string parent_window;
@@ -76,7 +90,7 @@ GlobalShortcutsService::GlobalShortcutsService() {
     call >> session_handle >> shortcuts >> parent_window >> options;
 
     std::map<std::string, sdbus::Variant> results;
-    auto rc = onBindShortcuts(session_handle, shortcuts, parent_window, options, results);
+    auto rc = onBindShortcuts(sender, session_handle, shortcuts, parent_window, options, results);
 
     auto reply = call.createReply();
     reply << rc << results;
@@ -90,10 +104,15 @@ GlobalShortcutsService::GlobalShortcutsService() {
   list_shortcuts.outputSignature = sdbus::Signature{"ua(sa{sv})"};
   list_shortcuts.outputParamNames = {"result", "shortcuts"};
   list_shortcuts.callbackHandler = [this](sdbus::MethodCall call) {
+    std::string sender;
+    try {
+      sender = call.getSender() ? call.getSender() : "";
+    } catch (const std::exception&) {
+    }
     std::string session_handle;
     call >> session_handle;
 
-    auto [rc, shortcuts_list] = onListShortcuts(session_handle);
+    auto [rc, shortcuts_list] = onListShortcuts(sender, session_handle);
 
     auto reply = call.createReply();
     reply << rc << shortcuts_list;
@@ -110,6 +129,12 @@ GlobalShortcutsService::~GlobalShortcutsService() {
    
   MANGOWM_INFO("{}", __func__);
   std::cerr << "[global-shortcuts] shutting down\n";
+  if (bus_) {
+    try {
+      bus_->leaveEventLoop();
+    } catch (const std::exception&) {
+    }
+  }
 }
 
 Session* GlobalShortcutsService::findSession(const std::string& session_handle) {
@@ -119,20 +144,33 @@ Session* GlobalShortcutsService::findSession(const std::string& session_handle) 
   return nullptr;
 }
 
-uint32_t GlobalShortcutsService::onCreateSession(const std::string& session_handle,
+Session* GlobalShortcutsService::findOwnedSession(const std::string& sender, const std::string& session_handle) {
+   
+  auto* s = findSession(session_handle);
+  if (!s) return nullptr;
+  if (!sender.empty() && !s->owner.empty() && s->owner != sender) return nullptr;
+  return s;
+}
+
+uint32_t GlobalShortcutsService::onCreateSession(const std::string& sender, const std::string& session_handle,
                                                   const std::map<std::string, sdbus::Variant>&,
                                                   const std::map<std::string, sdbus::Variant>&,
                                                   std::map<std::string, sdbus::Variant>& results) {
    
-  auto handle = session_handle.empty() ? make_session_handle() : session_handle;
+  std::lock_guard<std::mutex> lock(mu_);
+  if (session_handle.size() > 256) return kResponseFailed;
+  auto handle = session_handle.empty() ? make_session_handle(next_session_id_) : session_handle;
 
-  if (findSession(handle)) {
+  if (auto* existing = findSession(handle)) {
+    if (!sender.empty() && !existing->owner.empty() && existing->owner != sender) return kResponseFailed;
+    if (existing->owner.empty() && !sender.empty()) existing->owner = sender;
     results["handle"] = sdbus::Variant{handle};
     return kResponseSuccess;
   }
 
   Session s;
   s.session_handle = handle;
+  s.owner = sender;
   sessions_.push_back(std::move(s));
 
   std::cerr << "[global-shortcuts] session created: " << handle << '\n';
@@ -142,19 +180,22 @@ uint32_t GlobalShortcutsService::onCreateSession(const std::string& session_hand
 }
 
 uint32_t GlobalShortcutsService::onBindShortcuts(
-    const std::string& session_handle,
+    const std::string& sender, const std::string& session_handle,
     const std::vector<std::tuple<std::string, std::map<std::string, sdbus::Variant>>>& shortcuts,
     const std::string&,
     const std::map<std::string, sdbus::Variant>&,
     std::map<std::string, sdbus::Variant>&) {
    
-  auto* session = findSession(session_handle);
+  if (shortcuts.size() > 128) return kResponseFailed;
+  std::lock_guard<std::mutex> lock(mu_);
+  auto* session = findOwnedSession(sender, session_handle);
   if (!session) return kResponseFailed;
 
   session->bindings.clear();
   session->bindings.reserve(shortcuts.size());
 
   for (const auto& [shortcut_id, options] : shortcuts) {
+    if (shortcut_id.size() > 256 || options.size() > 32) return kResponseFailed;
     ShortcutBinding b;
     b.shortcut_id = shortcut_id;
     b.options = options;
@@ -168,9 +209,10 @@ uint32_t GlobalShortcutsService::onBindShortcuts(
 }
 
 std::tuple<uint32_t, std::vector<std::tuple<std::string, std::map<std::string, sdbus::Variant>>>>
-GlobalShortcutsService::onListShortcuts(const std::string& session_handle) {
+GlobalShortcutsService::onListShortcuts(const std::string& sender, const std::string& session_handle) {
    
-  auto* session = findSession(session_handle);
+  std::lock_guard<std::mutex> lock(mu_);
+  auto* session = findOwnedSession(sender, session_handle);
   if (!session) return {kResponseFailed, {}};
 
   std::vector<std::tuple<std::string, std::map<std::string, sdbus::Variant>>> out;
@@ -183,6 +225,8 @@ GlobalShortcutsService::onListShortcuts(const std::string& session_handle) {
 
 void GlobalShortcutsService::emitShortcutsChanged(const std::string& session_handle) {
    
+  if (!object_) return;
+  std::lock_guard<std::mutex> lock(mu_);
   auto* session = findSession(session_handle);
   if (!session) return;
 
@@ -201,6 +245,7 @@ void GlobalShortcutsService::notifyKeyEvent(uint32_t key_sym, uint32_t state) {
    
   if (state != 0) return;
 
+  std::lock_guard<std::mutex> lock(mu_);
   for (auto& session : sessions_) {
     for (const auto& b : session.bindings) {
       (void)key_sym;

@@ -225,6 +225,23 @@ int run_standalone() {
     return 1;
   }
 
+  // Remember window size (Disks 51) — tiny ini in ~/.config.
+  {
+    const char* home = getenv("HOME");
+    if (home) {
+      char path[1024];
+      std::snprintf(path, sizeof(path), "%s/.config/horizon-disks-size", home);
+      if (FILE* f = fopen(path, "r")) {
+        int w = 0, h = 0;
+        if (fscanf(f, "%d %d", &w, &h) == 2) {
+          if (w >= 1024 && w <= 3840) app.width = w;
+          if (h >= 640 && h <= 2160) app.height = h;
+        }
+        fclose(f);
+      }
+    }
+  }
+
   // Initialize the icon cache from the system theme.
   {
     std::string iconTheme = eh::config::read_dock_icon_theme_from_disk();
@@ -236,6 +253,9 @@ int run_standalone() {
     }
     app.icons.prewarm_search_dirs();
   }
+
+  // Bundled action/device SVGs (Eva MIT + Lucide ISC, assets/UI/).
+  load_disk_icons(app.svg);
 
   // Apply the dynamic colour palette.
   {
@@ -289,6 +309,8 @@ int run_standalone() {
     app.seat.set_pointer_button_cb(
         [&app](uint32_t button, uint32_t state) {
           if (state == 1) {
+            // Left (272), right (273) and middle (274) all route through;
+            // events.cpp decides select vs context menu.
             handle_click(app, static_cast<int>(app.pointerX),
                          static_cast<int>(app.pointerY),
                          static_cast<int>(button));
@@ -298,6 +320,10 @@ int run_standalone() {
         [&app](double delta_px) {
           handle_scroll(app, static_cast<int>(app.pointerX),
                         static_cast<int>(app.pointerY), delta_px);
+        });
+    app.seat.set_keyboard_key_cb(
+        [&app](const eh::wayland::WaylandSeat::KeyboardEvent& ev) {
+          handle_key(app, ev.sym, ev.state, ev.utf8.data(), ev.utf8_len);
         });
   }
 
@@ -362,38 +388,8 @@ int run_standalone() {
       if (app.surface) draw(app);
     }
 
-    // Process the mount result.
-    {
-      std::lock_guard<std::mutex> lock(app.mtx);
-      if (app.mountPending) {
-        app.mountPending = false;
-        app.opActive = false;
-        if (app.mountResultOk) {
-          auto drives = mgr.get_drives();
-          if (app.selected_drive >= 0 &&
-              app.selected_drive < static_cast<int>(drives.size())) {
-            for (auto& block : drives[app.selected_drive]->blocks()) {
-              block->invalidate_features();
-            }
-          }
-          schedule_frame(app);
-        }
-      }
-      if (app.unmountPending) {
-        app.unmountPending = false;
-        app.opActive = false;
-        if (app.unmountResultOk) {
-          auto drives = mgr.get_drives();
-          if (app.selected_drive >= 0 &&
-              app.selected_drive < static_cast<int>(drives.size())) {
-            for (auto& block : drives[app.selected_drive]->blocks()) {
-              block->invalidate_features();
-            }
-          }
-          schedule_frame(app);
-        }
-      }
-    }
+    // Job-tracked async ops invalidate on change notifications; nothing to
+    // poll here (Disks 51 job system is callback-driven).
 
     if (app.pendingRedraw) {
       app.pendingRedraw = false;
@@ -402,6 +398,18 @@ int run_standalone() {
   }
 
   // Cleanup.
+  free_disk_icons(app.svg);
+  {
+    const char* home = getenv("HOME");
+    if (home) {
+      char path[1024];
+      std::snprintf(path, sizeof(path), "%s/.config/horizon-disks-size", home);
+      if (FILE* f = fopen(path, "w")) {
+        fprintf(f, "%d %d\n", app.width, app.height);
+        fclose(f);
+      }
+    }
+  }
   if (app.toplevel) xdg_toplevel_destroy(app.toplevel);
   if (app.xdgSurface) xdg_surface_destroy(app.xdgSurface);
   if (app.surface) wl_surface_destroy(app.surface);

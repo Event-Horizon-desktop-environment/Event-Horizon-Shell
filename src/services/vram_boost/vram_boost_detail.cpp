@@ -58,9 +58,13 @@ bool comm_matches(std::string_view comm, std::string_view normalizedAppId) {
   const std::string normComm = normalize_app_id(comm);
   if (normComm.empty() || normalizedAppId.empty()) return false;
   if (normComm == normalizedAppId) return true;
-  // A short comm is a weak signal (e.g. "sh", "Xorg"); require some specificity.
   if (normComm.size() < 3) return false;
-  return normalizedAppId.ends_with(normComm);
+  if (normalizedAppId.size() < normComm.size()) return false;
+  if (!normalizedAppId.ends_with(normComm)) return false;
+  const size_t at = normalizedAppId.size() - normComm.size();
+  if (at == 0) return true;
+  const char prev = normalizedAppId[at - 1];
+  return !(prev == '_' || (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9'));
 }
 
 bool controllers_have_dmem(std::string_view controllers) {

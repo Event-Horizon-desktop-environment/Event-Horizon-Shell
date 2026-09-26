@@ -1,4 +1,5 @@
 #include "desktop_shell/widgets/start_menu/start_menu.hpp"
+#include "desktop_shell/widgets/app_drawer/tahoe/tahoe_launcher.hpp"
 #include "../app_drawer/overlay/app_drawer_overlay.hpp"
 #include "../app_drawer/power/app_drawer_power_modal.hpp"
 #include "../app_drawer/trace/app_drawer_trace.hpp"
@@ -10,7 +11,6 @@
 #include "desktop_shell/common/glyph/material_glyph.hpp"
 #include "desktop_shell/common/bench/shell_bench.hpp"
 
-#include "m3/core/primitives/box.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -25,139 +25,73 @@
 
 namespace {
 
-static bool s_smenu_mode = false;
-
+// Tahoe unified launcher: single full-width layout, no pinned sidebar.
+// (Pinned data stays for context menus; presentation follows Apple's Apps
+// browser: search + count pills + icon grid + slim power footer.)
 constexpr int kPopupW = 858;
 constexpr int kPopupH = 680;
 
-constexpr double kMar   = 16.0;
+constexpr double kMar   = 20.0;
 constexpr double kPad   = 12.0;
 constexpr double kPadS  =  8.0;
 constexpr double kPadXS =  4.0;
 
-constexpr double kLeftFrac  = 0.40;
-constexpr double kRightFrac = 0.60;
-
-constexpr double kSearchH   = 48.0;
+constexpr double kSearchH   = 46.0;
 
 constexpr double kRowPitch  = 64.0;
-constexpr double kGridGap   = 10.0;
-constexpr int    kGridCols  = 5;
 constexpr double kIconSz    = 46.0;
-constexpr double kGridIconSz = 48.0;
-constexpr double kGridLabelGap = 4.0;
-constexpr double kGridLabelFontPx = 11.0;
 
-constexpr double kPinCols   =  3.0;
-constexpr double kPinCellH  = 96.0;
-constexpr double kPinIconSz = 58.0;
-
-constexpr double kPowerBtnSz = 36.0;
+constexpr double kPowerBtnSz = 32.0;
 constexpr double kPowerBtnR  =  8.0;
+constexpr int    kPowerBtnCount = 4;
+constexpr int    kNightlightBtnIdx = 4;
+constexpr int    kFooterBtnCount = 5;
 
-constexpr double kCatTabH   = 34.0;
-constexpr double kCatTabR   =  8.0;
-constexpr double kCatTabGap = 6.0;
-constexpr double kCatTabFont = 14.0;
-
-constexpr double kPopupR  = 6.0;
-constexpr double kFieldR  = 10.0;
+constexpr double kPopupR  = 24.0;
+constexpr double kFieldR  = 14.0;
 constexpr double kRowR    = 12.0;
-constexpr double kCellR   =  8.0;
+constexpr double kCellR   =  16.0;
 constexpr double kPinIconR =  8.0;
+
+constexpr double kPillH   = 32.0;
+
+using eh::shell::tahoe::TahoeLayout;
+
+TahoeLayout tahoe_geom(double W, double H) {
+  return eh::shell::tahoe::tahoe_layout(W, H);
+}
 
 struct Rect { double x, y, w, h; };
 
-Rect right_col(double W, double H) {
-     
-    if (s_smenu_mode) return {0, 0, W, H};
-    double lw = W * kLeftFrac;
-    return {lw, 0, W - lw, H};
-}
-
 Rect search_rect(double W, double H) {
-     
-    Rect rc = right_col(W, H);
-    return {rc.x + kMar, kMar, rc.w - 2 * kMar, kSearchH};
+  const TahoeLayout l = tahoe_geom(W, H);
+  return {l.searchX, l.searchY, l.searchW, l.searchH};
 }
 
-double search_sep_y(double  ) {
-    return kMar + kSearchH + kPad;
-}
+
 
 double list_top(double W, double H) {
-     
-    (void)H;
-    if (s_smenu_mode) return search_sep_y(W) + kPad + kCatTabH + kPadS;
-    return search_sep_y(W) + 1.0 + kPad;
+  const TahoeLayout l = tahoe_geom(W, H);
+  return l.gridY;
 }
 
-double list_x(double W, double H) { return right_col(W, H).x + kPadS; }
-double list_w(double W, double H) { return right_col(W, H).w - 2 * kPadS; }
-
-double pinned_label_y()  { return kMar + 16.0; }
-
-double pinned_sep_y()    { return kMar + 24.0; }
-
-double pinned_grid_top() { return pinned_sep_y() + 1.0 + kPadXS; }
-
-Rect pinned_cell_rect(double leftW, int col, int row) {
-     
-    const double gridW = leftW - 2*kMar;
-    const double cellW = (gridW - (kPinCols - 1)*kPadXS) / kPinCols;
-    const double x = kMar + col * (cellW + kPadXS);
-    const double y = pinned_grid_top() + row * (kPinCellH + kPadXS);
-    return { x, y, cellW, kPinCellH };
+double list_bottom(double W, double H) {
+  const TahoeLayout l = tahoe_geom(W, H);
+  return l.contentBottom;
 }
 
-double power_row_y(double H) {
-    return H - kMar - kPowerBtnSz;
+
+
+// Slim centered power footer (EH need; Tahoe has none so this stays quiet).
+Rect power_btn_rect(double W, int idx, double H) {
+  const TahoeLayout l = tahoe_geom(W, H);
+  const double rowY = l.footerY + (l.footerH - kPowerBtnSz) * 0.5;
+  const double totalBtnW = kFooterBtnCount * kPowerBtnSz + (kFooterBtnCount - 1) * kPadXS;
+  const double startX = (W - totalBtnW) * 0.5;
+  const double x = startX + idx * (kPowerBtnSz + kPadXS);
+  return {x, rowY, kPowerBtnSz, kPowerBtnSz};
 }
 
-double power_sep_y(double H) {
-    return power_row_y(H) - kPadS - 1.0;
-}
-
-double cat_tab_top(double W) { return search_sep_y(W) + kPad; }
-
-Rect power_btn_rect(double  , int idx, double H) {
-     
-    const double rowY = power_row_y(H);
-    const double x    = kMar + idx * (kPowerBtnSz + kPadXS);
-    return { x, rowY, kPowerBtnSz, kPowerBtnSz };
-}
-
-double smenu_footer_h() {
-    return kPowerBtnSz + kPadS + kPadS;
-}
-
-Rect smenu_power_btn_rect(int idx, int totalBtns, double W, double H) {
-     
-    const double rowY = H - kMar - kPowerBtnSz;
-    const double totalBtnW = totalBtns * kPowerBtnSz + (totalBtns - 1) * kPadXS;
-    const double startX = (W - totalBtnW) / 2.0;
-    const double x = startX + idx * (kPowerBtnSz + kPadXS);
-    return { x, rowY, kPowerBtnSz, kPowerBtnSz };
-}
-
-double list_bottom(double H) {
-     
-    if (s_smenu_mode) return H - kMar - smenu_footer_h();
-    return H - kMar;
-}
-
-void rr(cairo_t* cr, double rx, double ry, double rw, double rh, double rad) {
-     
-    cairo_new_path(cr);
-    const double r  = std::min({rad, rw*0.5, rh*0.5});
-    const double x0 = rx,      y0 = ry;
-    const double x1 = rx + rw, y1 = ry + rh;
-    cairo_arc(cr, x1-r, y0+r, r, -M_PI_2,       0);
-    cairo_arc(cr, x1-r, y1-r, r,       0,  M_PI_2);
-    cairo_arc(cr, x0+r, y1-r, r,  M_PI_2,  M_PI);
-    cairo_arc(cr, x0+r, y0+r, r,  M_PI,  3*M_PI_2);
-    cairo_close_path(cr);
-}
 
 void utf8_pop_back(std::string& s) {
      
@@ -189,9 +123,6 @@ static constexpr PowerBtn kPowerBtns[] = {
     { "power_settings_new",  "Shutdown" },
     { "dark_mode",  "Nightlight" },
 };
-constexpr int kPowerBtnCount = 4;
-constexpr int kNightlightBtnIdx = 4;
-
 // Nightlight global state
 static bool s_nightlight_active = false;
 static void (*s_nightlight_toggle_fn)() = nullptr;
@@ -207,11 +138,10 @@ int eh_app_drawer_popup_height() { return kPopupH; }
 
 void eh_app_drawer_clamp_scroll(DockApp& app) {
      
-    s_smenu_mode = app.appMenuSmenuMode;
     const double W       = static_cast<double>(app.popupW);
     const double H       = static_cast<double>(app.popupH);
     const double lt      = list_top(W, H);
-    const double listH   = H - lt - kMar;
+    const double listH   = list_bottom(W, H) - lt;
     if (listH <= 1.0) {
         if (eh_app_drawer_debug_level() >= 3) {
             eh::shell::dock::app_drawer::trace_line(3, "dock-drawer", "clamp_scroll listH<=1 → scrollPx=0 popup=" + std::to_string(app.popupW) + "x" +
@@ -221,11 +151,9 @@ void eh_app_drawer_clamp_scroll(DockApp& app) {
         return;
     }
     double contentH;
-    int viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
+    const int viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
     if (viewMode == 0) {
-      const int rows = (static_cast<int>(app.appMenuHits.size()) + kGridCols - 1) / kGridCols;
-      const double rowH = kGridIconSz + kGridLabelGap + kGridLabelFontPx + kGridGap;
-      contentH = rows * rowH;
+      contentH = eh::shell::tahoe::tahoe_grid_content_h(app.appMenuHits.size(), tahoe_geom(W, H));
     } else {
       contentH = static_cast<double>(app.appMenuHits.size()) * kRowPitch;
     }
@@ -243,82 +171,61 @@ void eh_app_drawer_clamp_scroll(DockApp& app) {
     }
 }
 
-static bool cat_has_category(const std::string& categories, const std::string& cat) {
-     
-    if (cat.empty()) return true;
-    size_t start = 0;
-    while (start < categories.size()) {
-        size_t end = categories.find(';', start);
-        if (end == std::string::npos) end = categories.size();
-        if (categories.substr(start, end - start) == cat) return true;
-        start = end + 1;
-    }
-    return false;
-}
-
 void eh_app_drawer_update_categories(DockApp& app) {
-     
+    // Tahoe buckets (fixed order) with live catalog counts, e.g. "Main 22".
     app.appMenuCategories.clear();
     app.appMenuCategoryWidths.clear();
+    app.appMenuCategoryCounts.clear();
     const auto& entries = eh::shell::dock::app_drawer::get_cached_entries();
-    for (const auto& e : entries) {
-        size_t start = 0;
-        while (start < e.categories.size()) {
-            size_t end = e.categories.find(';', start);
-            if (end == std::string::npos) end = e.categories.size();
-            const std::string cat = e.categories.substr(start, end - start);
-            if (!cat.empty() && eh::shell::dock::app_drawer::is_standard_category(cat) &&
-                std::find(app.appMenuCategories.begin(), app.appMenuCategories.end(), cat) == app.appMenuCategories.end())
-                app.appMenuCategories.push_back(cat);
-            start = end + 1;
-        }
+    int counts[eh::shell::tahoe::kTahoeBucketCount] = {};
+    for (const auto& e : entries)
+        counts[eh::shell::tahoe::tahoe_bucket_for(e.categories)]++;
+    for (int b = 0; b < eh::shell::tahoe::kTahoeBucketCount; ++b) {
+        app.appMenuCategories.emplace_back(eh::shell::tahoe::kTahoeBuckets[b].label);
+        app.appMenuCategoryCounts.push_back(counts[b]);
     }
-    std::sort(app.appMenuCategories.begin(), app.appMenuCategories.end());
     if (app.appMenuSelectedCategory >= static_cast<int>(app.appMenuCategories.size()))
         app.appMenuSelectedCategory = -1;
     cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
     cairo_t* cr = cairo_create(surf);
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 14.0);
-    constexpr double kPillPad = 2.0;
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, eh::shell::tahoe::kTahoePillFontPx);
+    constexpr double kPillPad = eh::shell::tahoe::kTahoePillPadX;
     cairo_text_extents_t te;
-    {
-        cairo_text_extents(cr, "All", &te);
-        app.appMenuCategoryWidths.push_back(te.x_advance + kPillPad * 2.0);
-    }
-    for (const auto& cat : app.appMenuCategories) {
-        cairo_text_extents(cr, cat.c_str(), &te);
-        app.appMenuCategoryWidths.push_back(te.x_advance + kPillPad * 2.0);
+    auto pill_w = [&](const std::string& label, int count) {
+        const std::string txt = label + " " + std::to_string(count);
+        cairo_text_extents(cr, txt.c_str(), &te);
+        return te.x_advance + kPillPad * 2.0;
+    };
+    app.appMenuCategoryCounts.push_back(static_cast<int>(entries.size()));
+    app.appMenuCategoryWidths.push_back(pill_w("All", static_cast<int>(entries.size())));
+    for (int b = 0; b < eh::shell::tahoe::kTahoeBucketCount; ++b) {
+        app.appMenuCategoryCounts.push_back(counts[b]);
+        app.appMenuCategoryWidths.push_back(
+            pill_w(app.appMenuCategories[static_cast<size_t>(b)], counts[b]));
     }
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
 }
 
 int eh_app_drawer_pick_category_tab(DockApp& app, double lx, double ly) {
-     
-    constexpr double kPillH = 34.0;
-    constexpr double kPillGap = 6.0;
     const double W = static_cast<double>(app.popupW);
-    const double ct = cat_tab_top(W);
-    if (ly < ct || ly > ct + kPillH) return -1;
+    const double H = static_cast<double>(app.popupH);
+    const TahoeLayout l = tahoe_geom(W, H);
+    if (ly < l.pillsY || ly > l.pillsY + l.pillsH) return -1;
     const int nCats = static_cast<int>(app.appMenuCategories.size());
     if (app.appMenuCategoryWidths.size() < static_cast<size_t>(nCats + 1)) return -1;
-    double totalW = 0.0;
-    for (int i = -1; i < nCats; ++i)
-        totalW += app.appMenuCategoryWidths[static_cast<size_t>(i + 1)] + kPillGap;
-    totalW -= kPillGap;
-    double x = (W - totalW) * 0.5;
+    const auto xs = eh::shell::tahoe::tahoe_pill_xs(app.appMenuCategoryWidths, l.pillsAvailX, l.pillsAvailW,
+                                                    app.appMenuSelectedCategory + 1);
     for (int i = -1; i < nCats; ++i) {
-        const double tw = app.appMenuCategoryWidths[static_cast<size_t>(i + 1)];
-        if (lx >= x && lx < x + tw + kPillGap) return i;
-        x += tw + kPillGap;
+        const size_t k = static_cast<size_t>(i + 1);
+        if (lx >= xs[k] && lx < xs[k] + app.appMenuCategoryWidths[k]) return i;
     }
     return -1;
 }
 
 void eh_app_drawer_refresh_hits(DockApp& app) {
    
-  s_smenu_mode = app.appMenuSmenuMode;
   const auto t0 = ShellBenchClock::now();
   if (eh_app_drawer_debug_level() >= 1) {
         eh::shell::dock::app_drawer::trace_line(1, "dock-drawer",
@@ -369,12 +276,13 @@ void eh_app_drawer_refresh_hits(DockApp& app) {
             app.appMenuPinHits.push_back(std::move(ph));
         }
     }
-    if (app.appMenuSmenuMode && app.appMenuSelectedCategory >= 0 &&
+    if (app.appMenuCategories.empty()) eh_app_drawer_update_categories(app);
+    if (app.appMenuSelectedCategory >= 0 &&
         app.appMenuSelectedCategory < static_cast<int>(app.appMenuCategories.size())) {
-        const std::string& cat = app.appMenuCategories[static_cast<size_t>(app.appMenuSelectedCategory)];
+        const int bucket = app.appMenuSelectedCategory;
         std::vector<SpotlightHit> filtered;
         for (const auto& h : app.appMenuHits) {
-            if (cat_has_category(h.categories, cat))
+            if (eh::shell::tahoe::tahoe_hit_in_bucket(h.categories, bucket))
                 filtered.push_back(h);
         }
         app.appMenuHits = std::move(filtered);
@@ -401,7 +309,6 @@ void eh_app_drawer_refresh_hits(DockApp& app) {
 
 void eh_app_drawer_ensure_sel_visible(DockApp& app) {
      
-    s_smenu_mode = app.appMenuSmenuMode;
     if (eh_app_drawer_debug_level() >= 2) {
         eh::shell::dock::app_drawer::trace_line(2, "dock-drawer", "ensure_sel_visible sel=" + std::to_string(app.appMenuSel));
     }
@@ -410,11 +317,13 @@ void eh_app_drawer_ensure_sel_visible(DockApp& app) {
     const double W     = static_cast<double>(app.popupW);
     const double H     = static_cast<double>(app.popupH);
     const double lt    = list_top(W, H);
-    const double listH = H - lt - kMar;
+    const double listH = list_bottom(W, H) - lt;
     if (listH <= 1.0) return;
     const int viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
-    const double rowH = viewMode == 0 ? (kGridIconSz + kGridLabelGap + kGridLabelFontPx + kGridGap) : kRowPitch;
-    const double rowTopPx = viewMode == 0 ? (static_cast<double>(app.appMenuSel / kGridCols) * rowH) : (static_cast<double>(app.appMenuSel) * rowH);
+    const TahoeLayout tl = tahoe_geom(W, H);
+    const int cols = eh::shell::tahoe::kTahoeCols;
+    const double rowH = viewMode == 0 ? (tl.cellH + eh::shell::tahoe::kTahoeGridGap) : kRowPitch;
+    const double rowTopPx = viewMode == 0 ? (static_cast<double>(app.appMenuSel / cols) * rowH) : (static_cast<double>(app.appMenuSel) * rowH);
     const double relTop   = rowTopPx - app.appMenuScrollPx;
     if (relTop < 0)
         app.appMenuScrollPx = rowTopPx;
@@ -430,7 +339,6 @@ void eh_app_drawer_ensure_sel_visible(DockApp& app) {
 
 void eh_app_drawer_scroll_pixels(DockApp& app, double deltaPx) {
      
-    s_smenu_mode = app.appMenuSmenuMode;
     if (eh_app_drawer_debug_level() >= 2) {
         eh::shell::dock::app_drawer::trace_line(2, "dock-drawer",
                                    "scroll_pixels deltaPx=" + std::to_string(deltaPx) + " scroll_before=" + std::to_string(app.appMenuScrollPx));
@@ -473,133 +381,66 @@ void eh_app_drawer_scroll_tick(DockApp& app) {
 }
 
 AppDrawerHitZone eh_app_drawer_hit_zone(DockApp& app, double lx, double ly) {
-     
-    s_smenu_mode = app.appMenuSmenuMode;
     const double W  = static_cast<double>(app.popupW);
     const double H  = static_cast<double>(app.popupH);
-
-    if (!s_smenu_mode) {
-        const double lw = W * kLeftFrac;
-
-        if (lx < lw) {
-
-            const int maxPins = static_cast<int>(std::min<size_t>(15, app.settings.drawerPinnedApps.size()));
-            const int rows    = (maxPins + 2) / 3;
-            for (int row = 0; row < rows; ++row)
-                for (int col = 0; col < 3; ++col) {
-                    int idx = row*3 + col;
-                    if (idx >= maxPins) break;
-                    Rect c = pinned_cell_rect(lw, col, row);
-                    if (lx >= c.x && lx < c.x+c.w && ly >= c.y && ly < c.y+c.h)
-                        return AppDrawerHitZone::PinnedApp;
-                }
-
-            for (int i = 0; i < kPowerBtnCount; ++i) {
-                Rect b = power_btn_rect(lw, i, H);
-                if (lx >= b.x && lx < b.x+b.w && ly >= b.y && ly < b.y+b.h)
-                    return AppDrawerHitZone::PowerButton;
-            }
-            {
-                Rect b = power_btn_rect(lw, kNightlightBtnIdx, H);
-                if (lx >= b.x && lx < b.x+b.w && ly >= b.y && ly < b.y+b.h)
-                    return AppDrawerHitZone::NightlightButton;
-            }
-            return AppDrawerHitZone::None;
-        }
-    }
+    const TahoeLayout l = tahoe_geom(W, H);
 
     Rect sr = search_rect(W, H);
-    if (lx >= sr.x && lx < sr.x+sr.w && ly >= sr.y && ly < sr.y+sr.h)
+    if (lx >= sr.x && lx < sr.x + sr.w && ly >= sr.y && ly < sr.y + sr.h)
         return AppDrawerHitZone::SearchField;
 
-    if (s_smenu_mode) {
-        const double ct = cat_tab_top(W);
-        if (ly >= ct && ly < ct + kCatTabH)
-            return AppDrawerHitZone::CategoryTab;
-    }
+    if (ly >= l.pillsY && ly < l.pillsY + l.pillsH && lx >= l.pillsAvailX &&
+        lx < l.pillsAvailX + l.pillsAvailW)
+        return AppDrawerHitZone::CategoryTab;
 
     const double lt = list_top(W, H);
-    const double lb = list_bottom(H);
-    if (ly >= lt && ly < lb) return AppDrawerHitZone::AppListRow;
+    const double lb = list_bottom(W, H);
+    if (ly >= lt && ly < lb && lx >= l.gridX && lx < l.gridX + l.gridW)
+        return AppDrawerHitZone::AppListRow;
 
-    if (s_smenu_mode) {
-        const int totalBtns = kPowerBtnCount + 1;
-        for (int i = 0; i < kPowerBtnCount; ++i) {
-            Rect b = smenu_power_btn_rect(i, totalBtns, W, H);
-            if (lx >= b.x && lx < b.x+b.w && ly >= b.y && ly < b.y+b.h)
-                return AppDrawerHitZone::PowerButton;
-        }
-        {
-            Rect b = smenu_power_btn_rect(kNightlightBtnIdx, totalBtns, W, H);
-            if (lx >= b.x && lx < b.x+b.w && ly >= b.y && ly < b.y+b.h)
-                return AppDrawerHitZone::NightlightButton;
-        }
+    for (int i = 0; i < kPowerBtnCount; ++i) {
+        Rect b = power_btn_rect(W, i, H);
+        if (lx >= b.x && lx < b.x + b.w && ly >= b.y && ly < b.y + b.h)
+            return AppDrawerHitZone::PowerButton;
+    }
+    {
+        Rect b = power_btn_rect(W, kNightlightBtnIdx, H);
+        if (lx >= b.x && lx < b.x + b.w && ly >= b.y && ly < b.y + b.h)
+            return AppDrawerHitZone::NightlightButton;
     }
 
     return AppDrawerHitZone::None;
 }
 
 int eh_app_drawer_pick_row_index(DockApp& app, double lx, double ly) {
-     
     const double W  = static_cast<double>(app.popupW);
     const double H  = static_cast<double>(app.popupH);
+    const TahoeLayout l = tahoe_geom(W, H);
     const double lt = list_top(W, H);
-    if (ly < lt || ly > H - kMar) return -1;
-    const double rel = ly - lt + app.appMenuScrollPxCurrent;
+    const double lb = list_bottom(W, H);
+    if (ly < lt || ly > lb) return -1;
     const int viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
     if (viewMode == 0) {
-        const double lx_ = list_x(W, H);
-        const double lw_ = list_w(W, H);
-        const double cellW = (lw_ - kPadS - (kGridCols - 1) * kGridGap) / kGridCols;
-        const double rowH = kGridIconSz + kGridLabelGap + kGridLabelFontPx + kGridGap;
-        const int row = static_cast<int>(std::floor(rel / rowH));
-        const double colX = lx - lx_;
-        const int col = static_cast<int>(std::floor((colX - kPadS) / (cellW + kGridGap)));
-        const int idx = row * kGridCols + std::clamp(col, 0, kGridCols - 1);
-        if (idx < 0 || idx >= static_cast<int>(app.appMenuHits.size())) return -1;
-        return idx;
+        return eh::shell::tahoe::tahoe_pick_grid(lx, ly, app.appMenuHits.size(), l,
+                                                 app.appMenuScrollPxCurrent);
     }
-    const int    idx = static_cast<int>(std::floor(rel / kRowPitch));
+    const double rel = ly - lt + app.appMenuScrollPxCurrent;
+    const int idx = static_cast<int>(std::floor(rel / kRowPitch));
     if (idx < 0 || idx >= static_cast<int>(app.appMenuHits.size())) return -1;
     return idx;
 }
 
 int eh_app_drawer_pick_pinned_index(DockApp& app, double lx, double ly) {
-     
-    if (app.appMenuSmenuMode) return -1;
-    const double W       = static_cast<double>(app.popupW);
-    const double lw      = W * kLeftFrac;
-    const int    maxPins = static_cast<int>(std::min<size_t>(15, app.settings.drawerPinnedApps.size()));
-    const int    rows    = (maxPins + 2) / 3;
-    for (int row = 0; row < rows; ++row)
-        for (int col = 0; col < 3; ++col) {
-            int idx = row*3 + col;
-            if (idx >= maxPins) break;
-            Rect c = pinned_cell_rect(lw, col, row);
-            if (lx >= c.x && lx < c.x+c.w && ly >= c.y && ly < c.y+c.h)
-                return idx;
-        }
+    (void)app; (void)lx; (void)ly;
     return -1;
 }
 
 int eh_app_drawer_pick_power_index(DockApp& app, double lx, double ly) {
-     
     const double W  = static_cast<double>(app.popupW);
     const double H  = static_cast<double>(app.popupH);
-    if (app.appMenuSmenuMode) {
-        s_smenu_mode = true;
-        const int totalBtns = kPowerBtnCount + 1;
-        for (int i = 0; i < kPowerBtnCount; ++i) {
-            Rect b = smenu_power_btn_rect(i, totalBtns, W, H);
-            if (lx >= b.x && lx < b.x+b.w && ly >= b.y && ly < b.y+b.h)
-                return i;
-        }
-        return -1;
-    }
-    const double lw = W * kLeftFrac;
     for (int i = 0; i < kPowerBtnCount; ++i) {
-        Rect b = power_btn_rect(lw, i, H);
-        if (lx >= b.x && lx < b.x+b.w && ly >= b.y && ly < b.y+b.h)
+        Rect b = power_btn_rect(W, i, H);
+        if (lx >= b.x && lx < b.x + b.w && ly >= b.y && ly < b.y + b.h)
             return i;
     }
     return -1;
@@ -607,454 +448,217 @@ int eh_app_drawer_pick_power_index(DockApp& app, double lx, double ly) {
 
 void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool paintContent,
                          float backdrop_alpha_scale) {
-     
     eh_app_drawer_scroll_tick(app);
-    s_smenu_mode = app.appMenuSmenuMode;
 
     if (eh_app_drawer_debug_level() >= 2) {
         eh::shell::dock::app_drawer::trace_line(2, "dock-drawer",
                                    "paint begin W=" + std::to_string(app.popupW) + " H=" + std::to_string(app.popupH) +
                                        " backdrop=" + std::string(paintBackdrop ? "1" : "0") + " content=" +
                                        std::string(paintContent ? "1" : "0") + " hits=" + std::to_string(app.appMenuHits.size()) +
-                                       " sel=" + std::to_string(app.appMenuSel) + " smenu=" + std::string(s_smenu_mode ? "1" : "0"));
+                                       " sel=" + std::to_string(app.appMenuSel));
     }
-    const eh::config::ChromePaintColors mc =
-        eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
-    const double surfR = mc.dockFillR, surfG = mc.dockFillG, surfB = mc.dockFillB;
-    const double dimR = mc.drawerDimR, dimG = mc.drawerDimG, dimB = mc.drawerDimB;
+    const auto& scSnap = eh::config::shell_config_snapshot();
+    const eh::config::ChromePaintColors mc = eh::config::derived_chrome_colors(scSnap.appearance);
     const double primR = mc.accentR, primG = mc.accentG, primB = mc.accentB;
     const double outR = mc.outlineR, outG = mc.outlineG, outB = mc.outlineB;
     const double W  = static_cast<double>(app.popupW);
     const double H  = static_cast<double>(app.popupH);
-    const double lw = W * kLeftFrac;
+    const TahoeLayout l = tahoe_geom(W, H);
     const double bs = std::clamp(static_cast<double>(backdrop_alpha_scale), 0.0, 1.0);
+    const double cardA = scSnap.appearance.overlayOpacityWidgetCard * bs;
+    const int viewMode = scSnap.appearance.launchpadViewMode;
 
-    if (paintBackdrop) {
-        {
-          m3::Box box;
-          box.setColor(static_cast<float>(surfR * 0.35), static_cast<float>(surfG * 0.35),
-                       static_cast<float>(surfB * 0.35), static_cast<float>(0.78 * bs));
-          box.setRadius(static_cast<float>(kPopupR));
-          box.setGeometry(0, 0, static_cast<float>(W), static_cast<float>(H));
-          box.setGlassy(true);
-          box.paint(cr);
-        }
+    namespace th = eh::shell::tahoe;
 
-        rr(cr, 0.5, 0.5, W - 1.0, H - 1.0, kPopupR);
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
+    if (paintBackdrop)
+        th::tahoe_paint_card(cr, W, H, mc.dockFillR, mc.dockFillG, mc.dockFillB, cardA);
 
-        if (!s_smenu_mode) {
-            cairo_save(cr);
-            rr(cr, 0, 0, W, H, kPopupR);
-            cairo_clip(cr);
-            cairo_rectangle(cr, 0, 0, lw, H);
-            cairo_set_source_rgba(cr, dimR, dimG, dimB, 0.40 * bs);
-            cairo_fill(cr);
-            cairo_restore(cr);
-
-            cairo_move_to(cr, lw, kMar);
-            cairo_line_to(cr, lw, H - kMar);
-            cairo_set_source_rgba(cr, outR, outG, outB, 0.12 * bs);
-            cairo_set_line_width(cr, 1.0);
-            cairo_stroke(cr);
-        }
-    }
-
-    if (!paintContent) {
+    if (!paintContent)
         return;
-    }
 
     cairo_save(cr);
-    rr(cr, 0, 0, W, H, kPopupR);
+    th::tahoe_rr(cr, 0, 0, W, H, th::kTahoeRadius);
     cairo_clip(cr);
 
-    if (!s_smenu_mode) {
-
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-    cairo_set_font_size(cr, 15.0);
-    cairo_set_source_rgba(cr, 0.93, 0.96, 0.98, 0.95);
-    cairo_move_to(cr, kMar, pinned_label_y());
-    cairo_show_text(cr, "Pinned");
-
-    const double sepY1 = pinned_sep_y();
-    cairo_move_to(cr, kMar,      sepY1);
-    cairo_line_to(cr, lw - kMar, sepY1);
-    cairo_set_source_rgba(cr, outR, outG, outB, 0.18);
-    cairo_set_line_width(cr, 1.0);
-    cairo_stroke(cr);
-
-    const int maxPins = static_cast<int>(std::min<size_t>(15, app.settings.drawerPinnedApps.size()));
-    if (maxPins > 0) {
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-        for (int i = 0; i < maxPins; ++i) {
-            const int col = i % 3;
-            const int row = i / 3;
-            Rect cell = pinned_cell_rect(lw, col, row);
-            const bool pinLit = (i == app.appMenuDrawerPinHoverIdx);
-            {
-              m3::Box b;
-              if (pinLit) {
-                b.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                           static_cast<float>(primB), 0.18f);
-              } else {
-                b.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                           static_cast<float>(primB), 0.06f);
-              }
-              b.setRadius(static_cast<float>(kCellR));
-              b.setGeometry(static_cast<float>(cell.x), static_cast<float>(cell.y),
-                            static_cast<float>(cell.w), static_cast<float>(cell.h));
-              b.setGlassy(true);
-              b.paint(cr);
-              if (!pinLit) {
-                rr(cr, cell.x, cell.y, cell.w, cell.h, kCellR);
-                cairo_set_source_rgba(cr, outR, outG, outB, 0.10);
-                cairo_set_line_width(cr, 1.0);
-                cairo_stroke(cr);
-              }
-            }
-
-            const std::string& rawId = app.settings.drawerPinnedApps[static_cast<size_t>(i)];
-            const SpotlightHit& pinHit = app.appMenuPinHits[static_cast<size_t>(i)];
-            const bool hasPin = !pinHit.path.empty();
-            const std::string desktopPath = hasPin ? pinHit.path : std::string{};
-            const std::string iconKey = hasPin ? pinHit.iconKey : rawId;
-            std::string displayName;
-            if (hasPin && !pinHit.name.empty())
-                displayName = pinHit.name;
-            else {
-                displayName = rawId;
-                if (displayName.size() > 8 && displayName.substr(displayName.size() - 8) == ".desktop")
-                    displayName = displayName.substr(0, displayName.size() - 8);
-                if (const auto sl = displayName.rfind('/'); sl != std::string::npos)
-                    displayName = displayName.substr(sl + 1);
-            }
-
-            const double ix = cell.x + (cell.w - kPinIconSz) * 0.5;
-            const double iy = cell.y + 8.0;
-
-            bool iconDrawn = false;
-            if (const eh::icons::IconEntry* ic = eh_app_drawer_resolve_catalog_icon(app, desktopPath, iconKey)) {
-                if (ic->surface) {
-                    cairo_save(cr);
-                    cairo_translate(cr, ix, iy);
-                    const double iw = static_cast<double>(ic->width);
-                    const double ih = static_cast<double>(ic->height);
-                    const double sc = kPinIconSz / std::max(1.0, std::max(iw, ih));
-                    cairo_scale(cr, sc, sc);
-                    cairo_set_source_surface(cr, ic->surface, 0, 0);
-                    cairo_paint(cr);
-                    cairo_restore(cr);
-                    iconDrawn = true;
-                }
-            }
-            if (!iconDrawn) {
-                rr(cr, ix, iy, kPinIconSz, kPinIconSz, kPinIconR);
-                cairo_set_source_rgba(cr, 0.12, 0.16, 0.18, 1.0);
-                cairo_fill(cr);
-                cairo_set_font_size(cr, 18.0);
-                cairo_set_source_rgba(cr, primR, primG, primB, 0.95);
-                std::string init = displayName.empty() ? "?" : displayName.substr(0, 1);
-                cairo_move_to(cr, ix + kPinIconSz * 0.33, iy + kPinIconSz * 0.66);
-                cairo_show_text(cr, init.c_str());
-            }
-
-            cairo_set_font_size(cr, 11.0);
-            cairo_set_source_rgba(cr, 0.88, 0.92, 0.95, 0.90);
-            const double maxLabelW = cell.w - 4.0;
-            std::string lblTrunc;
-            truncate_to_width(cr, displayName, maxLabelW, &lblTrunc);
-            cairo_text_extents_t ex{};
-            cairo_text_extents(cr, lblTrunc.c_str(), &ex);
-            const double lx_off = cell.x + (cell.w - ex.x_advance) * 0.5;
-            const double ly_off = cell.y + kPinCellH - 6.0;
-            cairo_move_to(cr, lx_off, ly_off);
-            cairo_show_text(cr, lblTrunc.c_str());
-        }
-    } else {
-
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-        cairo_set_font_size(cr, 12.0);
-        cairo_set_source_rgba(cr, outR, outG, outB, 0.55);
-        cairo_move_to(cr, kMar + 4.0, pinned_grid_top() + 28.0);
-        cairo_show_text(cr, "No pinned apps");
-    }
-
-    const double sepY2 = power_sep_y(H);
-    cairo_move_to(cr, kMar,      sepY2);
-    cairo_line_to(cr, lw - kMar, sepY2);
-    cairo_set_source_rgba(cr, outR, outG, outB, 0.18);
-    cairo_set_line_width(cr, 1.0);
-    cairo_stroke(cr);
-
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 15.0);
-    for (int i = 0; i < kPowerBtnCount; ++i) {
-        Rect b = power_btn_rect(lw, i, H);
-
-        if (app.appMenuPowerHoverIdx == i) {
-          m3::Box btn;
-          btn.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                       static_cast<float>(primB), 0.18f);
-          btn.setRadius(static_cast<float>(kPowerBtnR));
-          btn.setGeometry(static_cast<float>(b.x), static_cast<float>(b.y),
-                          static_cast<float>(b.w), static_cast<float>(b.h));
-          btn.setGlassy(true);
-          btn.paint(cr);
-        }
-
-        eh::shell::draw_material_glyph(cr, b.x + b.w * 0.5, b.y + b.h * 0.5, 22.0, kPowerBtns[i].ligature, 0.88, 0.92, 0.95, 1.0);
-    }
-
-    // Separator before nightlight button
+    // ---- search field (Tahoe header) ----
     {
-        const double sepX = power_btn_rect(lw, kPowerBtnCount - 1, H).x + kPowerBtnSz + kPadXS * 1.5;
-        const double rowY = power_row_y(H);
-        cairo_move_to(cr, sepX, rowY + 2.0);
-        cairo_line_to(cr, sepX, rowY + kPowerBtnSz - 2.0);
-        cairo_set_source_rgba(cr, outR, outG, outB, 0.25);
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
-    }
-
-    // Nightlight button
-    {
-        Rect b = power_btn_rect(lw, kNightlightBtnIdx, H);
-        const double hx = app.pointerX, hy = app.pointerY;
-        const bool hovering = (hx >= b.x && hx < b.x + b.w && hy >= b.y && hy < b.y + b.h);
-
-        if (hovering) {
-            m3::Box btn;
-            btn.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                         static_cast<float>(primB), 0.18f);
-            btn.setRadius(static_cast<float>(kPowerBtnR));
-            btn.setGeometry(static_cast<float>(b.x), static_cast<float>(b.y),
-                            static_cast<float>(b.w), static_cast<float>(b.h));
-            btn.setGlassy(true);
-            btn.paint(cr);
-        }
-
-        const char* glyph = s_nightlight_active ? "dark_mode" : "light_mode";
-        const double glyphR = s_nightlight_active ? 0.60 : 0.88;
-        const double glyphG = s_nightlight_active ? 0.70 : 0.92;
-        const double glyphB = s_nightlight_active ? 0.95 : 0.95;
-        eh::shell::draw_material_glyph(cr, b.x + b.w * 0.5, b.y + b.h * 0.5, 22.0, glyph, glyphR, glyphG, glyphB, 1.0);
-    }
-
-    }  // !s_smenu_mode
-
-    if (s_smenu_mode) {
-        const int totalBtns = kPowerBtnCount + 1;
-        const double sepY2 = smenu_power_btn_rect(0, totalBtns, W, H).y - kPadS - 1.0;
-        cairo_move_to(cr, kMar, sepY2);
-        cairo_line_to(cr, W - kMar, sepY2);
-        cairo_set_source_rgba(cr, outR, outG, outB, 0.18);
+        Rect sr = search_rect(W, H);
+        th::tahoe_rr(cr, sr.x, sr.y, sr.w, sr.h, kFieldR);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.07);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, app.appMenuQuery.empty() ? 0.12 : 0.30);
         cairo_set_line_width(cr, 1.0);
         cairo_stroke(cr);
 
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        const double midY = sr.y + sr.h * 0.5;
+        eh::shell::draw_material_glyph(cr, sr.x + 30.0, midY, 20.0, "search",
+                                       app.appMenuQuery.empty() ? outR : primR,
+                                       app.appMenuQuery.empty() ? outG : primG,
+                                       app.appMenuQuery.empty() ? outB : primB, 1.0);
+
+        const double textX = sr.x + 52.0;
+        cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 15.0);
-        for (int i = 0; i < kPowerBtnCount; ++i) {
-            Rect b = smenu_power_btn_rect(i, totalBtns, W, H);
-            if (app.appMenuPowerHoverIdx == i) {
-                m3::Box btn;
-                btn.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                             static_cast<float>(primB), 0.18f);
-                btn.setRadius(static_cast<float>(kPowerBtnR));
-                btn.setGeometry(static_cast<float>(b.x), static_cast<float>(b.y),
-                                static_cast<float>(b.w), static_cast<float>(b.h));
-                btn.setGlassy(true);
-                btn.paint(cr);
-            }
-            eh::shell::draw_material_glyph(cr, b.x + b.w * 0.5, b.y + b.h * 0.5, 22.0, kPowerBtns[i].ligature, 0.88, 0.92, 0.95, 1.0);
+        std::string shown;
+        if (app.appMenuQuery.empty()) {
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.38);
+            cairo_move_to(cr, textX, midY + 5.5);
+            cairo_show_text(cr, "Search for an app\u2026");
+        } else {
+            truncate_to_width(cr, app.appMenuQuery, sr.x + sr.w - textX - 130.0, &shown);
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.95);
+            cairo_move_to(cr, textX, midY + 5.5);
+            cairo_show_text(cr, shown.c_str());
         }
-
-        // Separator before nightlight button
         {
-            const double sepX = smenu_power_btn_rect(kPowerBtnCount - 1, totalBtns, W, H).x + kPowerBtnSz + kPadXS * 1.5;
-            const double rowY = smenu_power_btn_rect(0, totalBtns, W, H).y;
-            cairo_move_to(cr, sepX, rowY + 2.0);
-            cairo_line_to(cr, sepX, rowY + kPowerBtnSz - 2.0);
-            cairo_set_source_rgba(cr, outR, outG, outB, 0.25);
-            cairo_set_line_width(cr, 1.0);
-            cairo_stroke(cr);
-        }
-
-        // Nightlight button
-        {
-            Rect b = smenu_power_btn_rect(kNightlightBtnIdx, totalBtns, W, H);
-            const double hx = app.pointerX, hy = app.pointerY;
-            const bool hovering = (hx >= b.x && hx < b.x + b.w && hy >= b.y && hy < b.y + b.h);
-            if (hovering) {
-                m3::Box btn;
-                btn.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                             static_cast<float>(primB), 0.18f);
-                btn.setRadius(static_cast<float>(kPowerBtnR));
-                btn.setGeometry(static_cast<float>(b.x), static_cast<float>(b.y),
-                                static_cast<float>(b.w), static_cast<float>(b.h));
-                btn.setGlassy(true);
-                btn.paint(cr);
+            const uint64_t caretMono = eh::shell::monotonic_ms();
+            const bool caretOn = eh::shell::text_caret_blink_on(caretMono, app.appMenuSearchFocused);
+            double caretX = textX;
+            if (!app.appMenuQuery.empty()) {
+                cairo_text_extents_t qEx{};
+                cairo_text_extents(cr, shown.c_str(), &qEx);
+                caretX = textX + qEx.x_advance + 1.5;
             }
-            const char* glyph = s_nightlight_active ? "dark_mode" : "light_mode";
-            const double glyphR = s_nightlight_active ? 0.60 : 0.88;
-            const double glyphG = s_nightlight_active ? 0.70 : 0.92;
-            const double glyphB = s_nightlight_active ? 0.95 : 0.95;
-            eh::shell::draw_material_glyph(cr, b.x + b.w * 0.5, b.y + b.h * 0.5, 22.0, glyph, glyphR, glyphG, glyphB, 1.0);
+            if (caretOn) {
+                cairo_move_to(cr, caretX, midY - 10.0);
+                cairo_line_to(cr, caretX, midY + 10.0);
+                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.9);
+                cairo_set_line_width(cr, 1.5);
+                cairo_stroke(cr);
+                cairo_set_line_width(cr, 1.0);
+            }
         }
+        cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 12.0);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.35);
+        cairo_text_extents_t he{};
+        cairo_text_extents(cr, "Esc to close", &he);
+        cairo_move_to(cr, sr.x + sr.w - 14.0 - he.x_advance, midY + 4.5);
+        cairo_show_text(cr, "Esc to close");
     }
 
-    Rect sr = search_rect(W, H);
+    // ---- divider under search ----
     {
-      m3::Box sb;
-      sb.setColor(static_cast<float>(dimR), static_cast<float>(dimG),
-                  static_cast<float>(dimB), 0.55f);
-      sb.setRadius(static_cast<float>(kFieldR));
-      sb.setGeometry(static_cast<float>(sr.x), static_cast<float>(sr.y),
-                     static_cast<float>(sr.w), static_cast<float>(sr.h));
-      sb.setGlassy(true);
-      sb.paint(cr);
+        const double sepY = l.searchY + l.searchH + 12.0;
+        cairo_move_to(cr, kMar, sepY);
+        cairo_line_to(cr, W - kMar, sepY);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
     }
 
-    if (!app.appMenuQuery.empty())
-        cairo_set_source_rgba(cr, primR, primG, primB, 0.65);
-    else
-        cairo_set_source_rgba(cr, outR, outG, outB, 0.28);
-    cairo_set_line_width(cr, 1.5);
-    cairo_stroke(cr);
-
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(cr, 15.0);
-    const double siconX = sr.x + kPad;
-    const double siconY = sr.y + sr.h * 0.5 + 5.5;
-    if (!app.appMenuQuery.empty())
-      eh::shell::draw_material_glyph(cr, siconX + 8.0, sr.y + sr.h * 0.5, 20.0, "search", primR, primG, primB, 1.0);
-    else
-      eh::shell::draw_material_glyph(cr, siconX + 8.0, sr.y + sr.h * 0.5, 20.0, "search", outR, outG, outB, 1.0);
-
-    const double textX = siconX + 22.0;
-    cairo_save(cr);
-    cairo_rectangle(cr, sr.x+2, sr.y+2, sr.w-4, sr.h-4);
-    cairo_clip(cr);
-    cairo_set_font_size(cr, 14.5);
-    std::string shown;
-    if (app.appMenuQuery.empty()) {
-        cairo_set_source_rgba(cr, outR, outG, outB, 0.65);
-        cairo_move_to(cr, textX, siconY);
-        cairo_show_text(cr, "Type here to search");
-    } else {
-        truncate_to_width(cr, app.appMenuQuery, sr.x + sr.w - textX - kMar, &shown);
-        cairo_set_source_rgba(cr, 0.92, 0.95, 0.96, 0.97);
-        cairo_move_to(cr, textX, siconY);
-        cairo_show_text(cr, shown.c_str());
-    }
-    {
-        const uint64_t caretMono = eh::shell::monotonic_ms();
-        const bool caretOn = eh::shell::text_caret_blink_on(caretMono, app.appMenuSearchFocused);
-        double caretX = textX;
-        if (!app.appMenuQuery.empty()) {
-            cairo_text_extents_t qEx{};
-            cairo_text_extents(cr, shown.c_str(), &qEx);
-            caretX = textX + qEx.x_advance + 1.5;
-        }
-        if (caretOn) {
-            cairo_move_to(cr, caretX, siconY - 11.0);
-            cairo_line_to(cr, caretX, siconY + 4.0);
-            cairo_set_source_rgba(cr, 0.92, 0.95, 0.96, 0.95);
-            cairo_set_line_width(cr, 1.5);
-            cairo_stroke(cr);
-            cairo_set_line_width(cr, 1.0);
-        }
-    }
-    cairo_restore(cr);
-
-    const double ssy = search_sep_y(W);
-    const double rcx = right_col(W, H).x;
-    cairo_move_to(cr, rcx + kMar,      ssy);
-    cairo_line_to(cr, rcx + right_col(W,H).w - kMar, ssy);
-    cairo_set_source_rgba(cr, outR, outG, outB, 0.15);
-    cairo_set_line_width(cr, 1.0);
-    cairo_stroke(cr);
-
-    if (s_smenu_mode && !app.appMenuCategories.empty()) {
-        constexpr double kPillH = 34.0;
-        constexpr double kPillR = 8.0;
-        constexpr double kPillPad = 2.0;
-        constexpr double kPillFont = 14.0;
-        constexpr double kPillGap = 6.0;
-        const double ct = cat_tab_top(W);
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-        cairo_set_font_size(cr, kPillFont);
-        cairo_font_extents_t fe;
-        cairo_font_extents(cr, &fe);
-        const double baseY = ct + kPillH * 0.5 + (fe.ascent - fe.descent) * 0.5;
-        double totalW = 0.0;
-        for (int i = -1; i < static_cast<int>(app.appMenuCategories.size()); ++i)
-            totalW += app.appMenuCategoryWidths[static_cast<size_t>(i + 1)] + kPillGap;
-        totalW -= kPillGap;
-        double cx = (W - totalW) * 0.5;
-        for (int i = -1; i < static_cast<int>(app.appMenuCategories.size()); ++i) {
+    // ---- category pills with counts ----
+    if (!app.appMenuCategories.empty() &&
+        app.appMenuCategoryWidths.size() >= app.appMenuCategories.size() + 1) {
+        const int nCats = static_cast<int>(app.appMenuCategories.size());
+        const auto xs = th::tahoe_pill_xs(app.appMenuCategoryWidths, l.pillsAvailX, l.pillsAvailW,
+                                          app.appMenuSelectedCategory + 1);
+        cairo_save(cr);
+        cairo_rectangle(cr, l.pillsAvailX, l.pillsY - 2.0, l.pillsAvailW, l.pillsH + 4.0);
+        cairo_clip(cr);
+        cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, eh::shell::tahoe::kTahoePillFontPx);
+        for (int i = -1; i < nCats; ++i) {
+            const size_t k = static_cast<size_t>(i + 1);
+            const double px = xs[k];
+            const double pw = app.appMenuCategoryWidths[k];
+            if (px + pw < l.pillsAvailX || px > l.pillsAvailX + l.pillsAvailW) continue;
             const bool selected = (i == app.appMenuSelectedCategory);
             const bool hovered = (i == app.appMenuCategoryHoverIdx);
-            const char* label = (i < 0) ? "All" : app.appMenuCategories[static_cast<size_t>(i)].c_str();
-            const double tw = app.appMenuCategoryWidths[static_cast<size_t>(i + 1)];
-            {
-              m3::Box pill;
-              if (selected) {
-                pill.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                              static_cast<float>(primB), 0.25f);
-              } else if (hovered) {
-                pill.setColor(static_cast<float>(primR), static_cast<float>(primG),
-                              static_cast<float>(primB), 0.10f);
-              } else {
-                pill.setColor(static_cast<float>(dimR), static_cast<float>(dimG),
-                              static_cast<float>(dimB), 0.40f);
-              }
-              pill.setRadius(static_cast<float>(kPillR));
-              pill.setGeometry(static_cast<float>(cx), static_cast<float>(ct),
-                               static_cast<float>(tw), static_cast<float>(kPillH));
-              pill.setGlassy(true);
-              pill.paint(cr);
-              if (!selected) {
-                rr(cr, cx, ct, tw, kPillH, kPillR);
-                cairo_set_source_rgba(cr, outR, outG, outB, hovered ? 0.30 : 0.18);
-                cairo_set_line_width(cr, 1.0);
-                cairo_stroke(cr);
-              } else {
-                rr(cr, cx, ct, tw, kPillH, kPillR);
-                cairo_set_source_rgba(cr, primR, primG, primB, 0.50);
-                cairo_set_line_width(cr, 1.0);
-                cairo_stroke(cr);
-              }
+            th::tahoe_rr(cr, px, l.pillsY, pw, l.pillsH, l.pillsH * 0.5);
+            if (selected) {
+                cairo_set_source_rgba(cr, primR, primG, primB, 0.95);
+            } else if (hovered) {
+                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.14);
+            } else {
+                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
             }
-            cairo_set_source_rgba(cr, primR, primG, primB, selected ? 0.95 : 0.75);
-            cairo_move_to(cr, cx + kPillPad, baseY);
+            cairo_fill_preserve(cr);
+            if (!selected) {
+                cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, hovered ? 0.22 : 0.12);
+                cairo_set_line_width(cr, 1.0);
+                cairo_stroke(cr);
+            } else {
+                cairo_new_path(cr);
+            }
+            const char* label = (i < 0) ? "All" : app.appMenuCategories[static_cast<size_t>(i)].c_str();
+            const int count = (k < app.appMenuCategoryCounts.size()) ? app.appMenuCategoryCounts[k] : 0;
+            cairo_text_extents_t le{}, ce{};
+            cairo_text_extents(cr, label, &le);
+            char cbuf[16];
+            std::snprintf(cbuf, sizeof(cbuf), "%d", count);
+            cairo_text_extents(cr, cbuf, &ce);
+            const double totalAdv = le.x_advance + 6.0 + ce.x_advance;
+            double tx = px + (pw - totalAdv) * 0.5;
+            const double baseY = l.pillsY + l.pillsH * 0.5 + 4.5;
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, selected ? 0.98 : 0.82);
+            cairo_move_to(cr, tx, baseY);
             cairo_show_text(cr, label);
-            cx += tw + kPillGap;
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, selected ? 0.75 : 0.45);
+            cairo_move_to(cr, tx + le.x_advance + 6.0, baseY);
+            cairo_show_text(cr, cbuf);
+        }
+        cairo_restore(cr);
+    }
+
+    // ---- footer divider + slim power strip ----
+    {
+        cairo_move_to(cr, kMar, l.footerY - 2.0);
+        cairo_line_to(cr, W - kMar, l.footerY - 2.0);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.08);
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+
+        for (int i = 0; i < kPowerBtnCount; ++i) {
+            Rect b = power_btn_rect(W, i, H);
+            if (app.appMenuPowerHoverIdx == i) {
+                th::tahoe_rr(cr, b.x, b.y, b.w, b.h, kPowerBtnR);
+                cairo_set_source_rgba(cr, primR, primG, primB, 0.20);
+                cairo_fill(cr);
+            }
+            eh::shell::draw_material_glyph(cr, b.x + b.w * 0.5, b.y + b.h * 0.5, 22.0,
+                                           kPowerBtns[i].ligature, 1.0, 1.0, 1.0, 0.62);
+        }
+        {
+            const double sepX = power_btn_rect(W, kPowerBtnCount - 1, H).x + kPowerBtnSz + kPadXS * 1.5;
+            const double rowY = power_btn_rect(W, 0, H).y;
+            cairo_move_to(cr, sepX, rowY + 4.0);
+            cairo_line_to(cr, sepX, rowY + kPowerBtnSz - 4.0);
+            cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.14);
+            cairo_set_line_width(cr, 1.0);
+            cairo_stroke(cr);
+        }
+        {
+            Rect b = power_btn_rect(W, kNightlightBtnIdx, H);
+            if (app.appMenuPowerHoverIdx == kNightlightBtnIdx) {
+                th::tahoe_rr(cr, b.x, b.y, b.w, b.h, kPowerBtnR);
+                cairo_set_source_rgba(cr, primR, primG, primB, 0.20);
+                cairo_fill(cr);
+            }
+            const char* glyph = s_nightlight_active ? "dark_mode" : "light_mode";
+            eh::shell::draw_material_glyph(cr, b.x + b.w * 0.5, b.y + b.h * 0.5, 22.0, glyph,
+                                           1.0, 1.0, 1.0, 0.62);
         }
     }
 
-    const double lt    = list_top(W, H);
-    const double lb    = list_bottom(H);
+    // ---- app grid / list ----
+    const double lt = list_top(W, H);
+    const double lb = list_bottom(W, H);
     const double listH = lb - lt;
-    const double lx_   = list_x(W, H);
-    const double lw_   = list_w(W, H);
 
     cairo_save(cr);
-    cairo_rectangle(cr, lx_, lt, lw_, std::max(0.0, listH));
+    cairo_rectangle(cr, l.gridX, lt, l.gridW, std::max(0.0, listH));
     cairo_clip(cr);
 
     if (!app.appMenuHits.empty()) {
         const size_t n = app.appMenuHits.size();
-        const int viewMode = eh::config::shell_config_snapshot().appearance.launchpadViewMode;
         const double totalContentH = (viewMode == 0)
-            ? (static_cast<double>((static_cast<int>(n) + kGridCols - 1) / kGridCols) *
-               (kGridIconSz + kGridLabelGap + kGridLabelFontPx + kGridGap))
+            ? th::tahoe_grid_content_h(n, l)
             : static_cast<double>(n) * kRowPitch;
-        const int cw = static_cast<int>(lw_);
-        const int ch = static_cast<int>(totalContentH);
+        const int cw = static_cast<int>(l.gridW);
+        const int ch = static_cast<int>(std::ceil(totalContentH));
 
-        bool cacheOk = app.appMenuListCache &&
+        const bool cacheOk = app.appMenuListCache &&
             app.appMenuListCacheW == cw &&
             app.appMenuListCacheH == ch &&
             app.appMenuListCacheViewMode == viewMode &&
@@ -1068,18 +672,17 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
             if (cw > 0 && ch > 0) {
                 app.appMenuListCache = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, cw, ch);
                 cairo_t* cc = cairo_create(app.appMenuListCache);
-                cairo_select_font_face(cc, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+                cairo_select_font_face(cc, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
                 if (viewMode == 0) {
-                    const double cellW = (static_cast<double>(cw) - kPadS - (kGridCols - 1) * kGridGap) / kGridCols;
-                    const double rowH = kGridIconSz + kGridLabelGap + kGridLabelFontPx + kGridGap;
+                    cairo_set_font_size(cc, th::kTahoeLabelFontPx);
                     for (size_t i = 0; i < n; ++i) {
-                        const int col = static_cast<int>(i) % kGridCols;
-                        const int row = static_cast<int>(i) / kGridCols;
-                        const double gx = kPadS + col * (cellW + kGridGap);
-                        const double gy = static_cast<double>(row) * rowH;
+                        double gx = 0, gy = 0;
+                        th::tahoe_cell_xy(static_cast<int>(i), l, 0.0, gx, gy);
+                        gx -= l.gridX;
+                        gy -= l.gridY;
                         const SpotlightHit& hit = app.appMenuHits[i];
-                        const double iconX = gx + (cellW - kGridIconSz) * 0.5;
+                        const double iconX = gx + (l.cellW - l.iconSz) * 0.5;
                         const double iconY = gy + 4.0;
 
                         bool iconDrawn = false;
@@ -1089,7 +692,7 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
                                 cairo_translate(cc, iconX, iconY);
                                 const double iw = static_cast<double>(ic->width);
                                 const double ih = static_cast<double>(ic->height);
-                                const double sc = kGridIconSz / std::max(1.0, std::max(iw, ih));
+                                const double sc = l.iconSz / std::max(1.0, std::max(iw, ih));
                                 cairo_scale(cc, sc, sc);
                                 cairo_set_source_surface(cc, ic->surface, 0, 0);
                                 cairo_paint(cc);
@@ -1098,39 +701,46 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
                             }
                         }
                         if (!iconDrawn) {
-                            rr(cc, iconX, iconY, kGridIconSz, kGridIconSz, kCellR);
-                            cairo_set_source_rgba(cc, 0.12, 0.16, 0.18, 1.0);
+                            th::tahoe_rr(cc, iconX, iconY, l.iconSz, l.iconSz, 14.0);
+                            cairo_set_source_rgba(cc, 1.0, 1.0, 1.0, 0.10);
                             cairo_fill(cc);
-                            cairo_set_font_size(cc, 22.0);
-                            cairo_set_source_rgba(cc, primR, primG, primB, 0.95);
+                            cairo_set_font_size(cc, 24.0);
+                            cairo_set_source_rgba(cc, 1.0, 1.0, 1.0, 0.8);
                             std::string init = hit.name.empty() ? "?" : hit.name.substr(0, 1);
-                            cairo_move_to(cc, iconX + kGridIconSz * 0.28, iconY + kGridIconSz * 0.68);
+                            cairo_text_extents_t ie{};
+                            cairo_text_extents(cc, init.c_str(), &ie);
+                            cairo_move_to(cc, iconX + (l.iconSz - ie.x_advance) * 0.5,
+                                          iconY + l.iconSz * 0.5 + 8.0);
                             cairo_show_text(cc, init.c_str());
+                            cairo_set_font_size(cc, th::kTahoeLabelFontPx);
                         }
 
-                        cairo_select_font_face(cc, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-                        cairo_set_font_size(cc, kGridLabelFontPx);
-                        cairo_set_source_rgba(cc, primR, primG, primB, 0.85);
-                        const double labelMax = cellW - 4.0;
-                        std::string lblTrunc;
-                        cairo_text_extents_t ex{};
-                        truncate_to_width(cc, hit.name, labelMax, &lblTrunc);
-                        cairo_text_extents(cc, lblTrunc.c_str(), &ex);
-                        const double lxCache = gx + (cellW - ex.x_advance) * 0.5;
-                        cairo_move_to(cc, lxCache, iconY + kGridIconSz + kGridLabelGap + kGridLabelFontPx);
-                        cairo_show_text(cc, lblTrunc.c_str());
+                        std::string line1, line2;
+                        const int nLines = th::tahoe_two_lines(hit.name, line1, line2);
+                        cairo_set_source_rgba(cc, 1.0, 1.0, 1.0, 0.88);
+                        const double labelTop = iconY + l.iconSz + 7.0;
+                        const double maxLabelW = l.cellW - 8.0;
+                        auto center_show = [&](const std::string& txt, double baselineY) {
+                            std::string trunc;
+                            truncate_to_width(cc, txt, maxLabelW, &trunc);
+                            cairo_text_extents_t ex{};
+                            cairo_text_extents(cc, trunc.c_str(), &ex);
+                            cairo_move_to(cc, gx + (l.cellW - ex.x_advance) * 0.5, baselineY);
+                            cairo_show_text(cc, trunc.c_str());
+                        };
+                        if (nLines == 1) {
+                            center_show(line1, labelTop + 16.0);
+                        } else {
+                            center_show(line1, labelTop + 10.0);
+                            center_show(line2, labelTop + 23.0);
+                        }
                     }
                 } else {
                     for (size_t i = 0; i < n; ++i) {
                         const double rowY = static_cast<double>(i) * kRowPitch;
                         const SpotlightHit& hit = app.appMenuHits[i];
 
-                        const double rowInnerH = kRowPitch - 4.0;
-                        rr(cc, kPadXS, rowY + 2.0, static_cast<double>(cw) - 2 * kPadXS, rowInnerH, kRowR);
-                        cairo_set_source_rgba(cc, 0, 0, 0, 0);
-                        cairo_fill(cc);
-
-                        const double iconX = kPad + kPadXS;
+                        const double iconX = kPad;
                         const double iconY = rowY + (kRowPitch - kIconSz) * 0.5;
 
                         bool iconDrawn = false;
@@ -1149,11 +759,11 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
                             }
                         }
                         if (!iconDrawn) {
-                            rr(cc, iconX, iconY, kIconSz, kIconSz, kPinIconR);
-                            cairo_set_source_rgba(cc, 0.12, 0.16, 0.18, 1.0);
+                            th::tahoe_rr(cc, iconX, iconY, kIconSz, kIconSz, 12.0);
+                            cairo_set_source_rgba(cc, 1.0, 1.0, 1.0, 0.10);
                             cairo_fill(cc);
                             cairo_set_font_size(cc, 17.0);
-                            cairo_set_source_rgba(cc, primR, primG, primB, 0.95);
+                            cairo_set_source_rgba(cc, 1.0, 1.0, 1.0, 0.8);
                             std::string init = hit.name.empty() ? "?" : hit.name.substr(0, 1);
                             cairo_move_to(cc, iconX + kIconSz * 0.30, iconY + kIconSz * 0.66);
                             cairo_show_text(cc, init.c_str());
@@ -1162,25 +772,25 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
                         const double textLeft = iconX + kIconSz + kPad;
                         const double textMaxW = static_cast<double>(cw) - textLeft - kPadS;
 
-                        cairo_select_font_face(cc, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+                        cairo_select_font_face(cc, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
                         cairo_set_font_size(cc, 13.5);
-                        cairo_set_source_rgba(cc, 0.93, 0.96, 0.98, 0.97);
+                        cairo_set_source_rgba(cc, 1.0, 1.0, 1.0, 0.95);
                         std::string nameTrunc;
                         truncate_to_width(cc, hit.name, textMaxW, &nameTrunc);
                         const double nameY = hit.comment.empty() && hit.genericName.empty()
                                              ? rowY + kRowPitch * 0.5 + 5.0
-                                             : rowY + 22.0;
+                                             : rowY + 24.0;
                         cairo_move_to(cc, textLeft, nameY);
                         cairo_show_text(cc, nameTrunc.c_str());
 
                         const std::string& sub = !hit.comment.empty() ? hit.comment : hit.genericName;
                         if (!sub.empty()) {
-                            cairo_select_font_face(cc, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+                            cairo_select_font_face(cc, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
                             cairo_set_font_size(cc, 11.0);
-                            cairo_set_source_rgba(cc, outR, outG, outB, 0.75);
+                            cairo_set_source_rgba(cc, 1.0, 1.0, 1.0, 0.55);
                             std::string subTrunc;
                             truncate_to_width(cc, sub, textMaxW, &subTrunc);
-                            cairo_move_to(cc, textLeft, rowY + 42.0);
+                            cairo_move_to(cc, textLeft, rowY + 44.0);
                             cairo_show_text(cc, subTrunc.c_str());
                         }
                     }
@@ -1196,27 +806,30 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
 
         if (app.appMenuListCache) {
             const double dy = lt - app.appMenuScrollPxCurrent;
-            cairo_set_source_surface(cr, app.appMenuListCache, lx_, dy);
+            cairo_set_source_surface(cr, app.appMenuListCache, l.gridX, dy);
             cairo_paint(cr);
 
             const int litRow = (app.appMenuHoverRow >= 0) ? app.appMenuHoverRow : app.appMenuSel;
             if (litRow >= 0 && static_cast<size_t>(litRow) < n) {
                 if (viewMode == 0) {
-                    const double cellW = (lw_ - kPadS - (kGridCols - 1) * kGridGap) / kGridCols;
-                    const double rowH = kGridIconSz + kGridLabelGap + kGridLabelFontPx + kGridGap;
-                    const int col = litRow % kGridCols;
-                    const int row = litRow / kGridCols;
-                    const double gx = lx_ + kPadS + col * (cellW + kGridGap);
-                    const double gy = lt + static_cast<double>(row) * rowH - app.appMenuScrollPxCurrent;
-                    const double iconX = gx + (cellW - kGridIconSz) * 0.5;
-                    const double iconY = gy + 4.0;
-                    rr(cr, iconX - 2, iconY - 2, kGridIconSz + 4, kGridIconSz + 4, (kGridIconSz + 4) * 0.5);
-                    cairo_set_source_rgba(cr, primR, primG, primB, 0.15);
-                    cairo_fill(cr);
+                    double gx = 0, gy = 0;
+                    th::tahoe_cell_xy(litRow, l, app.appMenuScrollPxCurrent, gx, gy);
+                    gy += lt - l.gridY;
+                    const bool sel = (litRow == app.appMenuSel);
+                    th::tahoe_rr(cr, gx, gy, l.cellW, l.cellH, 16.0);
+                    if (sel) {
+                        cairo_set_source_rgba(cr, primR, primG, primB, 0.28);
+                        cairo_fill_preserve(cr);
+                        cairo_set_source_rgba(cr, primR, primG, primB, 0.55);
+                        cairo_set_line_width(cr, 1.5);
+                        cairo_stroke(cr);
+                    } else {
+                        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.10);
+                        cairo_fill(cr);
+                    }
                 } else {
                     const double rowY = lt + static_cast<double>(litRow) * kRowPitch - app.appMenuScrollPxCurrent;
-                    const double rowInnerH = kRowPitch - 4.0;
-                    rr(cr, lx_ + kPadXS, rowY + 2.0, lw_ - 2 * kPadXS, rowInnerH, kRowR);
+                    th::tahoe_rr(cr, l.gridX + kPadXS, rowY + 2.0, l.gridW - 2 * kPadXS, kRowPitch - 4.0, kRowR);
                     cairo_set_source_rgba(cr, primR, primG, primB, 0.18);
                     cairo_fill_preserve(cr);
                     cairo_set_source_rgba(cr, primR, primG, primB, 0.35);
@@ -1225,18 +838,21 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
                 }
             }
         }
-    } else if (!app.appMenuQuery.empty()) {
-        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    } else {
+        cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 13.0);
-        cairo_set_source_rgba(cr, outR, outG, outB, 0.70);
-        cairo_move_to(cr, lx_ + kMar, lt + 48.0);
-        cairo_show_text(cr, "No matching applications");
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.5);
+        const char* msg = app.appMenuQuery.empty() ? "No applications" : "No matching applications";
+        cairo_text_extents_t ex{};
+        cairo_text_extents(cr, msg, &ex);
+        cairo_move_to(cr, l.gridX + (l.gridW - ex.x_advance) * 0.5, lt + 64.0);
+        cairo_show_text(cr, msg);
     }
 
     cairo_restore(cr);
     cairo_restore(cr);
 
-    if (!s_smenu_mode && app.appMenuPowerConfirmOpen && app.appMenuPowerConfirmIdx >= 1 && app.appMenuPowerConfirmIdx <= 3) {
+    if (app.appMenuPowerConfirmOpen && app.appMenuPowerConfirmIdx >= 1 && app.appMenuPowerConfirmIdx <= 3) {
         eh::shell::dock::app_drawer::paint_power_confirm_modal(cr, W, H, app.appMenuPowerConfirmIdx, app.pointerX, app.pointerY, mc);
     }
     eh::shell::dock::app_drawer::AppDrawerChromeColors adc{};
@@ -1252,7 +868,7 @@ void eh_app_drawer_paint(DockApp& app, cairo_t* cr, bool paintBackdrop, bool pai
     adc.outlineR = mc.outlineR;
     adc.outlineG = mc.outlineG;
     adc.outlineB = mc.outlineB;
-    if (!s_smenu_mode && app.appMenuPinCtxOpen && app.appMenuPinCtxAnchorIdx >= 0 &&
+    if (false && app.appMenuPinCtxOpen && app.appMenuPinCtxAnchorIdx >= 0 &&
         app.appMenuPinCtxAnchorIdx <
             static_cast<int>(std::min<size_t>(15, app.settings.drawerPinnedApps.size()))) {
         const char* lp0 = app.appMenuPinCtxPinnedDock ? "Unpin from dock" : "Pin to dock";

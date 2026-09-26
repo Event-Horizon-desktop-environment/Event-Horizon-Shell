@@ -6,6 +6,7 @@
 #include <sys/types.h>
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,7 @@ private:
   };
 
   void probe();
+  mutable std::recursive_mutex mu_;
   void reevaluate();
   void apply_boost(const void* handle, const std::string& appId, bool fullscreen);
   void refresh_boost();

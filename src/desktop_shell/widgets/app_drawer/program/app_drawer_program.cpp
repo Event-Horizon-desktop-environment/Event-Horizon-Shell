@@ -25,7 +25,7 @@
 
 #include <toml++/toml.hpp>
 
-#include "m3/core/primitives/box.hpp"
+#include "desktop_shell/shared/core/cairo_helpers.hpp"
 
 #include <wayland-client.h>
 
@@ -1165,14 +1165,9 @@ void draw(App& app) {
     if (mx < 8) mx = 8;
     if (my < 8) my = 8;
 
-    {
-      m3::Box box;
-      box.setColor(0.06f, 0.08f, 0.10f, 0.96f);
-      box.setRadius(10.0f);
-      box.setGeometry(mx, my, mw, mh);
-      box.setGlassy(true);
-      box.paint(cr);
-    }
+    eh::shell::shared::rounded_rect(cr, mx, my, mw, mh, 10.0);
+    cairo_set_source_rgba(cr, 0.06, 0.08, 0.10, 0.96);
+    cairo_fill(cr);
 
     cairo_new_path(cr);
     {
@@ -1187,7 +1182,7 @@ void draw(App& app) {
     cairo_set_line_width(cr, 1.0);
     cairo_stroke(cr);
 
-    cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 13.0);
     cairo_set_source_rgba(cr, 0.92, 0.95, 0.97, 0.95);
     cairo_move_to(cr, mx + 12, my + 27);

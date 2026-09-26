@@ -326,6 +326,12 @@ static const zwlr_layer_surface_v1_listener kLayerListener = {
     .closed = layer_closed_trampoline,
 };
 
+static void wipe_password(std::string& s) {
+  volatile char* out = s.data();
+  for (size_t n = 0; n < s.size(); ++n) out[n] = 0;
+  s.clear();
+}
+
 PolkitAuthDialog::PolkitAuthDialog(wl_display* display, wl_compositor* compositor, wl_shm* shm,
                                    zwlr_layer_shell_v1* layer_shell, wp_viewporter* viewporter,
                                    wp_fractional_scale_manager_v1* fractional_scale_mgr)
@@ -384,14 +390,14 @@ void PolkitAuthDialog::show(wl_output* primary_output) {
         impl_->layer, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
     impl_->paint();
   }
-  impl_->password_field.clear();
+  wipe_password(impl_->password_field);
 }
 
 void PolkitAuthDialog::hide() {
    
   impl_->visible = false;
   impl_->configured = false;
-  impl_->password_field.clear();
+  wipe_password(impl_->password_field);
   if (impl_->buf.wl()) impl_->buf.destroy();
   // Unmap the surface without destroying it so the compositor can
   // re-assign keyboard focus to the dialog on the next show().
@@ -448,6 +454,7 @@ void PolkitAuthDialog::pointer_button(uint32_t button, uint32_t state) {
     } else if (btn == 2 &&
                Impl::point_in_rect(impl_->ptr_x, impl_->ptr_y, impl_->hit_auth)) {
       PolkitAuthService::instance().submit_response(impl_->password_field);
+      wipe_password(impl_->password_field);
     }
   }
 }
@@ -468,10 +475,14 @@ bool PolkitAuthDialog::consume_keyboard_key(uint32_t state, uint32_t sym, const 
   }
   if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
     PolkitAuthService::instance().submit_response(impl_->password_field);
+    wipe_password(impl_->password_field);
     return true;
   }
   if (sym == XKB_KEY_BackSpace) {
     if (!impl_->password_field.empty()) {
+      while (impl_->password_field.size() > 1 &&
+             (impl_->password_field.back() & 0xC0) == 0x80)
+        impl_->password_field.pop_back();
       impl_->password_field.pop_back();
       impl_->paint();
     }

@@ -225,6 +225,8 @@ int PollMuxLoop::run(bool* running) const {
         timeout_ms = static_cast<long>(glib_ms);
       }
     }
+    constexpr long kMaxPpollWaitMs = 1000;
+    if (timeout_ms > kMaxPpollWaitMs) timeout_ms = kMaxPpollWaitMs;
     timespec timeout{};
     timeout.tv_sec = timeout_ms / kSecToMs;
     timeout.tv_nsec = (timeout_ms % kSecToMs) * 1000000L;

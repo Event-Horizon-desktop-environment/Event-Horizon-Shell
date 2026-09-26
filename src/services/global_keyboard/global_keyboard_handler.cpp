@@ -11,6 +11,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -59,6 +60,24 @@ bool GlobalKeyboardHandler::init(ActivateFn startMenuFn, ActivateFn settingsFn) 
   if (active_) cleanup();
   startMenuFn_ = std::move(startMenuFn);
   settingsFn_ = std::move(settingsFn);
+  bool found = false;
+  for (int i = 0; i < 64; ++i) {
+    const std::string path = "/dev/input/event" + std::to_string(i);
+    const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) continue;
+    KeyboardProbeResult r = probe_keyboard(fd);
+    ::close(fd);
+    if (r.is_super) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    log("no evdev keyboard devices found (this process is likely not in the `input` group / lacks evdev ACLs)");
+    startMenuFn_ = nullptr;
+    settingsFn_ = nullptr;
+    return false;
+  }
   active_ = true;
   thread_ = std::make_unique<std::thread>(&GlobalKeyboardHandler::evdev_thread_fn, this);
   return true;
@@ -80,52 +99,42 @@ void GlobalKeyboardHandler::evdev_thread_fn() {
   auto menuFn = startMenuFn_;
   auto setsFn = settingsFn_;
 
-  std::vector<int> fds;
-  int inaccessible = 0;
-  int non_keyboards = 0;
-  for (int i = 0; i < 64; ++i) {
-    const std::string path = "/dev/input/event" + std::to_string(i);
-    const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK);
-    if (fd < 0) {
-      if (errno != ENOENT) {
-        ++inaccessible;
-        log("open fail: " + path + " (" + std::string(std::strerror(errno)) + ")");
-      }
-      continue;
-    }
-    KeyboardProbeResult r = probe_keyboard(fd);
-    if (!r.is_super) {
-      ++non_keyboards;
-      log("skip: " + path + " name=" + r.name + " has_ev_key=" + std::to_string(r.has_ev_key) +
-          " has_leftmeta=" + std::to_string(r.has_leftmeta));
-      ::close(fd);
-      continue;
-    }
-    fds.push_back(fd);
-    log("opened: " + path + " name=" + r.name);
-  }
-
-  if (fds.empty()) {
-    log("no evdev keyboard devices found — scan: inaccessible=" + std::to_string(inaccessible) +
-        " non_keyboards=" + std::to_string(non_keyboards) +
-        " (this process is likely not in the `input` group / lacks evdev ACLs)");
-    active_ = false;
-    return;
-  }
-
   int epfd = ::epoll_create1(EPOLL_CLOEXEC);
   if (epfd < 0) {
     log("epoll_create1 failed: " + std::string(std::strerror(errno)));
-    for (int fd : fds) ::close(fd);
     active_ = false;
     return;
   }
 
-  for (int fd : fds) {
-    struct epoll_event ev{};
-    ev.events = EPOLLIN;
-    ev.data.fd = fd;
-    ::epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
+  std::map<std::string, int> open_devs;
+  auto scan_new_devices = [&]() {
+    for (int i = 0; i < 64; ++i) {
+      const std::string path = "/dev/input/event" + std::to_string(i);
+      if (open_devs.count(path) != 0) continue;
+      const int fd = ::open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+      if (fd < 0) continue;
+      KeyboardProbeResult r = probe_keyboard(fd);
+      if (!r.is_super) {
+        ::close(fd);
+        continue;
+      }
+      struct epoll_event ev{};
+      ev.events = EPOLLIN;
+      ev.data.fd = fd;
+      if (::epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+        ::close(fd);
+        continue;
+      }
+      open_devs.emplace(path, fd);
+      log("opened: " + path + " name=" + r.name);
+    }
+  };
+
+  scan_new_devices();
+  if (open_devs.empty()) {
+    ::close(epfd);
+    active_ = false;
+    return;
   }
 
   bool super_down = false;
@@ -134,16 +143,35 @@ void GlobalKeyboardHandler::evdev_thread_fn() {
   bool shift_down = false;
 
   struct epoll_event events[8];
+  int idle_rounds = 0;
   while (active_) {
     int n = ::epoll_wait(epfd, events, 8, 100);
     if (n < 0) {
       if (errno == EINTR) continue;
       break;
     }
+    if (n == 0 && ++idle_rounds >= 50) {
+      idle_rounds = 0;
+      scan_new_devices();
+      if (open_devs.empty()) break;
+      continue;
+    }
 
+    std::vector<std::string> dead;
     for (int i = 0; i < n; ++i) {
+      if (events[i].events & (EPOLLERR | EPOLLHUP)) {
+        for (const auto& [path, fd] : open_devs) {
+          if (fd == events[i].data.fd) {
+            dead.push_back(path);
+            break;
+          }
+        }
+        continue;
+      }
       struct input_event ev;
-      while (::read(events[i].data.fd, &ev, sizeof(ev)) == static_cast<ssize_t>(sizeof(ev))) {
+      bool dev_dead = false;
+      ssize_t nread = 0;
+      while ((nread = ::read(events[i].data.fd, &ev, sizeof(ev))) == static_cast<ssize_t>(sizeof(ev))) {
         if (ev.type != EV_KEY) continue;
 
         if (ev.code == KEY_LEFTMETA || ev.code == KEY_RIGHTMETA) {
@@ -180,10 +208,31 @@ void GlobalKeyboardHandler::evdev_thread_fn() {
           }
         }
       }
+      if (nread < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) dev_dead = true;
+      if (dev_dead) {
+        for (const auto& [path, fd] : open_devs) {
+          if (fd == events[i].data.fd) {
+            dead.push_back(path);
+            break;
+          }
+        }
+      }
     }
+    for (const auto& path : dead) {
+      auto it = open_devs.find(path);
+      if (it != open_devs.end()) {
+        ::epoll_ctl(epfd, EPOLL_CTL_DEL, it->second, nullptr);
+        ::close(it->second);
+        open_devs.erase(it);
+      }
+    }
+    if (open_devs.empty()) break;
   }
 
-  for (int fd : fds) ::close(fd);
+  for (const auto& [path, fd] : open_devs) {
+    (void)path;
+    ::close(fd);
+  }
   ::close(epfd);
   log("evdev thread exiting");
 }

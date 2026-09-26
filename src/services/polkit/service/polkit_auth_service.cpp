@@ -14,6 +14,7 @@
 #include <gio/gio.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <iostream>
@@ -58,16 +59,18 @@ struct PolkitAuthService::Impl {
   bool failed_flag = false;
   bool prompt_active = false;
 
-  // Pending actions for dispatch_glib
-  bool pending_begin = false;
-  bool pending_end = false;
-  bool state_changed = false;
+  std::atomic<bool> pending_begin{false};
+  std::atomic<bool> pending_end{false};
+  std::atomic<bool> state_changed{false};
 
   static void registration_thread_main(PolkitSubject* subject, Impl* impl) {
      
     GError* err = nullptr;
     GCancellable* cancel = g_cancellable_new();
-    impl->cancellable = cancel;
+    {
+      std::lock_guard<std::mutex> lock(impl->mtx);
+      impl->cancellable = cancel;
+    }
     gpointer handle = polkit_agent_listener_register(
         POLKIT_AGENT_LISTENER(impl->listener),
         POLKIT_AGENT_REGISTER_FLAGS_NONE,
@@ -150,11 +153,12 @@ struct PolkitAuthService::Impl {
     state_changed = true;
   }
 
-  void end_prompt() {
+  void end_prompt(int gained) {
      
     std::lock_guard<std::mutex> lock(mtx);
-    state = AuthState::Idle;
+    state = gained ? AuthState::Success : AuthState::Failed;
     prompt_active = false;
+    active_session = nullptr;
     pending_end = true;
     state_changed = true;
   }
@@ -170,18 +174,24 @@ struct PolkitAuthService::Impl {
 
   void deliver_response(const char* response) {
      
-    if (active_session) {
-      polkit_agent_session_response(active_session, response);
+    PolkitAgentSession* session = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mtx);
+      session = active_session;
       active_session = nullptr;
     }
+    if (session) polkit_agent_session_response(session, response);
   }
 
   void cancel_session() {
      
-    if (active_session) {
-      polkit_agent_session_cancel(active_session);
+    PolkitAgentSession* session = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mtx);
+      session = active_session;
       active_session = nullptr;
     }
+    if (session) polkit_agent_session_cancel(session);
   }
 };
 
@@ -193,10 +203,10 @@ extern "C" void eh_polkit_bridge_begin_prompt(const char* action_id, const char*
   svc.impl()->begin_prompt(action_id, message, cookie);
 }
 
-extern "C" void eh_polkit_bridge_end_prompt() {
+extern "C" void eh_polkit_bridge_end_prompt(int gained_authorization) {
    
   auto& svc = PolkitAuthService::instance();
-  svc.impl()->end_prompt();
+  svc.impl()->end_prompt(gained_authorization);
 }
 
 extern "C" void eh_polkit_bridge_show_error_line(const char* text) {
@@ -219,8 +229,12 @@ extern "C" void eh_polkit_bridge_show_info_line(const char* text) {
 extern "C" void eh_polkit_bridge_store_session(PolkitAgentSession* session, int echo_on) {
    
   auto& svc = PolkitAuthService::instance();
+  std::lock_guard<std::mutex> lock(svc.impl()->mtx);
   svc.impl()->active_session = session;
-  svc.impl()->store_session(session, echo_on);
+  svc.impl()->echo_on = echo_on != 0;
+  svc.impl()->prompt_active = true;
+  svc.impl()->state = AuthState::Active;
+  svc.impl()->state_changed = true;
 }
 
 extern "C" void eh_polkit_bridge_deliver_response(const char* response) {
@@ -293,8 +307,11 @@ void PolkitAuthService::start() {
 
 void PolkitAuthService::stop() {
    
-  if (impl_->cancellable) {
-    g_cancellable_cancel(impl_->cancellable);
+  {
+    std::lock_guard<std::mutex> lock(impl_->mtx);
+    if (impl_->cancellable) {
+      g_cancellable_cancel(impl_->cancellable);
+    }
   }
   if (impl_->register_thread.joinable()) {
     impl_->register_thread.join();
@@ -313,6 +330,18 @@ void PolkitAuthService::stop() {
   std::lock_guard<std::mutex> lock(impl_->mtx);
   impl_->ctx = nullptr;
   impl_->started = false;
+  impl_->state = AuthState::Idle;
+  impl_->prompt_active = false;
+  impl_->failed_flag = false;
+  impl_->active_session = nullptr;
+  impl_->action_id.clear();
+  impl_->message.clear();
+  impl_->cookie.clear();
+  impl_->input_prompt.clear();
+  impl_->supplementary_error.clear();
+  impl_->pending_begin = false;
+  impl_->pending_end = false;
+  impl_->state_changed = false;
 }
 
 void PolkitAuthService::set_change_callback(ChangeCallback cb) {

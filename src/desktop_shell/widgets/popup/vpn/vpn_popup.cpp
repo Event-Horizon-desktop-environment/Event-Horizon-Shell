@@ -90,28 +90,17 @@ void vpn_popup_remove_entry(int idx) {
   nm.refresh();
 }
 
-void dock_vpn_popup_handle_click(DockApp& app, double x, double y, uint32_t) {
-   
+VpnPopupClick vpn_popup_click_action(double x, double y) {
   const double W = static_cast<double>(kVpnPopupW);
   const int vpnCount = static_cast<int>(s_entries.size());
-  const double kRemoveBtnSz = 22.0;
   const double H = kPad + kHeaderH + static_cast<double>(std::max(vpnCount, 1)) * kRowH + kPad;
 
-  // Close if outside bounds
-  if (x < 0 || x >= W || y < 0 || y >= H) {
-    popup_close(app);
-    return;
-  }
+  if (x < 0 || x >= W || y < 0 || y >= H) return VpnPopupClick::Close;
 
-  // Close button
   const double cbX = W - kPad - 24.0;
   const double cbY = kPad;
-  if (x >= cbX && x < cbX + 24.0 && y >= cbY && y < cbY + 24.0) {
-    popup_close(app);
-    return;
-  }
+  if (x >= cbX && x < cbX + 24.0 && y >= cbY && y < cbY + 24.0) return VpnPopupClick::Close;
 
-  // VPN button hits
   for (int vi = 0; vi < vpnCount; ++vi) {
     const double rowY = kPad + kHeaderH + static_cast<double>(vi) * kRowH;
     const double rowMidY = rowY + kRowH * 0.5;
@@ -120,19 +109,25 @@ void dock_vpn_popup_handle_click(DockApp& app, double x, double y, uint32_t) {
     const double btnX = remX - 6.0 - kBtnW;
     const double btnY = rowMidY - kBtnH * 0.5;
 
-    // Remove button
     if (x >= remX && x < remX + kRemoveBtnSz && y >= remY && y < remY + kRemoveBtnSz) {
       vpn_popup_remove_entry(vi);
-      popup_draw_surface(app);
-      return;
+      return VpnPopupClick::Redraw;
     }
 
-    // Connect / Disconnect button
     if (x >= btnX && x < btnX + kBtnW && y >= btnY && y < btnY + kBtnH) {
       vpn_popup_toggle_entry(vi);
-      popup_draw_surface(app);
-      return;
+      return VpnPopupClick::Redraw;
     }
+  }
+  return VpnPopupClick::None;
+}
+
+void dock_vpn_popup_handle_click(DockApp& app, double x, double y, uint32_t) {
+  switch (vpn_popup_click_action(x, y)) {
+    case VpnPopupClick::Close: popup_close(app); break;
+    case VpnPopupClick::Redraw: popup_draw_surface(app); break;
+    case VpnPopupClick::Reopen: popup_draw_surface(app); break;
+    case VpnPopupClick::None: break;
   }
 }
 

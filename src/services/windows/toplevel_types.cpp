@@ -71,6 +71,7 @@ bool toplevel_decode_record(const std::string& data, size_t offset,
   if (!parse_num(data, pos, ';', id)) return false;
   if (!parse_num(data, pos, ';', flags)) return false;
   if (!parse_num(data, pos, ';', appLen)) return false;
+  if (flags > 0xFFFFFFFFu) return false;
   out.id = id;
   out.flags = static_cast<std::uint32_t>(flags);
   out.key.clear();
@@ -91,6 +92,7 @@ bool toplevel_decode_list(const std::string& data, std::vector<ToplevelRecord>& 
   size_t pos = 0;
   std::uint64_t count = 0;
   if (!parse_num(data, pos, '\n', count)) return false;
+  if (count > 4096) return false;
   out.clear();
   out.reserve(static_cast<size_t>(count));
   for (std::uint64_t i = 0; i < count; ++i) {
@@ -100,6 +102,7 @@ bool toplevel_decode_list(const std::string& data, std::vector<ToplevelRecord>& 
     pos += consumed;
     out.push_back(std::move(r));
   }
+  if (pos != data.size()) return false;
   return true;
 }
 

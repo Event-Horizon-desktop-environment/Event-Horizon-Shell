@@ -23,6 +23,51 @@
 #include <unordered_set>
 
 #include <algorithm>
+
+namespace eh::shell::taskbar {
+
+cairo_surface_t* TaskbarScaledIconCache::getOrScale(cairo_surface_t* src, int tw, int th) {
+  if (!src || tw <= 0 || th <= 0) return nullptr;
+  if (cairo_surface_status(src) != CAIRO_STATUS_SUCCESS) return nullptr;
+  Key k{src, tw, th};
+  auto it = map.find(k);
+  if (it != map.end()) { hits++; return it->second; }
+  misses++;
+
+  const int sw = cairo_image_surface_get_width(src);
+  const int sh = cairo_image_surface_get_height(src);
+  if (sw <= 0 || sh <= 0) return nullptr;
+  /* Already the right size: no extra surface, just use the source directly. */
+  if (sw == tw && sh == th) return src;
+
+  cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, tw, th);
+  if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
+    if (out) cairo_surface_destroy(out);
+    return nullptr;
+  }
+  cairo_t* cr = cairo_create(out);
+  cairo_scale(cr, static_cast<double>(tw) / sw, static_cast<double>(th) / sh);
+  cairo_set_source_surface(cr, src, 0, 0);
+  cairo_paint(cr);
+  cairo_destroy(cr);
+  if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy(out);
+    return nullptr;
+  }
+  if (map.size() >= kCap && !fifo.empty()) {
+    auto oit = map.find(fifo.front());
+    if (oit != map.end()) {
+      if (oit->second) cairo_surface_destroy(oit->second);
+      map.erase(oit);
+    }
+    fifo.erase(fifo.begin());
+  }
+  map.emplace(k, out);
+  fifo.push_back(k);
+  return out;
+}
+
+}
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -111,7 +156,9 @@ namespace eh::shell::taskbar {
 TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
                                               const std::vector<std::string>& leftW,
                                               const std::vector<std::string>& centerW,
-                                              const std::vector<std::string>& rightW) {
+                                              const std::vector<std::string>& rightW,
+                                              const eh::shell::shared::RunningSnapshot& runningSnap,
+                                              const eh::mpris::PlayerSnapshot& mprisSnap) {
    
   const eh::config::ShellConfig& sc = eh::config::shell_config_snapshot();
   const double globalScale = std::clamp(sc.dock.shellUiScale, 0.5, 2.0);
@@ -130,15 +177,7 @@ TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
   std::vector<Slot> pinnedSlots, runningSlots, traySlots;
   pinnedSlots.resize(app.settings.pinnedApps.size());
   for (auto& s : pinnedSlots) s.isPinned = true;
-  {
-    size_t runningCount = 0;
-    if (app.toplevels && app.toplevels->size() > 0) {
-      auto snap = eh::shell::shared::build_running_snapshot(
-          *app.toplevels, app.appFirstSeenSerial, app.settings.groupApps);
-      runningCount = snap.groups.size();
-    }
-    runningSlots.resize(runningCount);
-  }
+  runningSlots.resize(runningSnap.groups.size());
   {
     std::lock_guard<std::mutex> lock(app.trayMutex);
     traySlots.resize(app.trayItems.size());
@@ -169,9 +208,7 @@ TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
     if (s.kind == Slot::Kind::Separator)
       return std::max(4.0, 6.0 * taskbarUIScale);
     if (s.kind == Slot::Kind::Media) {
-      const eh::mpris::PlayerSnapshot snap =
-          app.mpris ? app.mpris->snapshot() : eh::mpris::PlayerSnapshot{};
-      return eh::shell::dock_slot_hooks::dock_media_slot_width(nullptr, sc, s.key, icon, barH, snap);
+      return eh::shell::dock_slot_hooks::dock_media_slot_width(nullptr, sc, s.key, icon, barH, mprisSnap);
     }
     if (s.kind == Slot::Kind::Workspaces)
       return eh::shell::dock_slot_hooks::dock_workspaces_slot_width(nullptr, sc, s.key, icon, barH, app.workspaceStrip);
@@ -267,7 +304,9 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
                                std::vector<TaskbarWidgetHit>* out_hits,
                                int taskbarHoverSlot, int taskbarPressedSlot,
                                double taskbarHoverLiftPx,
-                               bool use_panel) {
+                               bool use_panel,
+                               const eh::shell::shared::RunningSnapshot& runningSnap,
+                               const eh::mpris::PlayerSnapshot& mprisSnap) {
   eh::widgets::slot_pill_style::g_opacityScale = static_cast<double>(std::clamp(app.settings.slotPillOpacity, 0, 100)) / 100.0;
   const eh::config::ShellAppearance ap = eh::config::shell_config_snapshot().appearance;
   const eh::config::ChromePaintColors mc = eh::config::derived_chrome_colors(ap);
@@ -315,17 +354,10 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     bool isPinned = false;
   };
 
-  // Build running snapshot from taskbar's own toplevels
-  std::vector<eh::shell::shared::RunningGroup> runningGroups;
-  uint64_t settingsChosenSerial = 0;
-  bool settingsActivated = false;
-  if (app.toplevels && app.toplevels->size() > 0) {
-    auto snap = eh::shell::shared::build_running_snapshot(
-        *app.toplevels, app.appFirstSeenSerial, app.settings.groupApps);
-    runningGroups = std::move(snap.groups);
-    settingsChosenSerial = snap.settingsChosenSerial;
-    settingsActivated = snap.settingsActivated;
-  }
+  // Running groups come from the per-draw snapshot built in taskbar_draw().
+  const std::vector<eh::shell::shared::RunningGroup>& runningGroups = runningSnap.groups;
+  const uint64_t settingsChosenSerial = runningSnap.settingsChosenSerial;
+  const bool settingsActivated = runningSnap.settingsActivated;
 
   // Build tray snapshot
   std::vector<TaskbarTrayItem> traySnap;
@@ -545,7 +577,8 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
   const double icon = std::clamp(iconRaw, 8.0, std::max(8.0, boxH - 8.0));
   const double gap = static_cast<double>(app.settings.iconSpacing) * taskbarUIScale;
 
-  auto paint_slot_w = [&](const Slot& s) -> double {
+  std::unordered_map<const void*, double> slotWidthCache;
+  auto paint_slot_w_uncached = [&](const Slot& s) -> double {
     if (s.kind == Slot::Kind::Clock) {
       return eh::shell::dock_slot_hooks::dock_clock_slot_width(nullptr, sc, s.key, icon, boxH);
     }
@@ -556,8 +589,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       return std::max(4.0, 6.0 * taskbarUIScale);
     }
     if (s.kind == Slot::Kind::Media) {
-      const eh::mpris::PlayerSnapshot snap = app.mpris ? app.mpris->snapshot() : eh::mpris::PlayerSnapshot{};
-      return eh::shell::dock_slot_hooks::dock_media_slot_width(nullptr, sc, s.key, icon, boxH, snap);
+      return eh::shell::dock_slot_hooks::dock_media_slot_width(nullptr, sc, s.key, icon, boxH, mprisSnap);
     }
     if (s.kind == Slot::Kind::Workspaces) {
       return eh::shell::dock_slot_hooks::dock_workspaces_slot_width(nullptr, sc, s.key, icon, boxH, app.workspaceStrip);
@@ -575,6 +607,14 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, sc, s.key, icon, boxH);
     }
     return icon;
+  };
+  auto paint_slot_w = [&](const Slot& s) -> double {
+    const void* key = static_cast<const void*>(&s);
+    auto cit = slotWidthCache.find(key);
+    if (cit != slotWidthCache.end()) return cit->second;
+    const double w = paint_slot_w_uncached(s);
+    slotWidthCache.emplace(key, w);
+    return w;
   };
 
   // Single source of truth for inter-slot gaps (also used by
@@ -613,6 +653,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
   const double stripPad = eh::shell::taskbar::strip_pad_px(taskbarUIScale);
   const double secGapPaint = eh::shell::taskbar::section_gap_px(taskbarUIScale);
   const double stripInner = stripPad * 2.0;
+  const auto tW0 = std::chrono::steady_clock::now();
   const double lw = section_width(left);
   const double cw = section_width(center);
   const double rw = section_width(right);
@@ -627,6 +668,14 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       totalW += paint_slot_w(all[i]);
       if (i + 1 < all.size()) totalW += gap_after_local(i);
     }
+  }
+  app.sectionMs[0] += 0.0;
+  {
+    const double wms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tW0).count();
+    app.sectionMs[1] += 0.0;
+    app.sectionMs[2] += 0.0;
+    (void)wms;
   }
 
   // Panel layout: sections anchored with inner padding — left at the padded
@@ -893,12 +942,13 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
                 const double dh = ic->height * sc_i;
                 const double dx = ix + (icon - dw) / 2.0;
                 const double dy = iconY + liftY + (icon - dh) / 2.0;
-                cairo_save(cr);
-                cairo_translate(cr, dx, dy);
-                cairo_scale(cr, sc_i, sc_i);
-                cairo_set_source_surface(cr, ic->surface, 0, 0);
+                /* Blit the pre-scaled raster instead of scaling the 384px source
+                   per frame; see TaskbarScaledIconCache. */
+                const int tw = std::max(1, static_cast<int>(std::ceil(dw)));
+                const int th = std::max(1, static_cast<int>(std::ceil(dh)));
+                cairo_surface_t* scaled = app.scaledIcons.getOrScale(ic->surface, tw, th);
+                cairo_set_source_surface(cr, scaled ? scaled : ic->surface, dx, dy);
                 cairo_paint(cr);
-                cairo_restore(cr);
                 drew = true;
               }
             }
@@ -912,12 +962,11 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
             const double dh = lh_img * sc_i;
             const double dx = ix + (icon - dw) / 2.0;
             const double dy = iconY + liftY + (icon - dh) / 2.0;
-            cairo_save(cr);
-            cairo_translate(cr, dx, dy);
-            cairo_scale(cr, sc_i, sc_i);
-            cairo_set_source_surface(cr, ti->pixSurface, 0, 0);
+            const int tw = std::max(1, static_cast<int>(std::ceil(dw)));
+            const int th = std::max(1, static_cast<int>(std::ceil(dh)));
+            cairo_surface_t* scaled = app.scaledIcons.getOrScale(ti->pixSurface, tw, th);
+            cairo_set_source_surface(cr, scaled ? scaled : ti->pixSurface, dx, dy);
             cairo_paint(cr);
-            cairo_restore(cr);
             drew = true;
           } else {
             const std::string mk = ti->service + ti->path;
@@ -939,9 +988,8 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
         if (hovered) hover_overlay();
         drew = true;
       } else if (s.kind == Slot::Kind::Media) {
-        const eh::mpris::PlayerSnapshot snap = app.mpris ? app.mpris->snapshot() : eh::mpris::PlayerSnapshot{};
         const int mediaHoverBtn = hovered ? eh::mpris::DockMpris::media_hit_zone(app.pointerX - ix, slotW, icon) : -1;
-        if (eh::shell::dock_slot_hooks::paint_media_slot(cr, sc, s.key, ix, iconY + liftY, slotW, icon, icon, snap, hovered, pressed, mediaHoverBtn, app.pointerX, app.pointerY))
+        if (eh::shell::dock_slot_hooks::paint_media_slot(cr, sc, s.key, ix, iconY + liftY, slotW, icon, icon, mprisSnap, hovered, pressed, mediaHoverBtn, app.pointerX, app.pointerY))
           mediaMarqueeAccum = true;
         drew = true;
       } else if (s.kind == Slot::Kind::Workspaces) {
@@ -1039,12 +1087,11 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
             const double dh = ic->height * sc_i;
             const double dx = ix + (icon - dw) / 2.0;
             const double dy = iconY + liftY + (icon - dh) / 2.0;
-            cairo_save(cr);
-            cairo_translate(cr, dx, dy);
-            cairo_scale(cr, sc_i, sc_i);
-            cairo_set_source_surface(cr, ic->surface, 0, 0);
+            const int tw = std::max(1, static_cast<int>(std::ceil(dw)));
+            const int th = std::max(1, static_cast<int>(std::ceil(dh)));
+            cairo_surface_t* scaled = app.scaledIcons.getOrScale(ic->surface, tw, th);
+            cairo_set_source_surface(cr, scaled ? scaled : ic->surface, dx, dy);
             cairo_paint(cr);
-            cairo_restore(cr);
             drew = true;
           }
         }
@@ -1077,9 +1124,18 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
   };
 
   if (use_panel) {
+    const auto tL0 = std::chrono::steady_clock::now();
     render_section(left, panelLeftX, 0);
+    app.sectionMs[0] += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tL0).count();
+    const auto tC0 = std::chrono::steady_clock::now();
     render_section(center, panelCenterX, static_cast<int>(left.size()));
+    app.sectionMs[1] += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tC0).count();
+    const auto tR0 = std::chrono::steady_clock::now();
     render_section(right, panelRightX, static_cast<int>(left.size() + center.size()));
+    app.sectionMs[2] += std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - tR0).count();
   } else {
     const double midX = x + boxW * 0.5;
     const double hScale = tb_strip_h_scale(boxW, totalW, stripInner);
@@ -1139,12 +1195,11 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
         const double dh = ic->height * sc_i;
         const double dx = fx + (icon - dw) / 2.0;
         const double dy = fy + (icon - dh) / 2.0;
-        cairo_save(cr);
-        cairo_translate(cr, dx, dy);
-        cairo_scale(cr, sc_i, sc_i);
-        cairo_set_source_surface(cr, ic->surface, 0, 0);
+        const int tw = std::max(1, static_cast<int>(std::ceil(dw)));
+        const int th = std::max(1, static_cast<int>(std::ceil(dh)));
+        cairo_surface_t* scaled = app.scaledIcons.getOrScale(ic->surface, tw, th);
+        cairo_set_source_surface(cr, scaled ? scaled : ic->surface, dx, dy);
         cairo_paint(cr);
-        cairo_restore(cr);
       }
     }
     if (floatingPinRunning) {

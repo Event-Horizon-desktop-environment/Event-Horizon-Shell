@@ -103,5 +103,12 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
 
 void dock_bluetooth_popup_handle_click(::DockApp& app, double x, double y, uint32_t serial);
 
+// Shared click core: hit-tests the popup layout, runs the BlueZ action, and
+// reports what the host should do. Both the dock and the taskbar use it so
+// clicks behave identically everywhere.
+enum class BluetoothPopupClick { None, Close, Redraw, Reopen };
+
+[[nodiscard]] BluetoothPopupClick bluetooth_popup_click_action(double x, double y);
+
 }
 

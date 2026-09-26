@@ -2026,6 +2026,8 @@ float overlay_surface_alpha_scale(const ShellConfig& sc, OverlaySurfaceAlphaKind
       return std::clamp(a.overlayOpacityOverview, 0.f, 1.f);
     case OverlaySurfaceAlphaKind::Notifications:
       return std::clamp(a.overlayOpacityNotifications, 0.f, 1.f);
+    case OverlaySurfaceAlphaKind::Battery:
+      return std::clamp(a.overlayOpacityMaster, 0.f, 1.f);
     default:
       return 1.f;
   }

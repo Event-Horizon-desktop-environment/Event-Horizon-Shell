@@ -35,6 +35,7 @@
 #include "services/tray/dbus/tray_context_menu.hpp"
 #include "desktop_shell/widgets/popup/calendar/calendar_popup.hpp"
 #include "desktop_shell/widgets/popup/weather/weather_popup.hpp"
+#include "desktop_shell/desktop/widgets/weather_fancy/fancy_weather_card_paint.hpp"
 #include "desktop_shell/widgets/popup/volume_mixer/volume_mixer_popup.hpp"
 #include "desktop_shell/widgets/popup/vpn/vpn_popup.hpp"
 #include "desktop_shell/widgets/popup/media_player/media_player_popup.hpp"
@@ -903,7 +904,11 @@ void popup_open_weather(DockApp& app, int anchorX, const std::string& instanceId
   if (app.display) (void)wl_display_roundtrip(app.display);
   app.popupKind = DockApp::PopupKind::Weather;
   app.popupW = eh::shell::dock::popup::weather::kWeatherPopupW;
-  app.popupH = eh::shell::dock::popup::weather::kWeatherPopupH;
+  // Height comes from the shared card, so the popup matches the desktop
+  // weather-fancy widget exactly and is never too short for its content.
+  app.popupH = eh::shell::desktop::measure_fancy_weather_height(
+      eh::config::shell_config_snapshot(),
+      instanceId.empty() ? std::string("weather") : instanceId);
   app.popupAnchorX = anchorX;
   app.popupItems.clear();
   app.popupOpen = true;
@@ -983,6 +988,9 @@ void popup_open_media_player(DockApp& app, int anchorX, uint32_t serial) {
     popup_close(app);
     return;
   }
+  // Kick the vsync frame chain so a scrolling title/artist starts moving
+  // immediately (frame_done keeps it alive while the marquee flag is set).
+  dock_schedule_frame(app);
   wl_display_flush(app.display);
 }
 

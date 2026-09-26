@@ -62,6 +62,7 @@ struct AppDrawerState {
 
   std::vector<std::string> categories{};
   std::vector<double> categoryWidths{};
+  std::vector<int> categoryCounts{};
   int selectedCategory = -1;
   int hoverCategoryIdx = -1;
 

@@ -67,6 +67,7 @@ struct NetworkState {
   std::uint8_t signalStrength = 0;
   std::vector<AccessPointInfo> accessPoints;
   std::vector<VpnConnectionInfo> vpnConnections;
+  std::vector<std::string> savedNetworks;
 
   // Wired-specific fields
   std::string ipv4Gateway;

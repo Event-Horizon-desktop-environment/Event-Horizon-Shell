@@ -2,6 +2,210 @@
 
 ## [Unreleased]
 
+### Taskbar — Optimization Pass: Pre-Scaled Icon Cache (Paint 11ms -> Blits)
+
+The phase breakdown named it: `paint=11-36ms` against `reload=0.0`,
+`measure=0.0`, `present=0.2`. The whole frame cost was inside
+`taskbar_paint_widget_bar`, and the cause was visible on sight: every icon was
+`cairo_scale()`d from its full-resolution source (384px app icons, full-size
+tray pixmaps) down to slot size **on every frame, in software** — two dozen
+bilinear downscales per draw on the CPU raster that is then uploaded.
+
+- **New `TaskbarScaledIconCache`**: `(source, size) -> pre-scaled surface`,
+  so the expensive downscale happens once and frames do a 1:1 blit. Keyed by
+  source pointer, so a theme switch or tray pixmap update (which recreate the
+  source) misses automatically; cleared outright on theme or icon-size change.
+  Bounded FIFO (256 entries); steady state is ~two dozen, all hits, since hover
+  animations touch one slot at a time. Same bilinear filter, same geometry
+  (sub-pixel rounding only) — no visual change, just not recomputed.
+- All four full-res scale sites converted (pinned, running, floating-pin, and
+  tray pixmaps).
+
+### Taskbar — Optimization Pass: Shared Snapshots, Phase Timers, Region Caching
+
+Follow-up to the frame-rate fix. `draw_p50_hint_ms` was still ~11ms after MPRIS
+and tracing left the frame path, so the remaining cost is in the paint itself.
+
+- **Snapshots built once per draw, not three times.** `build_running_snapshot()`
+  (walks every toplevel, allocates the group vectors) and
+  `DockMpris::snapshot()` (copies the player strings) were each rebuilt in the
+  measure pass, the layout pass, and the paint pass of every frame.
+  `taskbar_draw()` now builds both once and shares them through
+  `taskbar_measure_sections()` and `taskbar_paint_widget_bar()`.
+- **`[taskbar-fps]` now reports a phase breakdown** (`reload` / `measure` /
+  `paint` / `present` averages per 5s window), so the next slow frame names its
+  own cause instead of needing another audit.
+- **Blur/input regions only on geometry change.** Every frame created and
+  destroyed two `wl_region` objects (ten protocol messages) for a bar that
+  almost never resizes. Each layer now remembers the geometry its regions were
+  set for and skips the churn otherwise. No visual change: regions are purely
+  geometric.
+
+### Taskbar — Animation Frame Rate Was ~50x The Dock's Draw Cost
+
+Taskbar animations visibly lagged the dock's. Measured from the runtime logs, the
+taskbar drew in **p50 ~10ms / p90 ~23ms / max 1064ms** per frame against the dock's
+**p50 ~0.2ms** — against a ~16.7ms frame budget at 60Hz, so the taskbar was
+dropping frames on most animated transitions.
+
+- **MPRIS polling ran on the frame path.** `taskbar_draw()` called
+  `DockMpris::poll_refresh()`, which dispatches pending bus events (up to 64 per
+  call) and re-reads every player's properties, plus two `getenv`s, two config
+  snapshots and a blacklist/preference string split — per frame. The dock calls
+  the same function from `dock_handle_timer` at 1Hz. Battery and bluetooth
+  polling were on the frame path for the same reason and moved with it. All three
+  now run on the taskbar's 1Hz poll tick, matching the dock.
+- **Per-draw tracing was unconditional.** Every frame wrote a `debug_log()` line
+  (mutex, `localtime_r` + `strftime`, two `snprintf`, `fwrite` + `fflush`) from
+  two call sites plus three raw `std::cerr` lines — six-plus formatted writes per
+  frame on the animation path, and 65k lines accumulated in one log. Now gated
+  behind `EH_TASKBAR_DRAW_TRACE=1`. The `reload:` lines were already throttled to
+  2s and only fire on real changes, so they are unchanged.
+- **New `[taskbar-fps]`**, in the dock's `[dock-fps]` shape (hz / frames /
+  avg_gap_ms / gap_min_ms / gap_max_ms, reported once per 5s window). The taskbar
+  had no frame-rate instrumentation at all, which is why a draw-cost regression
+  this large stayed invisible until the two bars were compared by hand.
+
+### Dock — "Off" In Settings Now Actually Stops The Dock
+
+Turning the dock off left the `horizon-dock` process running. It hid its surfaces
+and dropped its exclusive zone to 0, but it stayed alive as a Wayland client and
+kept owning `org.kde.StatusNotifierWatcher` — so the "off" dock was still the
+session's tray host. Killing it by hand did not help either: the supervisor's
+SIGCHLD handler respawned it unconditionally, so it came straight back.
+
+`show_dock` now governs the process, not just the surfaces.
+
+- The dock child requests a clean exit on the `true -> false` edge
+  (`DockApp::exitRequested`), and the standalone loop unwinds on it. The check is
+  in `on_idle_flush`, not only in the display callback, so a turn-off with no
+  Wayland traffic still takes effect.
+- The SIGCHLD handler leaves the child down when `show_dock` is false, and the
+  supervisor does not spawn it at all when the setting is already off at login.
+- `sync_dock_child_with_enabled_setting()` starts the dock again on the
+  `false -> true` edge. It runs from `on_idle_flush` so it also covers a raw
+  config edit and a child that died while the dock was off, and it defers to the
+  existing cooldown/`dockRespawnAtMs_` machinery so a crash while the dock is
+  enabled is still respawned at the same bounded rate.
+- `TrayManager::start_as_client()` is replaced by
+  **`start_secondary_host(int waitMs)`**. Client-only attach is no longer correct:
+  with the dock off there is no watcher at all, so the taskbar's tray would have
+  gone down with the dock. The taskbar now waits up to 8s for the dock to claim
+  the name (so the primary host keeps it) and then delegates to `start_watcher()`,
+  which re-checks ownership and takes the name only when nobody else holds it.
+  With `show_dock` false the wait is skipped entirely and the taskbar hosts the
+  registry immediately.
+- **`start_client()` no longer dies on a slow initial snapshot.** The
+  `RegisteredStatusNotifierItems` read is now isolated: when it threw (observed on
+  a taskbar whose watcher call exceeded the 2s bound), the single outer `try`
+  skipped the signal subscriptions *and* `enterEventLoopAsync()`, leaving a client
+  with no items and no way to learn about later ones — a permanently empty tray
+  until the process restarted. Missing the initial burst is survivable; not
+  listening at all is not.
+
+### Taskbar / Dock Parity — Live Tray, Working Network Panel, Loop-Fd Self-Heal
+
+Parity audit of `horizon-taskbar` against `horizon-dock`, after the taskbar
+surfaced a stale running-apps list. Three more defects, all of the same shape as
+the ones above: a process-local singleton that nothing in that process drove, or
+a resource that was created once and never recovered.
+
+- **The taskbar's system tray was permanently empty.** `TrayManager` is a
+  per-process singleton, and `setup_tray_bus()` only *subscribed* to it. The
+  single `TrayManager::instance().start()` call site in the tree was the dock's,
+  so in the taskbar process the manager never ran, `items_` stayed empty, and
+  the `tray` widget had nothing to draw — no icons, and none of its
+  `Activate` / `GetLayout` / `Event` handlers could ever fire. It now starts its
+  own manager on the worker thread.
+- **New `TrayManager::start_secondary_host(int waitMs)`**: attach for a bar that is
+  not the primary tray host. This matters for ownership, not just tidiness. The
+  dock owns `org.kde.StatusNotifierWatcher` and deliberately delays claiming it by
+  `tray_session_defer_delay()`; a taskbar calling plain `start()` immediately
+  would win that race and take the name from the primary tray surface — and since
+  the taskbar restarts far more often than the dock, its next exit would release
+  the name and leave the dock attached to a watcher that no longer exists,
+  blanking the tray in *both* bars until the dock itself restarted. So it waits
+  for an external owner first and only claims the name when nobody turns up (see
+  the dock-off entry above). The dock's `start()` path is untouched. Verified
+  against the live bus: `org.kde.StatusNotifierWatcher` is owned by the
+  `horizon-dock` pid, with 2 registered items (`nm_applet`, `steam`).
+- **The taskbar never started `NetworkManagerService`.** The taskbar's control
+  centre owns the VPN popup and the Wi-Fi toggle, and this process is the only
+  reader of that state — the dock never touches the service. Unstarted, the
+  singleton reports an empty, unstarted state; the only thing that ever started
+  it was the embedded settings app when the Network tab happened to be opened.
+  `start()` is idempotent and does its D-Bus work on its own worker thread.
+- **Loop-fd self-heal parity**: the dock re-installs a lost poll timer or
+  settings watcher every 5s (`dock_install_loop_fds`). The taskbar created both
+  once, inline, and never recovered — losing either silently cost it its repaint
+  cadence or its config watcher for the rest of the session. Both fds are now
+  created through a re-runnable `install_loop_fds()` lambda invoked from
+  `on_idle_flush` on the same 5s throttle, and the fd handlers capture by
+  reference so a replacement fd is the one actually read.
+- **Checked and cleared** (no change needed): tray item click/menu handling
+  exists in the taskbar and is bounded by `kTrayMethodCallTimeout`; the battery
+  widget builds its D-Bus connection on a dedicated poll thread rather than in a
+  paint path, and is refcount-initialised in both bars; the disks,
+  live-wallpaper and settings embeds all attach their `xdg_surface` /
+  `xdg_toplevel` listeners before the first commit, so no `configure` burst can
+  be lost; widget-token coverage matches the dock for every token in active use.
+
+### Taskbar — Pre-Existing Windows Missing From Pinned/Running Apps
+
+- **Symptom**: the taskbar listed only apps opened *after* it started. Every
+  window that was already mapped when the taskbar launched was absent from the
+  running-apps widget, and pinned apps showed no running indicator for them —
+  so the bar looked stale. The dock was unaffected, which made it look like a
+  config or tracker bug rather than a startup-ordering one.
+- **Root cause**: `Connection::connect()` binds
+  `zwlr_foreign_toplevel_manager_v1` during its own connect round-trips and
+  flushes it, but never installs a listener on that proxy. The taskbar then
+  attached its `ForeignToplevels` listener to that already-flushed proxy
+  (`taskbar_standalone.cpp`), by which time `taskbar_init_on_display` had
+  already run further synchronous round-trips. The compositor answers every
+  manager bind with one `toplevel` event per already-mapped window, exactly
+  once; those events were dispatched to a proxy with no listener and silently
+  discarded. Only windows mapped afterwards were ever seen, because those
+  `toplevel` events are sent live.
+- **Fix**: the taskbar now binds its own
+  `zwlr_foreign_toplevel_manager_v1` and attaches the listener *inside* the
+  `wl_registry.global` callback (`bind_toplevel_manager_for_tracking`). A
+  registry bind is only put on the wire at the next flush, so the listener is
+  guaranteed to be installed before the initial batch can be dispatched. This
+  is the same ordering the dock already uses via `dock_bind_deferred_globals()`
+  + `dock_foreign_toplevel_bind_manager_and_hooks()`, which is why the dock was
+  never affected.
+- **Same defect fixed in the shared tracker**: `toplevel_tracker_init()` bound
+  the manager in its registry callback but attached the listener only after the
+  round-trip, dropping the initial snapshot for the session/supervisor path.
+  It now attaches at bind time and installs the visual-dirty hook before the
+  round-trip so the restored snapshot schedules a redraw.
+- Verified against the live compositor with a standalone protocol probe: binding
+  and attaching after the intervening round-trips yields **0** pre-existing
+  toplevels, while attaching in the registry callback yields all of them.
+  The taskbar boot line now reports `toplevels=<count>`.
+
+### Dock / Taskbar Freeze — Blocking StatusNotifier D-Bus Call on the Event Loop
+
+- **Root cause of the "frozen dock"**: the event-loop thread was parked inside
+  a synchronous session-bus round-trip. `dock_handle_timer()` and
+  `on_idle_flush` both call `dock_try_start_deferred_tray()` →
+  `TrayManager::start()`, which runs a burst of *blocking* D-Bus calls
+  (`NameHasOwner`, `requestName`, a `RegisteredStatusNotifierItems` property
+  `Get`, and a `Get` against **every** name on the session bus while resolving
+  item owners). With sdbus-c++'s 25s default timeout, one unresponsive bus or
+  tray app froze the entire dock — no repaint, no input, no config reload,
+  0% CPU, fd numbers looking perfectly healthy in the boot log.
+- **Tray startup moved off the loop thread**: `dock_start_tray_async()` runs
+  `TrayManager::start()` on a joinable worker (launched once, joined in
+  `dock_cleanup`). Items still land — the dock already re-syncs on
+  `trayEventFd` via `dock_handle_tray`.
+- **All tray D-Bus bounded to 2s** (`kTrayMethodCallTimeout`): the tray
+  manager's own bus, plus the dock/taskbar `trayBus` used by the remaining
+  synchronous loop-thread calls (`Activate` on icon click, `GetLayout` /
+  `Event` for tray menus), and the disks manager's synchronous
+  `GetManagedObjects`.
+
 ### Settings Keyboard + Language — Working Layout Switching, Reorder, System Locale
 
 - **Layout switching actually switches**: clicking a source row, the layout

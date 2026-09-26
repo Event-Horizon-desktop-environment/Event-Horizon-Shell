@@ -20,7 +20,7 @@ git clone --recursive https://github.com/Event-Horizon-desktop-environment/Event
 cd Event-Horizon-Shell
 # <install your distro's dependency packages — see the distro guides>
 sudo just install
-EventHorizon --version    # verify: prints "Event Horizon 0.9.5-beta1"
+EventHorizon --version    # verify: prints "Event Horizon 0.9.6-beta2"
 ```
 
 > **`--recursive` is required.** Skipping it makes the very last build step

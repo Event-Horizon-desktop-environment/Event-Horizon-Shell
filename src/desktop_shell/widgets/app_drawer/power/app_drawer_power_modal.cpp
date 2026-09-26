@@ -1,7 +1,6 @@
 #include "desktop_shell/widgets/app_drawer/power/app_drawer_power_modal.hpp"
 
 #include "configuration/shell_config.hpp"
-#include "m3/core/primitives/box.hpp"
 #include "desktop_shell/common/glyph/material_glyph.hpp"
 
 #include <algorithm>
@@ -130,23 +129,13 @@ void paint_power_confirm_modal(cairo_t* cr, double popupW, double popupH, int pe
 
   cairo_save(cr);
 
-  {
-    m3::Box box;
-    box.setColor(0.0f, 0.0f, 0.0f, 0.22f);
-    box.setRadius(14.0f);
-    box.setGeometry(g.card.x + 2.0, g.card.y + 3.0, g.card.w, g.card.h);
-    box.setGlassy(true);
-    box.paint(cr);
-  }
+  rr(cr, g.card.x + 2.0, g.card.y + 3.0, g.card.w, g.card.h, 14.0);
+  cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.22);
+  cairo_fill(cr);
 
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(surfR), static_cast<float>(surfG), static_cast<float>(surfB), 0.98f);
-    box.setRadius(14.0f);
-    box.setGeometry(g.card.x, g.card.y, g.card.w, g.card.h);
-    box.setGlassy(true);
-    box.paint(cr);
-  }
+  rr(cr, g.card.x, g.card.y, g.card.w, g.card.h, 14.0);
+  cairo_set_source_rgba(cr, surfR, surfG, surfB, 0.98);
+  cairo_fill(cr);
 
   rr(cr, g.card.x, g.card.y, g.card.w, g.card.h, 14.0);
   cairo_set_source_rgba(cr, outR, outG, outB, 0.35);
@@ -154,25 +143,19 @@ void paint_power_confirm_modal(cairo_t* cr, double popupW, double popupH, int pe
   cairo_stroke(cr);
 
   const bool hClose = in_rect(pointerX, pointerY, g.closeHit);
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(dimR), static_cast<float>(dimG), static_cast<float>(dimB),
-                 static_cast<float>(hClose ? 0.55 : 0.40));
-    box.setRadius(8.0f);
-    box.setGeometry(g.closeHit.x, g.closeHit.y, g.closeHit.w, g.closeHit.h);
-    box.setGlassy(true);
-    box.paint(cr);
-  }
+  rr(cr, g.closeHit.x, g.closeHit.y, g.closeHit.w, g.closeHit.h, 8.0);
+  cairo_set_source_rgba(cr, dimR, dimG, dimB, hClose ? 0.55 : 0.40);
+  cairo_fill(cr);
   eh::shell::draw_material_glyph(cr, g.closeHit.x + g.closeHit.w * 0.5, g.closeHit.y + g.closeHit.h * 0.5, 18.0, "close",
                                    0.88, 0.92, 0.95, 1.0);
 
-  cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
   cairo_set_font_size(cr, 17.0);
   cairo_set_source_rgba(cr, 0.93, 0.96, 0.98, 1.0);
   cairo_move_to(cr, g.card.x + 20.0, g.card.y + 20.0 + 14.0);
   cairo_show_text(cr, title_for(pendingPowerIdx));
 
-  cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
   cairo_set_font_size(cr, 13.0);
   cairo_set_source_rgba(cr, outR + 0.15, outG + 0.12, outB + 0.12, 0.88);
   const char* msg = message_for(pendingPowerIdx);
@@ -180,21 +163,15 @@ void paint_power_confirm_modal(cairo_t* cr, double popupW, double popupH, int pe
   cairo_show_text(cr, msg);
 
   const bool hCan = in_rect(pointerX, pointerY, g.cancelBtn);
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(dimR), static_cast<float>(dimG), static_cast<float>(dimB),
-                 static_cast<float>(hCan ? 0.52 : 0.42));
-    box.setRadius(10.0f);
-    box.setGeometry(g.cancelBtn.x, g.cancelBtn.y, g.cancelBtn.w, g.cancelBtn.h);
-    box.setGlassy(true);
-    box.paint(cr);
-  }
+  rr(cr, g.cancelBtn.x, g.cancelBtn.y, g.cancelBtn.w, g.cancelBtn.h, 10.0);
+  cairo_set_source_rgba(cr, dimR, dimG, dimB, hCan ? 0.52 : 0.42);
+  cairo_fill(cr);
 
   rr(cr, g.cancelBtn.x, g.cancelBtn.y, g.cancelBtn.w, g.cancelBtn.h, 10.0);
   cairo_set_source_rgba(cr, outR, outG, outB, 0.45);
   cairo_set_line_width(cr, 1.0);
   cairo_stroke(cr);
-  cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
   cairo_set_font_size(cr, 14.0);
   cairo_set_source_rgba(cr, 0.90, 0.94, 0.96, 0.95);
   {
@@ -206,15 +183,9 @@ void paint_power_confirm_modal(cairo_t* cr, double popupW, double popupH, int pe
   }
 
   const bool hOk = in_rect(pointerX, pointerY, g.confirmBtn);
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(kErrR), static_cast<float>(kErrG), static_cast<float>(kErrB),
-                 static_cast<float>(hOk ? 0.22 : 0.12));
-    box.setRadius(10.0f);
-    box.setGeometry(g.confirmBtn.x, g.confirmBtn.y, g.confirmBtn.w, g.confirmBtn.h);
-    box.setGlassy(true);
-    box.paint(cr);
-  }
+  rr(cr, g.confirmBtn.x, g.confirmBtn.y, g.confirmBtn.w, g.confirmBtn.h, 10.0);
+  cairo_set_source_rgba(cr, kErrR, kErrG, kErrB, hOk ? 0.22 : 0.12);
+  cairo_fill(cr);
 
   rr(cr, g.confirmBtn.x, g.confirmBtn.y, g.confirmBtn.w, g.confirmBtn.h, 10.0);
   cairo_set_source_rgba(cr, kErrR, kErrG, kErrB, 0.85);

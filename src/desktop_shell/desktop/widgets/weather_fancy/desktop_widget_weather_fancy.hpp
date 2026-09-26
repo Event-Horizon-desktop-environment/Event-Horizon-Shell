@@ -16,10 +16,12 @@ struct DesktopWeatherFancyWidget : DesktopWidget {
 
   [[nodiscard]] bool wantsSecondTicks() const override { return true; }
   [[nodiscard]] int intrinsicWidth() const override { return 340; }
-  [[nodiscard]] int intrinsicHeight() const override { return 340; }
+  [[nodiscard]] int intrinsicHeight() const override { return m_height; }
 
 private:
   std::string m_widgetId;
+  // Flowing height measured during paint so long content is never cut off.
+  int m_height = 380;
 };
 
 }

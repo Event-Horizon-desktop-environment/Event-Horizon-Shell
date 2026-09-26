@@ -260,6 +260,8 @@ void DockMpris::process_async_properties(const std::string& busName,
   int64_t durationUs = 0;
   int64_t positionUs = 0;
   bool canGoNext = false, canGoPrevious = false, canPlay = false, canPause = false;
+  bool shuffle = false;
+  std::string loopStatus;
 
   const auto metaIt = playerProps.find("Metadata");
   if (metaIt != playerProps.end()) {
@@ -294,6 +296,11 @@ void DockMpris::process_async_properties(const std::string& busName,
   canGoPrevious = readFlag("CanGoPrevious");
   canPlay = readFlag("CanPlay");
   canPause = readFlag("CanPause");
+  shuffle = readFlag("Shuffle");
+  {
+    auto it = playerProps.find("LoopStatus");
+    if (it != playerProps.end()) loopStatus = variant_as_string(it->second);
+  }
 
   const auto now = std::chrono::steady_clock::now();
   std::lock_guard<std::mutex> lock(mu_);
@@ -314,6 +321,8 @@ void DockMpris::process_async_properties(const std::string& busName,
     snap.can_go_previous = canGoPrevious;
     snap.can_play = canPlay;
     snap.can_pause = canPause;
+    snap.shuffle = shuffle;
+    snap.loop_status = loopStatus;
     snap.position_us = hadPositionSignal ? positionUs : 0;
     snap.duration_us = durationUs;
 
@@ -333,7 +342,8 @@ void DockMpris::process_async_properties(const std::string& busName,
         album != ps.snap.album || artUrl != ps.snap.art_url_raw ||
         trackUrl != ps.snap.track_url_raw || durationUs != ps.snap.duration_us ||
         canGoNext != ps.snap.can_go_next || canGoPrevious != ps.snap.can_go_previous ||
-        canPlay != ps.snap.can_play || canPause != ps.snap.can_pause) {
+        canPlay != ps.snap.can_play || canPause != ps.snap.can_pause ||
+        shuffle != ps.snap.shuffle || loopStatus != ps.snap.loop_status) {
       m_cacheChanged = true;
     }
 
@@ -349,6 +359,8 @@ void DockMpris::process_async_properties(const std::string& busName,
     ps.snap.can_go_previous = canGoPrevious;
     ps.snap.can_play = canPlay;
     ps.snap.can_pause = canPause;
+    ps.snap.shuffle = shuffle;
+    ps.snap.loop_status = loopStatus;
     ps.snap.duration_us = durationUs;
     ps.snap.position_us = positionUs;
     ps.rank = player_rank(ps.snap);
@@ -592,6 +604,7 @@ void DockMpris::add_player(const std::string& busName) {
           }
 
           const bool positionChanged = changedProps.contains("Position");
+          int64_t freshPos = -1;
           if (positionChanged) {
             auto posIt = changedProps.find("Position");
             if (posIt != changedProps.end()) {
@@ -600,11 +613,14 @@ void DockMpris::add_player(const std::string& busName) {
                 cacheIt->second.snap.position_us = rawPos;
                 cacheIt->second.lastPositionAt = std::chrono::steady_clock::now();
                 cacheIt->second.authoritativePosition = true;
+                freshPos = rawPos;
               }
             }
           }
 
           if (metadataChanged) {
+            const std::string oldTrackId = cacheIt->second.snap.track_id;
+            const std::string oldTitle = cacheIt->second.snap.title;
             auto metaIt = changedProps.find("Metadata");
             if (metaIt != changedProps.end()) {
               const auto meta = get_variant_map_from_variant(metaIt->second);
@@ -622,6 +638,19 @@ void DockMpris::add_player(const std::string& busName) {
               if (it != meta.end()) cacheIt->second.snap.track_id = variant_as_string(it->second);
               it = meta.find("mpris:length");
               if (it != meta.end()) cacheIt->second.snap.duration_us = get_int64_from_variant(it->second);
+            }
+            const std::string& newTrackId = cacheIt->second.snap.track_id;
+            const std::string& newTitle = cacheIt->second.snap.title;
+            bool trackChanged = false;
+            if (!newTrackId.empty() || !oldTrackId.empty()) {
+              trackChanged = (newTrackId != oldTrackId);
+            } else {
+              trackChanged = (newTitle != oldTitle);
+            }
+            if (trackChanged && freshPos < 0) {
+              cacheIt->second.snap.position_us = 0;
+              cacheIt->second.lastPositionAt = std::chrono::steady_clock::now();
+              cacheIt->second.authoritativePosition = true;
             }
           }
 
@@ -641,8 +670,12 @@ void DockMpris::add_player(const std::string& busName) {
           readFlag("CanGoPrevious", cacheIt->second.snap.can_go_previous);
           readFlag("CanPlay", cacheIt->second.snap.can_play);
           readFlag("CanPause", cacheIt->second.snap.can_pause);
+          readFlag("Shuffle", cacheIt->second.snap.shuffle);
+          if (auto loopIt = changedProps.find("LoopStatus"); loopIt != changedProps.end())
+            cacheIt->second.snap.loop_status = variant_as_string(loopIt->second);
 
-          const bool sigChanged = metadataChanged || positionChanged || changedProps.contains("PlaybackStatus");
+          const bool sigChanged = metadataChanged || positionChanged || changedProps.contains("PlaybackStatus") ||
+                                  changedProps.contains("Shuffle") || changedProps.contains("LoopStatus");
           if (sigChanged) {
             const auto& s = cacheIt->second.snap;
             eh::shell_log::dock_mpris("sig bus=", busName, " meta=", metadataChanged, " pos=", positionChanged,
@@ -770,6 +803,8 @@ int DockMpris::compute_signature(const PlayerSnapshot& s) {
   h = h * 31 + (s.can_go_previous ? 1 : 0);
   h = h * 31 + (s.can_play ? 1 : 0);
   h = h * 31 + (s.can_pause ? 1 : 0);
+  h = h * 31 + (s.shuffle ? 1 : 0);
+  for (unsigned char c : s.loop_status) h = h * 31 + c;
   h = h * 31 + static_cast<int>(s.duration_us);
 
   if (!s.title.empty()) h = h * 31 + static_cast<unsigned char>(s.title[0]);
@@ -1100,40 +1135,142 @@ static void async_player_method_call(sdbus::IConnection& bus,
   }
 }
 
+// sdbus only pushes queued outgoing messages out of processPendingEvent(), and
+// the shell's event loop invokes that only when the bus fd reports POLLIN. A
+// click queues PlayPause/Next/Previous with no reply expected for a while, so
+// without an explicit drive here the call can sit in the output queue until some
+// unrelated incoming message happens to arrive — which reads as "the button does
+// nothing". Drive the connection immediately after queueing.
+static void flush_bus(sdbus::IConnection& bus) noexcept {
+  try {
+    for (int i = 0; i < 8; ++i) {
+      if (!bus.processPendingEvent()) break;
+    }
+  } catch (...) {
+  }
+}
+
 void DockMpris::play_pause() {
    
-  if (!bus_) return;
+  if (!bus_) {
+    eh::shell_log::mpris_dbus("play_pause: aborted, no session bus");
+    return;
+  }
   std::string svc;
   {
     std::lock_guard<std::mutex> lock(mu_);
     svc = snap_.bus_name;
   }
-  if (svc.empty()) return;
+  if (svc.empty()) {
+    eh::shell_log::mpris_dbus("play_pause: aborted, snapshot has no active player");
+    return;
+  }
+  eh::shell_log::mpris_dbus("play_pause: queueing for ", svc);
   async_player_method_call(*bus_, svc, "PlayPause", m_aliveGuard);
+  flush_bus(*bus_);
 }
 
 void DockMpris::next() {
    
-  if (!bus_) return;
+  if (!bus_) {
+    eh::shell_log::mpris_dbus("next: aborted, no session bus");
+    return;
+  }
   std::string svc;
   {
     std::lock_guard<std::mutex> lock(mu_);
     svc = snap_.bus_name;
   }
-  if (svc.empty()) return;
+  if (svc.empty()) {
+    eh::shell_log::mpris_dbus("next: aborted, snapshot has no active player");
+    return;
+  }
+  eh::shell_log::mpris_dbus("next: queueing for ", svc);
   async_player_method_call(*bus_, svc, "Next", m_aliveGuard);
+  flush_bus(*bus_);
 }
 
 void DockMpris::previous() {
    
-  if (!bus_) return;
+  if (!bus_) {
+    eh::shell_log::mpris_dbus("previous: aborted, no session bus");
+    return;
+  }
   std::string svc;
   {
     std::lock_guard<std::mutex> lock(mu_);
     svc = snap_.bus_name;
   }
-  if (svc.empty()) return;
+  if (svc.empty()) {
+    eh::shell_log::mpris_dbus("previous: aborted, snapshot has no active player");
+    return;
+  }
+  eh::shell_log::mpris_dbus("previous: queueing for ", svc);
   async_player_method_call(*bus_, svc, "Previous", m_aliveGuard);
+  flush_bus(*bus_);
+}
+
+static void async_player_set_property(sdbus::IConnection& bus,
+                                      const std::string& svc,
+                                      const std::string& prop,
+                                      sdbus::Variant value,
+                                      std::shared_ptr<void> guard) {
+   
+  std::weak_ptr<void> wg = guard;
+  try {
+    auto proxy = sdbus::createProxy(bus, sdbus::ServiceName{svc}, sdbus::ObjectPath{kMprisPath});
+    auto sharedProxy = std::shared_ptr<sdbus::IProxy>(std::move(proxy));
+    sharedProxy->callMethodAsync("Set")
+        .onInterface("org.freedesktop.DBus.Properties")
+        .withArguments(kPlayerIface, prop, std::move(value))
+        .uponReplyInvoke([wg, prop](std::optional<sdbus::Error> err) {
+          if (!err) return;
+          if (wg.expired()) return;
+          eh::shell_log::mpris_dbus("Set ", prop, " async: ", err->what());
+        });
+  } catch (const std::exception& e) {
+    eh::shell_log::mpris_dbus("Set ", prop, " async: ", e.what());
+  }
+}
+
+void DockMpris::toggle_shuffle() {
+   
+  if (!bus_) return;
+  std::string svc;
+  bool cur = false;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    svc = snap_.bus_name;
+    cur = snap_.shuffle;
+  }
+  if (svc.empty()) return;
+  async_player_set_property(*bus_, svc, "Shuffle", sdbus::Variant{!cur}, m_aliveGuard);
+  // Optimistic local flip so the button reacts instantly; the next
+  // PropertiesChanged re-syncs the true state.
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (snap_.bus_name == svc) snap_.shuffle = !cur;
+    m_cacheChanged = true;
+  }
+}
+
+void DockMpris::cycle_loop_status() {
+   
+  if (!bus_) return;
+  std::string svc, cur;
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    svc = snap_.bus_name;
+    cur = snap_.loop_status;
+  }
+  if (svc.empty()) return;
+  const std::string next = (cur == "None" || cur.empty()) ? "Playlist" : (cur == "Playlist" ? "Track" : "None");
+  async_player_set_property(*bus_, svc, "LoopStatus", sdbus::Variant{next}, m_aliveGuard);
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (snap_.bus_name == svc) snap_.loop_status = next;
+    m_cacheChanged = true;
+  }
 }
 
 void DockMpris::set_position(const int64_t position_us) {

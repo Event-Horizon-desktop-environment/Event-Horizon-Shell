@@ -47,3 +47,7 @@ On Hyprland the shell ships its own full **Hyprland settings editor** (the
 Hyprland tab in settings): window rules, binds, monitor config, animations,
 blur, gaps, and more are read, edited, and written back to
 `~/.config/hypr/hyprland(.conf|lua)` directly — no hand-editing needed.
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes

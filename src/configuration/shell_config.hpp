@@ -89,7 +89,7 @@ struct ShellAppearance {
   int launchpadIconFillPct = 58;
   int launchpadLayoutScalePct = 100;
   int launchpadDpiScalePct = 100;
-  int launchpadViewMode = 1;
+  int launchpadViewMode = 0; // Tahoe default: Icons grid (1 = List)
   int launchpadFolderSizePct = 100;
   int launchpadFolderGapPx = 16;
   int launchpadFolderColumns = 3;
@@ -226,6 +226,7 @@ enum class OverlaySurfaceAlphaKind : std::uint8_t {
   Tooltip = 9,
   Overview = 10,
   Notifications = 11,
+  Battery = 12,
 };
 
 struct WidgetInstanceConfig {

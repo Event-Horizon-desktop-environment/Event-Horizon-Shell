@@ -3,6 +3,7 @@
 #include "desktop_shell/common/glyph/material_glyph.hpp"
 #include "desktop_shell/widgets/shared/widget_settings.hpp"
 #include "desktop_shell/widgets/shared/measure_scratch.hpp"
+#include "desktop_shell/shared/core/cairo_helpers.hpp"
 #include "configuration/shell_config.hpp"
 #include "services/bluetooth/bluez_service.hpp"
 #include "desktop_shell/shared/popup/session/session.hpp"
@@ -25,14 +26,6 @@
 namespace eh::widgets {
 namespace {
 
-bool parse_bool_setting(const std::string& v, bool fallback) {
-  if (v.empty()) return fallback;
-  if (v == "1" || v == "true" || v == "True" || v == "yes" || v == "Yes") return true;
-  if (v == "0" || v == "false" || v == "False" || v == "no" || v == "No") return false;
-  return fallback;
-}
-
-// ── Battery helpers ──────────────────────────────────────────────────────
 // BlueZ reports battery as a percentage via org.bluez.Battery1; the widget
 // layer exposes it per device as `battery_pct` (-1 when unknown).
 
@@ -53,7 +46,6 @@ void bt_battery_color(int pct, double& r, double& g, double& b) {
   else                { r = 0.45; g = 0.85; b = 0.50; }
 }
 
-// ── Debug fake state ─────────────────────────────────────────────────────
 // EH_BLUETOOTH_DEBUG lets the dock slot and popup be exercised without
 // hardware, mirroring the battery widget's EH_BATTERY_DEBUG. Values:
 //   connected  – mixed fleet, several devices reporting battery
@@ -138,7 +130,6 @@ std::optional<eh::bt::FullState> debug_full_state() {
   return st;
 }
 
-// ── Text cache ───────────────────────────────────────────────────────────
 
 struct BluetoothTextCache {
   std::string text;
@@ -162,10 +153,6 @@ int measure_text_px(cairo_t* cr, const char* text, double font_px) {
   return w;
 }
 
-// ── Dock slot label ──────────────────────────────────────────────────────
-// When any *connected* device reports battery, the slot shows the lowest of
-// those percentages (the most actionable number); otherwise it falls back
-// to the connected-device count.
 
 struct SlotLabel {
   enum class Kind { None, Count, Battery };
@@ -196,9 +183,7 @@ SlotLabel make_slot_label(const eh::bt::Snapshot& snap, const std::vector<eh::bt
   return out;
 }
 
-// ── Popup geometry ───────────────────────────────────────────────────────
 // One shared layout used by both the paint and click handlers, so the
-// hit-testing can never drift out of sync with what is drawn.
 
 struct Rect {
   double x = 0, y = 0, w = 0, h = 0;
@@ -216,7 +201,6 @@ constexpr double kFooterGap = 10.0;
 constexpr double kScanH = 40.0;
 constexpr double kBottomPad = 14.0;
 
-// A popup entry is either a section header ("Remembered devices") or a device
 // row. Sections give connected devices the top slot and keep remembered
 // (paired, not connected) devices in their own space below.
 struct PopupItem {
@@ -243,9 +227,6 @@ struct PopupLayout {
   int shown = 0;   // device rows only (excludes section headers)
 };
 
-// Display plan: connected devices first, then remembered (paired, unconnected)
-// devices, then nearby unpaired ones. Section headers are only emitted when the
-// popup actually mixes groups, so a single-group list stays clean.
 std::vector<PopupItem> plan_popup_items(const eh::bt::Snapshot& bt,
                                         const std::vector<eh::bt::DeviceInfo>& devs) {
   std::vector<PopupItem> items;
@@ -311,7 +292,6 @@ PopupLayout build_popup_layout(const eh::bt::Snapshot& bt, const std::vector<eh:
   const double pad = 16.0 * us;
   const double headerH = kHeaderH * us;
 
-  // Header: icon tile on the left, close button + power toggle on the right.
   const double closeD = 28.0 * us;
   const double togW = 46.0 * us;
   const double togH = 26.0 * us;
@@ -323,7 +303,6 @@ PopupLayout build_popup_layout(const eh::bt::Snapshot& bt, const std::vector<eh:
   L.toggle = {L.closeBtn.x - 8.0 * us - togW, pad + (headerH - togH) * 0.5, togW, togH};
   L.status = {pad, pad + headerH, W - 2.0 * pad, kStatusH * us};
 
-  // Popup entries: section headers interleaved with device rows.
   L.items = plan_popup_items(bt, devs);
   L.shown = 0;
   double listY = L.status.y + L.status.h;
@@ -341,18 +320,15 @@ PopupLayout build_popup_layout(const eh::bt::Snapshot& bt, const std::vector<eh:
     const double tileS = 32.0 * us;
     it.tile = {pad + 1.0 * us, ry + (rowH - tileS) * 0.5, tileS, tileS};
 
-    // Action pill (right edge).
     const double actH = 30.0 * us;
     const double actW = (d.connected ? 84.0 : (d.paired ? 62.0 : 46.0)) * us;
     it.action = {W - pad - actW, ry + (rowH - actH) * 0.5, actW, actH};
 
-    // Forget ghost (only for paired devices).
     if (d.paired) {
       const double fogW = 26.0 * us;
       it.forget = {it.action.x - 6.0 * us - fogW, ry + (rowH - fogW) * 0.5, fogW, fogW};
     }
 
-    // Battery slot (only when the device reports one).
     if (d.has_battery) {
       const double batW = 44.0 * us;
       const double batH = rowH;
@@ -363,7 +339,6 @@ PopupLayout build_popup_layout(const eh::bt::Snapshot& bt, const std::vector<eh:
     listY += rowH;
   }
 
-  // Scan button.
   if (bt.available && bt.powered) {
     const double sW = W - 2.0 * pad;
     const double sH = kScanH * us;
@@ -509,7 +484,6 @@ bool widget_list_contains_bluetooth(const eh::config::ShellConfig& sc, const std
   return false;
 }
 
-// ── Dock slot ────────────────────────────────────────────────────────────
 
 double dock_bluetooth_slot_width(cairo_t* measure_cr, const eh::config::ShellConfig& sc,
                                  std::string_view instance_id, double icon_ref_px, double /*bar_height*/) {
@@ -553,7 +527,6 @@ double dock_bluetooth_slot_width(cairo_t* measure_cr, const eh::config::ShellCon
 void paint_bluetooth_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::string_view instance_id,
                           double x, double y, double slot_w, double slot_h, double icon_ref_px,
                           bool hovered, bool pressed) {
-  (void)hovered; (void)pressed;
   const double us = dock_ui_scale(sc.dock);
   const bool show_label = parse_bool_setting(widget_setting(sc, instance_id, "show_label"), false);
 
@@ -578,6 +551,12 @@ void paint_bluetooth_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::s
 
   cairo_save(cr);
   slot_pill_style::paint_pill(cr, x, y, slot_w, slot_h);
+  if (hovered || pressed) {
+    eh::shell::shared::rounded_rect(cr, x, y, slot_w, slot_h,
+                                     slot_pill_style::corner_radius(slot_h, slot_w));
+    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, pressed ? 0.14 : 0.08);
+    cairo_fill(cr);
+  }
 
   const SlotLabel lbl = make_slot_label(bt, st.devices);
   if (lbl.kind == SlotLabel::Kind::None || !show_label) {
@@ -587,7 +566,6 @@ void paint_bluetooth_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::s
     return;
   }
 
-  // Label text (count, or lowest connected-device battery %).
   const double font_px = std::clamp(icon_ref_px * 0.38, 11.0 * us, 15.0 * us);
   int tw = 0, th = 0;
   const std::string pbtkid(instance_id);
@@ -653,53 +631,32 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
   const double W = static_cast<double>(kBluetoothPopupW);
   const double H = popup_height_for_state(bt, devs);
   const auto& mc = eh::config::derived_chrome_colors(sc.appearance);
-  const double shellOv = static_cast<double>(
-      eh::config::overlay_surface_alpha_scale(sc, eh::config::OverlaySurfaceAlphaKind::Weather));
   const double us = dock_ui_scale(sc.dock);
   const double pad = 16.0 * us;
-  const double kCornerRadius = 14.0 * us;
+  const double kCornerRadius = 20.0 * us;
   const double kShadOffX = 2.0 * us, kShadOffY = 4.0 * us;
   constexpr double kShadAlpha = 0.28;
   const double px = pointerX, py = pointerY;
 
   const PopupLayout L = build_popup_layout(bt, devs, us, W, H);
 
-  auto round_rect = [&](double x, double y, double w, double h, double r) {
-    const double rad = std::min({r, w * 0.5, h * 0.5});
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, x + w - rad, y + rad, rad, -M_PI_2, 0);
-    cairo_arc(cr, x + w - rad, y + h - rad, rad, 0, M_PI_2);
-    cairo_arc(cr, x + rad, y + h - rad, rad, M_PI_2, M_PI);
-    cairo_arc(cr, x + rad, y + rad, rad, M_PI, 3 * M_PI_2);
-    cairo_close_path(cr);
-  };
 
-  // Shadow
   cairo_save(cr);
-  round_rect(kShadOffX, kShadOffY, W, H, kCornerRadius);
+  eh::shell::shared::rounded_rect(cr, kShadOffX, kShadOffY, W, H, kCornerRadius);
   cairo_set_source_rgba(cr, 0, 0, 0, kShadAlpha);
   cairo_fill(cr);
   cairo_restore(cr);
 
-  // Glass background
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(mc.dockFillR * 0.35), static_cast<float>(mc.dockFillG * 0.35),
-                 static_cast<float>(mc.dockFillB * 0.35), static_cast<float>(0.78 * shellOv));
-    box.setRadius(static_cast<float>(kCornerRadius));
-    box.setGeometry(0, 0, static_cast<float>(W), static_cast<float>(H));
-    box.setGlassy(true);
-    box.paint(cr);
-  }
-  round_rect(0.5, 0.5, W - 1.0, H - 1.0, kCornerRadius);
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
+  eh::shell::shared::rounded_rect(cr, 0, 0, W, H, kCornerRadius);
+  cairo_set_source_rgba(cr, mc.dockFillR * 0.30, mc.dockFillG * 0.30, mc.dockFillB * 0.30,
+                        0.92 * sc.appearance.overlayOpacityWidgetCard);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.14);
   cairo_set_line_width(cr, 1.0);
   cairo_stroke(cr);
 
-  // ── Header ─────────────────────────────────────────────────────────────
-  // Icon tile
   const bool powered = bt.available && bt.powered;
-  round_rect(L.iconTile.x, L.iconTile.y, L.iconTile.w, L.iconTile.h, 10.0 * us);
+  eh::shell::shared::rounded_rect(cr, L.iconTile.x, L.iconTile.y, L.iconTile.w, L.iconTile.h, 10.0 * us);
   if (powered) {
     cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.18);
   } else {
@@ -719,7 +676,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
     }
   }
 
-  // Title
   cairo_set_source_rgba(cr, mc.textR, mc.textG, mc.textB, 0.95);
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
   cairo_set_font_size(cr, 15.0 * us);
@@ -727,18 +683,16 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
                 L.header.y + L.header.h * 0.5 + 5.5 * us);
   cairo_show_text(cr, "Bluetooth");
 
-  // Close button
   const bool close_hov = L.closeBtn.contains(px, py);
-  round_rect(L.closeBtn.x, L.closeBtn.y, L.closeBtn.w, L.closeBtn.h, 7.0 * us);
+  eh::shell::shared::rounded_rect(cr, L.closeBtn.x, L.closeBtn.y, L.closeBtn.w, L.closeBtn.h, 7.0 * us);
   cairo_set_source_rgba(cr, 0.3, 0.3, 0.35, close_hov ? 0.70 : 0.35);
   cairo_fill(cr);
   eh::shell::draw_material_glyph(cr, L.closeBtn.x + L.closeBtn.w * 0.5, L.closeBtn.y + L.closeBtn.h * 0.5,
                                  14.0 * us, "close", mc.textR, mc.textG, mc.textB, close_hov ? 1.0 : 0.85);
 
-  // Power toggle (only meaningful when an adapter exists)
   if (bt.available) {
     const bool tog_hov = L.toggle.contains(px, py);
-    round_rect(L.toggle.x, L.toggle.y, L.toggle.w, L.toggle.h, L.toggle.h * 0.5);
+    eh::shell::shared::rounded_rect(cr, L.toggle.x, L.toggle.y, L.toggle.w, L.toggle.h, L.toggle.h * 0.5);
     if (bt.powered) {
       cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, tog_hov ? 1.0 : 0.85);
     } else {
@@ -746,7 +700,7 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
     }
     cairo_fill(cr);
     if (!bt.powered) {
-      round_rect(L.toggle.x + 0.5, L.toggle.y + 0.5, L.toggle.w - 1.0, L.toggle.h - 1.0,
+      eh::shell::shared::rounded_rect(cr, L.toggle.x + 0.5, L.toggle.y + 0.5, L.toggle.w - 1.0, L.toggle.h - 1.0,
                  L.toggle.h * 0.5 - 0.5);
       cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.6);
       cairo_set_line_width(cr, 1.0);
@@ -759,7 +713,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
     cairo_fill(cr);
   }
 
-  // ── Status line ────────────────────────────────────────────────────────
   {
     char status_buf[64];
     const char* status = nullptr;
@@ -783,7 +736,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
     cairo_show_text(cr, status);
   }
 
-  // ── Divider under status ───────────────────────────────────────────────
   if (L.shown > 0) {
     const double dy = L.status.y + L.status.h;
     cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.16);
@@ -793,7 +745,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
     cairo_stroke(cr);
   }
 
-  // ── Device rows ────────────────────────────────────────────────────────
   if (L.shown > 0) {
     cairo_save(cr);
     cairo_rectangle(cr, L.items.front().body.x, L.items.front().body.y, L.items.front().body.w,
@@ -813,15 +764,17 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
       const PopupItem& r = item;
       const bool row_hov = r.body.contains(px, py);
 
-      // Row hover background
-      if (row_hov) {
-        round_rect(r.body.x, r.body.y, r.body.w, r.body.h, 10.0 * us);
-        cairo_set_source_rgba(cr, 1, 1, 1, 0.07);
+      if (d.connected || row_hov) {
+        eh::shell::shared::rounded_rect(cr, r.body.x, r.body.y, r.body.w, r.body.h, 10.0 * us);
+        if (d.connected) {
+          cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.14);
+        } else {
+          cairo_set_source_rgba(cr, 1, 1, 1, 0.07);
+        }
         cairo_fill(cr);
       }
 
-      // Kind icon tile
-      round_rect(r.tile.x, r.tile.y, r.tile.w, r.tile.h, 9.0 * us);
+      eh::shell::shared::rounded_rect(cr, r.tile.x, r.tile.y, r.tile.w, r.tile.h, 9.0 * us);
       if (d.connected) {
         cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, 0.20);
       } else {
@@ -838,7 +791,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
       eh::shell::draw_material_glyph(cr, r.tile.x + r.tile.w * 0.5, r.tile.y + r.tile.h * 0.5, 16.0 * us,
                                      eh::bt::bluetooth_device_kind_glyph(d.kind), gr, gg, gb, 0.95);
 
-      // Name + subtitle.
       const std::string& label = d.alias.empty() ? d.address : d.alias;
       double textRight = W - pad;
       if (r.battery.w > 0) { textRight = r.battery.x; }
@@ -850,7 +802,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
       constexpr double kSubFontPx = 11.0;
       const double lineGap = 4.0 * us;
 
-      // Name (13px Medium) — single line, ellipsized.
       PangoLayout* pl = pango_cairo_create_layout(cr);
       PangoFontDescription* pdesc = pango_font_description_from_string(
           ("Inter Medium " + std::to_string(static_cast<int>(kNameFontPx * us))).c_str());
@@ -862,7 +813,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
       PangoRectangle nameInk{};
       pango_layout_get_pixel_extents(pl, &nameInk, nullptr);
 
-      // Subtitle (11px) — sits below the name with a clear gap.
       const char* sub = d.connected ? "Connected" : (d.connecting ? "Connecting…"
                                   : (d.paired ? "Paired" : "Not paired"));
       PangoLayout* spl = pango_cairo_create_layout(cr);
@@ -899,7 +849,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
       g_object_unref(spl);
       g_object_unref(pl);
 
-      // Battery (right-aligned glyph + %)
       if (r.battery.w > 0 && d.has_battery) {
         char bbuf[8];
         std::snprintf(bbuf, sizeof(bbuf), "%d%%", static_cast<int>(d.battery_percent));
@@ -920,11 +869,10 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
         cairo_show_text(cr, bbuf);
       }
 
-      // Action pill
       {
         const char* action_label = d.connected ? "Disconnect" : (d.paired ? "Connect" : "Pair");
         const bool act_hov = r.action.contains(px, py);
-        round_rect(r.action.x, r.action.y, r.action.w, r.action.h, r.action.h * 0.5);
+        eh::shell::shared::rounded_rect(cr, r.action.x, r.action.y, r.action.w, r.action.h, r.action.h * 0.5);
         if (d.connected) {
           cairo_set_source_rgba(cr, mc.accentR, mc.accentG, mc.accentB, act_hov ? 1.0 : 0.88);
         } else {
@@ -946,10 +894,9 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
         cairo_show_text(cr, action_label);
       }
 
-      // Forget ghost button
       if (r.forget.w > 0) {
         const bool fog_hov = r.forget.contains(px, py);
-        round_rect(r.forget.x, r.forget.y, r.forget.w, r.forget.h, 6.0 * us);
+        eh::shell::shared::rounded_rect(cr, r.forget.x, r.forget.y, r.forget.w, r.forget.h, 6.0 * us);
         cairo_set_source_rgba(cr, fog_hov ? 0.90 : 0.55, fog_hov ? 0.35 : 0.55,
                               fog_hov ? 0.30 : 0.60, fog_hov ? 0.30 : 0.10);
         cairo_fill(cr);
@@ -959,7 +906,6 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
     }
     cairo_restore(cr);
 
-    // Divider above footer
     const double dy = L.items.back().body.y + L.items.back().body.h;
     cairo_set_source_rgba(cr, mc.outlineR, mc.outlineG, mc.outlineB, 0.16);
     cairo_set_line_width(cr, 1.0);
@@ -968,10 +914,9 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
     cairo_stroke(cr);
   }
 
-  // ── Scan button ────────────────────────────────────────────────────────
   if (L.scan.w > 0) {
     const bool scan_hov = L.scan.contains(px, py);
-    round_rect(L.scan.x, L.scan.y, L.scan.w, L.scan.h, L.scan.h * 0.5);
+    eh::shell::shared::rounded_rect(cr, L.scan.x, L.scan.y, L.scan.w, L.scan.h, L.scan.h * 0.5);
     if (bt.scanning) {
       cairo_set_source_rgba(cr, 0.85, 0.27, 0.22, scan_hov ? 1.0 : 0.85);
     } else {
@@ -997,7 +942,7 @@ void dock_bluetooth_popup_paint(double pointerX, double pointerY, cairo_t* cr, c
   }
 }
 
-void dock_bluetooth_popup_handle_click(::DockApp& app, double x, double y, uint32_t serial) {
+BluetoothPopupClick bluetooth_popup_click_action(double x, double y) {
   eh::bt::FullState state;
   const bool debug = debug_full_state().has_value();
   if (auto dbg = debug_full_state()) {
@@ -1013,27 +958,17 @@ void dock_bluetooth_popup_handle_click(::DockApp& app, double x, double y, uint3
   const double H = popup_height_for_state(bt, devs);
   const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
 
-  if (x < 0 || x >= W || y < 0 || y >= H) {
-    popup_close(app);
-    return;
-  }
+  if (x < 0 || x >= W || y < 0 || y >= H) return BluetoothPopupClick::Close;
 
   const PopupLayout L = build_popup_layout(bt, devs, us, W, H);
 
-  // Close
-  if (L.closeBtn.contains(x, y)) {
-    popup_close(app);
-    return;
-  }
+  if (L.closeBtn.contains(x, y)) return BluetoothPopupClick::Close;
 
-  // Power toggle — resize the popup afterwards since the layout changes.
   if (bt.available && L.toggle.contains(x, y)) {
     if (!debug) eh::bt::BluezService::instance().set_powered(!bt.powered);
-    popup_open_bluetooth(app, app.popupAnchorX, serial);
-    return;
+    return BluetoothPopupClick::Reopen;
   }
 
-  // Device rows
   for (const auto& item : L.items) {
     if (item.header) continue;
     const auto& d = *item.dev;
@@ -1041,8 +976,7 @@ void dock_bluetooth_popup_handle_click(::DockApp& app, double x, double y, uint3
 
     if (r.forget.w > 0 && r.forget.contains(x, y)) {
       if (!debug) eh::bt::BluezService::instance().forget_device(d.path);
-      popup_draw_surface(app);
-      return;
+      return BluetoothPopupClick::Redraw;
     }
     if (r.action.contains(x, y)) {
       if (!debug) {
@@ -1054,12 +988,10 @@ void dock_bluetooth_popup_handle_click(::DockApp& app, double x, double y, uint3
           eh::bt::BluezService::instance().pair_device(d.path);
         }
       }
-      popup_draw_surface(app);
-      return;
+      return BluetoothPopupClick::Redraw;
     }
   }
 
-  // Scan
   if (L.scan.w > 0 && L.scan.contains(x, y)) {
     if (!debug) {
       if (bt.scanning) {
@@ -1068,9 +1000,17 @@ void dock_bluetooth_popup_handle_click(::DockApp& app, double x, double y, uint3
         eh::bt::BluezService::instance().start_discovery();
       }
     }
-    // Reopen the popup to accommodate new devices / height changes.
-    popup_open_bluetooth(app, app.popupAnchorX, serial);
-    return;
+    return BluetoothPopupClick::Reopen;
+  }
+  return BluetoothPopupClick::None;
+}
+
+void dock_bluetooth_popup_handle_click(::DockApp& app, double x, double y, uint32_t serial) {
+  switch (bluetooth_popup_click_action(x, y)) {
+    case BluetoothPopupClick::Close: popup_close(app); break;
+    case BluetoothPopupClick::Redraw: popup_draw_surface(app); break;
+    case BluetoothPopupClick::Reopen: popup_open_bluetooth(app, app.popupAnchorX, serial); break;
+    case BluetoothPopupClick::None: break;
   }
 }
 
