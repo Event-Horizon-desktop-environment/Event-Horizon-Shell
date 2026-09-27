@@ -15,7 +15,6 @@ Compositor detection happens at startup in `src/desktop_shell/unified/compositor
 | Sway | `SWAYSOCK` |
 | Mango | `MANGO_SOCKET` |
 | Labwc | `LABWC_PID` |
-| Triad | `TRIAD_SOCKET` |
 
 Fallback: `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION` env vars.
 
@@ -25,11 +24,11 @@ Defined in `src/desktop_shell/unified/compositor_kind.hpp`:
 
 ```cpp
 enum class CompositorKind : uint8_t {
-  Unknown, Niri, Hyprland, Sway, Mango, Labwc, Triad
+  Unknown, Niri, Hyprland, Sway, Mango, Labwc
 };
 ```
 
-Free functions: `detect_compositor_kind()`, `compositor_kind_cstr()`, `compositor_env_hint()`, `is_niri()`, `is_hyprland()`, `is_sway()`, `is_mango()`, `is_labwc()`, `is_triad()`.
+Free functions: `detect_compositor_kind()`, `compositor_kind_cstr()`, `compositor_env_hint()`, `is_niri()`, `is_hyprland()`, `is_sway()`, `is_mango()`, `is_labwc()`.
 
 ---
 
@@ -104,15 +103,6 @@ Free functions: `detect_compositor_kind()`, `compositor_kind_cstr()`, `composito
 | `sway_keyboard_backend.cpp` / `sway_keyboard_backend.h` | Keyboard layout via `swaymsg -t get_inputs`. |
 | `sway_output_backend.cpp` / `sway_output_backend.h` | Output configuration via `swaymsg -t get_outputs`. |
 | `sway_workspace_backend.cpp` / `sway_workspace_backend.h` | Workspace tracking via `swaymsg -t get_workspaces` + subscribe events. |
-
-### Triad Backend (`triad/`)
-
-| File | Description |
-|---|---|
-| `triad_runtime.cpp` / `triad_runtime.h` | Custom `dwl-ipc-unstable-v2` protocol connection for Triad compositor. `TriadRuntime` class. |
-| `triad_keyboard_backend.cpp` / `triad_keyboard_backend.h` | Uses Wayland virtual keyboard protocol directly. |
-| `triad_output_backend.cpp` / `triad_output_backend.h` | Output geometry from `dwl-ipc-unstable-v2` events. |
-| `triad_workspace_backend.cpp` / `triad_workspace_backend.h` | Workspace tracking via `dwl-ipc-unstable-v2` tags/workspace protocol. |
 
 ### Mango Backend (`mango/`)
 

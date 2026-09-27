@@ -1,5 +1,7 @@
 #include "dialog/file_chooser_dialog.hpp"
+#include "ux/settings/settings_tab_monitors/monitors_log.hpp"
 
+#include <chrono>
 #include <fcntl.h>
 #include <spawn.h>
 #include <unistd.h>
@@ -300,15 +302,19 @@ static void monitors_canvas_transform(const App& app, const eh::settings_monitor
   *sf_out = fit_scale * app.monitorsCanvasZoom;
 }
 
-static bool monitors_canvas_screen_rect(const App& app, const eh::settings_monitors_tab::MonitorsTabLayout& lay,
+[[maybe_unused]] static bool monitors_canvas_screen_rect(const App& app, const eh::settings_monitors_tab::MonitorsTabLayout& lay,
                                         size_t idx, double* sx, double* sy, double* sw, double* sh) {
+  // OPTIMIZED: single layout_rects + single fit (was 2x layout_rects per call
+  // via monitors_canvas_transform).
   std::vector<eh::settings_monitors_tab::ArrangeRect> rects;
   eh::settings_monitors_tab::layout_rects_from_outputs(app.monitorsTab.outputs, app.monitorsTab.caps, &rects);
-  if (idx >= rects.size()) return false;
+  if (idx >= rects.size() || idx >= app.monitorsTab.outputs.size()) return false;
   const auto& r = rects[idx];
   if (app.monitorsTab.outputs[idx].disabled || r.w <= 0) return false;
-  double min_x = 0, min_y = 0, sf = 1;
-  monitors_canvas_transform(app, lay, &min_x, &min_y, &sf);
+  double min_x = 0, min_y = 0, span_w = 1, span_h = 1, fit_scale = 1;
+  eh::settings_monitors_tab::compute_canvas_fit(rects, lay.canvas_w, lay.canvas_h, 0.1, &min_x, &min_y,
+                                                &span_w, &span_h, &fit_scale);
+  const double sf = fit_scale * app.monitorsCanvasZoom;
   *sx = static_cast<double>(lay.canvas_x) + app.monitorsCanvasPanX + (static_cast<double>(r.x) - min_x) * sf;
   *sy = static_cast<double>(lay.canvas_y) + app.monitorsCanvasPanY + (static_cast<double>(r.y) - min_y) * sf;
   *sw = static_cast<double>(r.w) * sf;
@@ -321,9 +327,26 @@ static int monitors_canvas_hit_monitor(App& app, const eh::settings_monitors_tab
   if (px < lay.canvas_x || pyLogical < lay.canvas_y || px >= lay.canvas_x + lay.canvas_w ||
       pyLogical >= lay.canvas_y + lay.canvas_h)
     return -1;
+  // OPTIMIZED: was O(N) screen_rect calls each recomputing layout_rects+fit
+  // (O(N^2) string parses per hit-test). Now 1x layout_rects + 1x fit total.
+  std::vector<eh::settings_monitors_tab::ArrangeRect> rects;
+  eh::settings_monitors_tab::layout_rects_from_outputs(app.monitorsTab.outputs, app.monitorsTab.caps, &rects);
+  double min_x = 0, min_y = 0, span_w = 1, span_h = 1, fit_scale = 1;
+  eh::settings_monitors_tab::compute_canvas_fit(rects, lay.canvas_w, lay.canvas_h, 0.1, &min_x, &min_y,
+                                                &span_w, &span_h, &fit_scale);
+  const double sf = fit_scale * app.monitorsCanvasZoom;
   for (int i = static_cast<int>(app.monitorsTab.outputs.size()) - 1; i >= 0; --i) {
-    double sx = 0, sy = 0, sw = 0, sh = 0;
-    if (!monitors_canvas_screen_rect(app, lay, static_cast<size_t>(i), &sx, &sy, &sw, &sh)) continue;
+    const size_t u = static_cast<size_t>(i);
+    if (u >= rects.size()) continue;
+    const auto& r = rects[u];
+    if (app.monitorsTab.outputs[u].disabled || r.w <= 0) continue;
+    const double sx =
+        static_cast<double>(lay.canvas_x) + app.monitorsCanvasPanX + (static_cast<double>(r.x) - min_x) * sf;
+    const double sy =
+        static_cast<double>(lay.canvas_y) + app.monitorsCanvasPanY + (static_cast<double>(r.y) - min_y) * sf;
+    const double sw = static_cast<double>(r.w) * sf;
+    const double sh = static_cast<double>(r.h) * sf;
+    if (sw <= 1 || sh <= 1) continue;
     if (px >= sx && px < sx + sw && pyLogical >= sy && pyLogical < sy + sh) return i;
   }
   return -1;
@@ -519,6 +542,7 @@ static void monitors_apply_hypr_extra_drag(App& app, eh::settings_monitors::Moni
 
 inline void monitors_wheel_zoom_canvas(App& app, const eh::settings_monitors_tab::MonitorsTabLayout& lay,
                                        double delta_px) {
+  const auto t0 = std::chrono::steady_clock::now();
   double min_x = 0, min_y = 0, sf_old = 1;
   monitors_canvas_transform(app, lay, &min_x, &min_y, &sf_old);
   const double fit = sf_old / std::max(app.monitorsCanvasZoom, 1e-9);
@@ -535,9 +559,16 @@ inline void monitors_wheel_zoom_canvas(App& app, const eh::settings_monitors_tab
   const double sf_new = fit * znew;
   app.monitorsCanvasPanX = px - wx * sf_new;
   app.monitorsCanvasPanY = py - wy * sf_new;
+  eh::settings::monitors_log::mon_cause_set("zoom");
+  eh::settings::monitors_log::MonitorsLog::instance().writef(
+      "canvas zoom delta=%.0f zoom=%.2f->%.2f handler=%lldus", delta_px, sf_old / std::max(fit, 1e-9),
+      znew, eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now()));
 }
 
 inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int contentW) {
+  using ML = eh::settings::monitors_log::MonitorsLog;
+  using MC = std::chrono::steady_clock;
+  const auto t_ev0 = MC::now();
   const double pyLogical = app.pointerY + settings_scroll_px(app);
   eh::settings_monitors_tab::MonitorsTabLayout lay{};
   eh::settings_monitors_tab::compute_monitors_tab_layout(contentX, contentW, kContentTop, settings_content_viewport_h(app),
@@ -545,51 +576,88 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
 
   if (point_in_rect(app.pointerX, pyLogical, lay.toolbar_refresh_x, lay.toolbar_y, lay.toolbar_btn_w,
                     lay.toolbar_btn_h)) {
+    const auto t0 = MC::now();
     app.monitorsCanvasLayoutReady = false;
     app.monitorsCanvasZoom = 1.0;
     app.monitorsTab.refresh_from_system();
     monitors_clamp_selected(app);
     settings_clamp_monitors_scroll_px(app);
     draw(app);
+    ML::instance().writef("button Refresh nOut=%zu dirty=%d handler=%lldus",
+                          app.monitorsTab.outputs.size(), app.monitorsTab.dirty ? 1 : 0,
+                          eh::settings::monitors_log::mon_us(t0, MC::now()));
+    eh::settings::monitors_log::mon_cause_set("press:Refresh");
+    (void)t_ev0;
     return true;
   }
   if (point_in_rect(app.pointerX, pyLogical, lay.toolbar_portals_x, lay.toolbar_y, lay.toolbar_portals_w,
                     lay.toolbar_btn_h)) {
+    const auto t0 = MC::now();
     monitors_restart_portals();
     app.monitorsTab.status = "Restarted xdg-desktop-portal + xdg-desktop-portal-hyprland";
     settings_clamp_monitors_scroll_px(app);
     draw(app);
+    ML::instance().writef("button Restart-portals handler=%lldus status=set",
+                          eh::settings::monitors_log::mon_us(t0, MC::now()));
+    eh::settings::monitors_log::mon_cause_set("press:Portals");
+    (void)t_ev0;
     return true;
   }
   const bool dirty = app.monitorsTab.dirty;
   if (point_in_rect(app.pointerX, pyLogical, lay.toolbar_apply_x, lay.toolbar_y, lay.toolbar_btn_w,
                     lay.toolbar_btn_h)) {
+    const auto t0 = MC::now();
+    bool ok = true;
+    std::string err;
     if (dirty) {
-      std::string err;
-      if (!app.monitorsTab.save_and_reload(err) && !err.empty()) app.monitorsTab.status = err;
+      ok = app.monitorsTab.save_and_reload(err);
+      if (!ok && !err.empty()) app.monitorsTab.status = err;
     }
     settings_clamp_monitors_scroll_px(app);
     draw(app);
+    ML::instance().writef("button Apply dirty=%d ok=%d nOut=%zu handler=%lldus %s", dirty ? 1 : 0,
+                          ok ? 1 : 0, app.monitorsTab.outputs.size(),
+                          eh::settings::monitors_log::mon_us(t0, MC::now()),
+                          err.empty() ? "" : err.c_str());
+    eh::settings::monitors_log::mon_cause_set("press:Apply");
+    (void)t_ev0;
     return true;
   }
   if (point_in_rect(app.pointerX, pyLogical, lay.toolbar_revert_x, lay.toolbar_y, lay.toolbar_btn_w,
                     lay.toolbar_btn_h)) {
+    const auto t0 = MC::now();
     if (dirty) app.monitorsTab.revert_edits();
     monitors_clamp_selected(app);
     settings_clamp_monitors_scroll_px(app);
     draw(app);
+    ML::instance().writef("button Revert dirty=%d handler=%lldus", dirty ? 1 : 0,
+                          eh::settings::monitors_log::mon_us(t0, MC::now()));
+    eh::settings::monitors_log::mon_cause_set("press:Revert");
+    (void)t_ev0;
     return true;
   }
 
   if (point_in_rect(app.pointerX, pyLogical, lay.center_btn_x, lay.aux_btn_y, lay.aux_btn_w, lay.aux_btn_h)) {
+    const auto t0 = MC::now();
     monitors_center_canvas_view(app, lay);
     draw(app);
+    ML::instance().writef("button Center-view handler=%lldus zoom=%.2f pan=%.0f,%.0f",
+                          eh::settings::monitors_log::mon_us(t0, MC::now()), app.monitorsCanvasZoom,
+                          app.monitorsCanvasPanX, app.monitorsCanvasPanY);
+    eh::settings::monitors_log::mon_cause_set("press:Center");
+    (void)t_ev0;
     return true;
   }
   if (point_in_rect(app.pointerX, pyLogical, lay.align_top_btn_x, lay.aux_btn_y, lay.aux_btn_w, lay.aux_btn_h)) {
+    const auto t0 = MC::now();
     eh::settings_monitors_tab::align_all_tops(app.monitorsTab.outputs, app.monitorsTab.caps);
     app.monitorsTab.dirty = true;
     draw(app);
+    ML::instance().writef("button Align-top nOut=%zu handler=%lldus",
+                          app.monitorsTab.outputs.size(),
+                          eh::settings::monitors_log::mon_us(t0, MC::now()));
+    eh::settings::monitors_log::mon_cause_set("press:Align");
+    (void)t_ev0;
     return true;
   }
 
@@ -635,6 +703,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         monitors_dd_popup_list_doc_top_y(cy, ch, nrows, settings_scroll_px_int(app), app.height);
 
     if (nrows > 0 && point_in_rect(app.pointerX, pyLogical, cx, ly, cw, nrows * kSettingsDdRowH)) {
+      const auto t0 = MC::now();
+      const int ddKind = app.monitorsActiveDd;
       const int rr = settings_mode_dd_pointer_row(app.pointerX, pyLogical, cx, ly, cw, kSettingsDdRowH, nrows);
       if (rr >= 0) {
         if (app.monitorsActiveDd == 0)
@@ -658,9 +728,24 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         } else if (app.monitorsActiveDd == 8)
           monitors_set_sdr_eotf_ix(app, su, rr);
       }
+      static const char* kDdNames[9] = {"Resolution", "Refresh", "Transform", "Bitdepth",
+                                        "VRR",      "ColorMgmt", "HDRsup",    "Wide",
+                                        "EOTF"};
+      const char* ddName = (ddKind >= 0 && ddKind < 9) ? kDdNames[ddKind] : "?";
+      ML::instance().writef("dropdown pick %s out=%s row=%d nrows=%d handler=%lldus", ddName,
+                            row.name.c_str(), rr, nrows,
+                            eh::settings::monitors_log::mon_us(t0, MC::now()));
       app.monitorsActiveDd = -1;
       draw(app);
       return true;
+    }
+    {
+      static const char* kDdNames2[9] = {"Resolution", "Refresh", "Transform", "Bitdepth",
+                                         "VRR",      "ColorMgmt", "HDRsup",    "Wide",
+                                         "EOTF"};
+      const int ddK = app.monitorsActiveDd;
+      const char* ddN = (ddK >= 0 && ddK < 9) ? kDdNames2[ddK] : "?";
+      ML::instance().writef("dropdown dismiss %s out=%s", ddN, row.name.c_str());
     }
     app.monitorsActiveDd = -1;
     draw(app);
@@ -682,6 +767,10 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
     app.monitorsCanvasPressLogicalX = app.pointerX;
     app.monitorsCanvasPressLogicalY = pyLogical;
     app.monitorsCanvasPanArmed = false;
+    ML::instance().writef("canvas select mon=%d name=%s anchor=%dx%d", hitMon,
+                          app.monitorsTab.outputs[static_cast<size_t>(hitMon)].name.c_str(), ax,
+                          ay);
+    eh::settings::monitors_log::mon_cause_set("press:Canvas");
     draw(app);
     return true;
   }
@@ -691,6 +780,7 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
     app.monitorsCanvasPanGrabX = app.pointerX - app.monitorsCanvasPanX;
     app.monitorsCanvasPanGrabY = pyLogical - app.monitorsCanvasPanY;
     app.monitorsCanvasDragIdx = -1;
+    ML::instance().writef("canvas pan-arm x=%.0f y=%.0f", app.pointerX, pyLogical);
     return true;
   }
 
@@ -701,6 +791,7 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
     const int pillW = static_cast<int>(nm.size()) * 8 + 24;
     if (point_in_rect(app.pointerX, pyLogical, px, pillY, pillW, kMonPillH)) {
       app.monitorsSelectedIdx = static_cast<int>(i);
+      ML::instance().writef("pill select idx=%zu name=%s", i, nm.c_str());
       draw(app);
       return true;
     }
@@ -724,6 +815,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
       if (point_in_rect(app.pointerX, pyLogical, swX, swY, swW, swH)) {
         row.disabled = !row.disabled;
         app.monitorsTab.dirty = true;
+        ML::instance().writef("toggle enable out=%s disabled=%d", row.name.c_str(),
+                              row.disabled ? 1 : 0);
         draw(app);
         return true;
       }
@@ -733,6 +826,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
       if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
         app.monitorsActiveDd = 0;
         app.monitorsDdHoverRow = -1;
+        ML::instance().writef("combo open Resolution out=%s cur=%s", row.name.c_str(),
+                              row.resolution.c_str());
         draw(app);
         return true;
       }
@@ -740,6 +835,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
       if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
         app.monitorsActiveDd = 1;
         app.monitorsDdHoverRow = -1;
+        ML::instance().writef("combo open Refresh out=%s cur=%s", row.name.c_str(),
+                              row.refresh_rate.c_str());
         draw(app);
         return true;
       }
@@ -748,6 +845,7 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
           app.monitorsActiveDd = 4;
           app.monitorsDdHoverRow = -1;
+          ML::instance().writef("combo open VRR out=%s cur=%s", row.name.c_str(), row.vrr.c_str());
           draw(app);
           return true;
         }
@@ -755,8 +853,14 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
       int trX = 0, trY = 0, trW = 0;
       monitors_form_scale_track_geom(app, lay, contentX, contentW, &trX, &trY, &trW);
       if (point_in_rect(app.pointerX, pyLogical, trX - 6, trY, trW + 12, 28)) {
+        const auto t0 = MC::now();
         app.monitorsScaleSliderDragIdx = app.monitorsSelectedIdx;
         monitors_apply_form_scale_drag(app, app.pointerX, lay, contentX, contentW);
+        ML::instance().writef("slider Scale out=%s scale=%s handler=%lldus", row.name.c_str(),
+                              row.scale.c_str(),
+                              eh::settings::monitors_log::mon_us(t0, MC::now()));
+        eh::settings::monitors_log::slider_drag_begin(true, -1, row.name.c_str());
+        eh::settings::monitors_log::mon_cause_set("press:Slider");
         draw(app);
         return true;
       }
@@ -764,6 +868,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
       if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
         app.monitorsActiveDd = 2;
         app.monitorsDdHoverRow = -1;
+        ML::instance().writef("combo open Transform out=%s cur=%s", row.name.c_str(),
+                              row.transform.c_str());
         draw(app);
         return true;
       }
@@ -772,6 +878,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
           app.monitorsActiveDd = 3;
           app.monitorsDdHoverRow = -1;
+          ML::instance().writef("combo open Bitdepth out=%s cur=%s", row.name.c_str(),
+                                row.bitdepth.c_str());
           draw(app);
           return true;
         }
@@ -781,6 +889,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
           app.monitorsActiveDd = 5;
           app.monitorsDdHoverRow = -1;
+          ML::instance().writef("combo open ColorMgmt out=%s cur=%s", row.name.c_str(),
+                                row.cm.c_str());
           draw(app);
           return true;
         }
@@ -800,6 +910,7 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         const int pathW = valW - browseW - clearW - kGap - clearGap;
         const int browseX = valX + pathW + kGap;
         if (point_in_rect(app.pointerX, pyLogical, browseX, elY, browseW, kSettingsComboH)) {
+          const auto t0 = MC::now();
           std::string filePath;
           {
             using namespace eh::dialog;
@@ -815,6 +926,9 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
             row.icc = filePath;
             app.monitorsTab.dirty = true;
           }
+          ML::instance().writef("button ICC-Browse out=%s picked=%s handler=%lldus",
+                                row.name.c_str(), filePath.c_str(),
+                                eh::settings::monitors_log::mon_us(t0, MC::now()));
           draw(app);
           return true;
         }
@@ -823,6 +937,7 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
           if (point_in_rect(app.pointerX, pyLogical, clearX, elY, clearW, kSettingsComboH)) {
             row.icc.clear();
             app.monitorsTab.dirty = true;
+            ML::instance().writef("button ICC-Clear out=%s", row.name.c_str());
             draw(app);
             return true;
           }
@@ -835,6 +950,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
           if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
             app.monitorsActiveDd = 6;
             app.monitorsDdHoverRow = -1;
+            ML::instance().writef("combo open HDRsupport out=%s cur=%s", row.name.c_str(),
+                                  row.supports_hdr.c_str());
             draw(app);
             return true;
           }
@@ -843,6 +960,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
           app.monitorsActiveDd = 7;
           app.monitorsDdHoverRow = -1;
+          ML::instance().writef("combo open Wide out=%s cur=%s", row.name.c_str(),
+                                row.supports_wide_color.c_str());
           draw(app);
           return true;
         }
@@ -850,6 +969,8 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
         if (point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch)) {
           app.monitorsActiveDd = 8;
           app.monitorsDdHoverRow = -1;
+          ML::instance().writef("combo open EOTF out=%s cur=%s", row.name.c_str(),
+                                row.sdr_eotf.c_str());
           draw(app);
           return true;
         }
@@ -864,13 +985,21 @@ inline bool settings_monitors_consume_pointer_down(App& app, int contentX, int c
                            {&g.luminance, fr.l_min, 4},
                            {&g.luminance, fr.l_max, 5},
                            {&g.luminance, fr.l_avg, 6}};
+        static const char* kHyprNames[7] = {"SDRbright", "SDRsat",  "SDRmin", "SDRmax",
+                                            "HDRmin",    "HDRmax",  "HDRavg"};
         for (const auto& hs : hyprSliders) {
           if (hs.row < 0) continue;
           monitors_form_slider_track_geom_content(hs.sec->content_y0, hs.sec->x, hs.sec->w, hs.row, &trX, &trY, &trW);
           if (point_in_rect(app.pointerX, pyLogical, trX - 6, trY, trW + 12, 28)) {
+            const auto t0 = MC::now();
             app.monitorsHyprExtraSlider = hs.kind;
             monitors_apply_hypr_extra_drag(app, &row, hs.kind, app.pointerX, trX, trW);
             app.monitorsTab.dirty = true;
+            const char* hn = (hs.kind >= 0 && hs.kind < 7) ? kHyprNames[hs.kind] : "?";
+            ML::instance().writef("slider %s out=%s kind=%d handler=%lldus", hn, row.name.c_str(),
+                                  hs.kind, eh::settings::monitors_log::mon_us(t0, MC::now()));
+            eh::settings::monitors_log::slider_drag_begin(false, hs.kind, row.name.c_str());
+            eh::settings::monitors_log::mon_cause_set("press:Slider");
             draw(app);
             return true;
           }

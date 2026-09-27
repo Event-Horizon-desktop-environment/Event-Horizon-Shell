@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -25,7 +26,6 @@
 #include "wl/surface/surface_extensions.hpp"
 
 #include "desktop_shell/controlcenter/state/control_center_state.hpp"
-#include "desktop_shell/dashboard/dashboard_types.hpp"
 #include "desktop_shell/common/fs/file_util.hpp"
 #include "desktop_shell/common/asset/asset_loader.hpp"
 #include "desktop_shell/shared/layout/strip_geometry.hpp"
@@ -198,6 +198,9 @@ struct DockApp : WaylandState {
   int layerSurfaceCreateDepth = 0;
 
   void (*launch_settings_override)() = nullptr;
+  // Middle-click on the workspaces widget publishes `overview.toggle` so the
+  // horizon-stage child flips the overview (installed by dock_standalone).
+  std::function<void()> overviewToggleHook;
 
   int pollTimerFd = -1;
 
@@ -299,9 +302,6 @@ struct DockApp : WaylandState {
   // ("control_center" legacy or "pear_center" compact). Empty = none open.
   std::string ccWidgetId{};
 
-  // Top-edge dashboard (fully modular widget panel). Own layer surface and
-  // retained layout; see desktop_shell/dashboard/.
-  eh::shell::dashboard::DashboardState dash{};
 
   double dockRectX = 0.0;
   double dockRectY = 0.0;

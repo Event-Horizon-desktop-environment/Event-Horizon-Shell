@@ -2,7 +2,7 @@
 
 #include "desktop_shell/controlcenter/layout/control_center_layout.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_slider_metrics.hpp"
-#include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/stage/core/stage_app.hpp"
 #include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
 #include "configuration/shell_config.hpp"
@@ -107,11 +107,11 @@ constexpr double kMixerRowH = sm::kMixerRowH;
 
 int row_count(int n) { return std::max(1, std::min(6, n)); }
 
-bool wifi_error_active(const DockApp& app) {
+bool wifi_error_active(const eh::shell::stage::StageApp& app) {
   return !app.dash.wifiError.empty() && eh::shell::now_mono_ms() < app.dash.wifiErrorUntilMs;
 }
 
-double natural_height(DockApp& app, DashCardKind k, int span) {
+double natural_height(eh::shell::stage::StageApp& app, DashCardKind k, int span) {
   switch (k) {
     case DashCardKind::Clock:
       return 104.0;
@@ -173,7 +173,7 @@ void push_sub(CardRect& c, DashCardRole role, double px, double py, double pw, d
   c.subs.push_back(s);
 }
 
-void build_subs(CardRect& c, DockApp& app) {
+void build_subs(CardRect& c, eh::shell::stage::StageApp& app) {
   c.subs.clear();
   switch (c.kind) {
     case DashCardKind::Volume:
@@ -254,7 +254,7 @@ DashCardKind dash_kind_from_id(std::string_view id) {
   return DashCardKind::None;
 }
 
-bool dashboard_has_card(const DockApp& app, std::string_view id) {
+bool dashboard_has_card(const eh::shell::stage::StageApp& app, std::string_view id) {
   const eh::config::DashboardConfig cfg =
       app.dash.cfgValid ? app.dash.cfg : eh::config::shell_config_snapshot().dashboard;
   for (const auto& c : cfg.cards)
@@ -279,7 +279,7 @@ DashMixerGeom dashboard_mixer_geom(double cardX, double cardW) {
   return g;
 }
 
-DashboardLayout dashboard_compute_layout(DockApp& app, double surfaceW) {
+DashboardLayout dashboard_compute_layout(eh::shell::stage::StageApp& app, double surfaceW) {
   DashboardLayout L;
   L.surfaceW = surfaceW;
 
@@ -360,7 +360,7 @@ DashboardLayout dashboard_compute_layout(DockApp& app, double surfaceW) {
   return L;
 }
 
-double dashboard_desired_height(DockApp& app, double surfaceW) {
+double dashboard_desired_height(eh::shell::stage::StageApp& app, double surfaceW) {
   const DashboardLayout L = dashboard_compute_layout(app, surfaceW);
   return L.valid ? L.surfaceH : 0.0;
 }
@@ -449,7 +449,7 @@ DashClockText dashboard_clock_text(const eh::config::ShellConfig& sc) {
   return out;
 }
 
-void dashboard_sample_system(DockApp& app) {
+void dashboard_sample_system(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   const std::uint64_t now = eh::shell::now_mono_ms();
   if (d.sysPrimed && d.sysSampleMs != 0 && now - d.sysSampleMs < 1000) return;
@@ -502,16 +502,16 @@ void dashboard_sample_system(DockApp& app) {
   d.sysPrimed = true;
 }
 
-std::string dashboard_weather_instance_id(const DockApp& app) {
+std::string dashboard_weather_instance_id(const eh::shell::stage::StageApp& app) {
   if (!app.weatherInstanceId.empty()) return app.weatherInstanceId;
   auto scan = [](const std::vector<std::string>& v) -> std::string {
     for (const auto& id : v)
       if (eh::config::widget_implementation_type(id) == "weather") return id;
     return {};
   };
-  std::string id = scan(app.settings.leftWidgets);
-  if (id.empty()) id = scan(app.settings.centerWidgets);
-  if (id.empty()) id = scan(app.settings.rightWidgets);
+  std::string id = scan(eh::config::shell_config_snapshot().dock.leftWidgets);
+  if (id.empty()) id = scan(eh::config::shell_config_snapshot().dock.centerWidgets);
+  if (id.empty()) id = scan(eh::config::shell_config_snapshot().dock.rightWidgets);
   return id.empty() ? std::string("control_center") : id;
 }
 

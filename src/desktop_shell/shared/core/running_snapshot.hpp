@@ -106,17 +106,10 @@ inline RunningSnapshot build_running_snapshot(
     return a.key < b.key;
   });
 
-  {
-    std::unordered_set<std::string> activeKeys;
-    activeKeys.reserve(out.groups.size());
-    for (const auto& g : out.groups) activeKeys.insert(g.pinMatchKey);
-    for (auto it = appFirstSeenSerial.begin(); it != appFirstSeenSerial.end(); ) {
-      if (!activeKeys.contains(it->first))
-        it = appFirstSeenSerial.erase(it);
-      else
-        ++it;
-    }
-  }
+  // NOTE: appFirstSeenSerial is intentionally never pruned here. Entries
+  // persist for the life of the process so grouped buttons keep a stable
+  // position (pinned order / first-seen order) instead of jumping around
+  // as windows open and close.
 
   return out;
 }

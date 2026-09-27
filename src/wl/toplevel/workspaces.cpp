@@ -5,7 +5,6 @@
 #include "backends/hyprland/hyprland_workspace_manager.h"
 #include "backends/mango/mango_workspace_manager.h"
 #include "backends/sway/sway_workspace_manager.h"
-#include "backends/triad/triad_workspace_manager.h"
 #include "desktop_shell/unified/compositor_kind.hpp"
 
 #include <string>
@@ -34,9 +33,6 @@ WaylandWorkspaces::WaylandWorkspaces(CompositorRuntimeRegistry& runtimeRegistry)
   m_outputNameResolvers.push_back(swayBackend.get());
   m_backends.push_back(std::move(swayBackend));
 
-  auto triadBackend = std::make_unique<TriadWorkspaceManager>(runtimeRegistry.triad());
-  m_triadBackend = triadBackend.get();
-  m_backends.push_back(std::move(triadBackend));
 }
 
 WaylandWorkspaces::~WaylandWorkspaces() {
@@ -79,13 +75,6 @@ void WaylandWorkspaces::initialize() {
     return;
   }
 
-  if (kind == CompositorKind::Triad && m_triadBackend != nullptr && m_triadBackend->ready()) {
-    if (static_cast<TriadWorkspaceManager*>(m_triadBackend)->openConnection()) {
-      setActiveBackend(m_triadBackend);
-      return;
-    }
-  }
-
   if (kind == CompositorKind::Mango && m_mangoIpcConnector != nullptr) {
     if (m_mangoIpcConnector->openConnection() && m_mangoIpcBackend != nullptr &&
         m_mangoIpcBackend->ready()) {
@@ -112,11 +101,6 @@ void WaylandWorkspaces::initialize() {
 
   if (m_swayBackend != nullptr && m_swayBackend->ready()) {
     setActiveBackend(m_swayBackend);
-    return;
-  }
-
-  if (m_triadBackend != nullptr && static_cast<TriadWorkspaceManager*>(m_triadBackend)->openConnection()) {
-    setActiveBackend(m_triadBackend);
     return;
   }
 

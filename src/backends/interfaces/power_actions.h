@@ -29,8 +29,6 @@ class SwayKeyboardBackend;
 class SwayOutputBackend;
 class MangoKeyboardBackend;
 class MangoOutputBackend;
-class TriadKeyboardBackend;
-class TriadOutputBackend;
 
 struct WorkspaceWindowAssignment {
   std::string windowId;
@@ -132,8 +130,6 @@ private:
   std::unique_ptr<SwayOutputBackend> sway_out_;
   std::unique_ptr<MangoKeyboardBackend> mango_kb_;
   std::unique_ptr<MangoOutputBackend> mango_out_;
-  std::unique_ptr<TriadKeyboardBackend> triad_kb_;
-  std::unique_ptr<TriadOutputBackend> triad_out_;
 
   std::function<bool()> cycle_layout_;
   std::function<std::optional<LayoutInfo>()> layout_state_;

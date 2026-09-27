@@ -6,14 +6,11 @@
 #include "desktop_shell/dock/core/dock_boot_log.hpp"
 #include "desktop_shell/dock/spawn/dock_spawn.hpp"
 
-#include "desktop_shell/Overview/overview_host.hpp"
-#include "desktop_shell/dashboard/dashboard_dispatch.hpp"
 #include "desktop_shell/controlcenter/input/control_center_bus_hook.hpp"
 #include "desktop_shell/shared/popup/session/session.hpp"
 #include "desktop_shell/widgets/start_menu/start_menu.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
 
-#include "services/global_keyboard/global_keyboard_handler.hpp"
 #include "services/process/parent_death_guard.hpp"
 
 #include "bootstrap/loop/poll_mux.hpp"
@@ -21,6 +18,7 @@
 #include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/monitor/output_assign.hpp"
 #include "services/ipc/client.hpp"
+#include "desktop_shell/notifications/types/notifications_ipc.hpp"
 #include "services/ipc/ipc_server.hpp"
 #include "ux/settings/common/embed/settings_embed_lifecycle.hpp"
 #include "wl/core/connection.hpp"
@@ -69,14 +67,6 @@ bool is_settings_command(const std::string& payload) {
   return payload == "settings.toggle";
 }
 
-
-bool is_overview_command(const std::string& payload) {
-  return payload == "overview.toggle" || payload == "overview.open" || payload == "overview.close";
-}
-
-bool is_dashboard_command(const std::string& payload) {
-  return payload == "dashboard.toggle" || payload == "dashboard.open" || payload == "dashboard.close";
-}
 
 bool is_menu_command(const std::string& payload) {
   return payload == "menu.toggle";
@@ -169,28 +159,10 @@ int run_dock_standalone() {
     std::cerr << "[horizon-dock] wayland display fd=" << dfd << " " << link << "\n";
   }
 
-  // Overview host on its own Wayland connection — parity with
-  // the supervisor's old in-process wiring (session run(): ovConn).
-  std::unique_ptr<eh::shell::overview::Host> overview_host_;
-  {
-    dock_boot_step("overview host connect");
-    auto ovConn = std::make_unique<eh::wayland::WaylandConnection>();
-    if (!ovConn->connect(false)) {
-      std::cerr << "[horizon-dock] overview own connection unavailable\n";
-      ovConn.reset();
-    }
-    overview_host_ = std::make_unique<eh::shell::overview::Host>(app, std::move(ovConn));
-  }
 
   app.launch_settings_override = +[]() { eh::settings::request_launch_settings(); };
   dock_boot_step("install loop fds");
   dock_install_loop_fds(app);
-
-  // Own the global-keyboard menu toggle: the dock's start-menu/app-drawer moved
-  // here with the dock, so Super toggles it from this process. No settingsFn —
-  // the supervisor keeps Super+S (launch/toggle settings) to avoid double-fire.
-  eh::service::GlobalKeyboardHandler global_keyboard;
-  global_keyboard.init([&app]() { dock_toggle_menu_from_keyboard(app); });
 
   // Weather async engine for the control-center widget (supervisor used to
   // wire its wake fd + curl drive from on_idle_flush).
@@ -198,14 +170,14 @@ int run_dock_standalone() {
   const int weather_wake_fd = eh::shell::dock_slot_hooks::control_center_weather_async_wake_fd();
 
   // IPC client: config.applied → reload + redraw; command.request → commands
-  // forwarded from the supervisor (settings / launchpad / overview / menu).
+  // forwarded from the supervisor (settings / menu).
   eh::ipc::IpcClient ipc;
   bool ipc_ok = false;
   {
     dock_boot_step("ipc connect");
     const int cfd = ipc.connect(eh::ipc::default_socket_path(), 3);
     if (cfd >= 0) {
-      ipc.set_event_handler([&app, &overview_host_](std::string topic, std::string payload,
+      ipc.set_event_handler([&app](std::string topic, std::string payload,
                                                                        std::vector<int> /*fds*/) {
         if (topic == "config.applied") {
           dock_sync_settings_from_drag_preview(app);
@@ -218,29 +190,17 @@ int run_dock_standalone() {
             eh::settings::request_launch_settings();
           } else if (is_menu_command(payload)) {
             dock_toggle_menu_from_keyboard(app);
-          } else if (is_overview_command(payload)) {
-            if (overview_host_) {
-              if (payload == "overview.toggle") {
-                overview_host_->toggle();
-              } else if (payload == "overview.open") {
-                if (!overview_host_->is_open()) overview_host_->toggle();
-              } else if (payload == "overview.close") {
-                if (overview_host_->is_open()) overview_host_->close();
-              }
-            }
-          } else if (is_dashboard_command(payload)) {
-            if (payload == "dashboard.toggle") {
-              if (app.dash.open) eh::shell::dashboard::dashboard_close(app);
-              else eh::shell::dashboard::dashboard_open(app);
-            } else if (payload == "dashboard.open") {
-              if (!app.dash.open) eh::shell::dashboard::dashboard_open(app);
-            } else if (payload == "dashboard.close") {
-              if (app.dash.open) eh::shell::dashboard::dashboard_close(app);
-            }
           }
         }
       });
       ipc_ok = ipc.subscribe("config.applied") && ipc.subscribe("command.request");
+      // This child runs its own DockMpris: forward notify.push frames so
+      // now-playing toasts (and album art) reach horizon-notifications.
+      eh::notify::install_ipc_sender(ipc);
+  // Middle-click on the workspaces widget publishes `overview.toggle` so the
+  // horizon-stage child flips the overview (middle-click keeps working here
+  // with the overview living elsewhere).
+  app.overviewToggleHook = [&ipc]() { (void)ipc.publish("command.request", "overview.toggle"); };
     }
   }
 
@@ -264,7 +224,7 @@ int run_dock_standalone() {
     dock_after_display_dispatch(app);
     return running && app.running;
   };
-  mux.on_idle_flush = [&](bool did_display_event) {
+  mux.on_idle_flush = [&](bool /*did_display_event*/) {
     if (app.exitRequested) {
       std::cerr << "[horizon-dock] show_dock disabled, exiting\n";
       running = false;
@@ -338,10 +298,6 @@ int run_dock_standalone() {
       }
     }
 
-    if (!did_display_event) {
-      if (overview_host_ && overview_host_->display())
-        (void)wl_display_flush(overview_host_->display());
-    }
   };
   mux.get_handlers = [&]() {
     std::vector<eh::app::FdHandler> handlers;
@@ -394,38 +350,8 @@ int run_dock_standalone() {
         });
       }
     }
-    // Compositor event socket for overview event-driven state updates.
-    if (overview_host_) {
-      const int evFd = overview_host_->hyprland_event_fd();
-      if (evFd >= 0) {
-        auto* ovRaw = overview_host_.get();
-        handlers.emplace_back(evFd, POLLIN, [ovRaw](short) {
-          ovRaw->drain_hyprland_events();
-        });
-      }
-    }
     return handlers;
   };
-
-  // Isolated Wayland connection for overview.
-  if (overview_host_ && overview_host_->display()) {
-    auto* ovDisplay = overview_host_->display();
-    eh::app::PollMuxDisplay ov{};
-    ov.display = ovDisplay;
-    ov.fd = wl_display_get_fd(ovDisplay);
-    ov.on_dispatch = []() { return true; };
-    ov.on_error = [&mux, ovDisplay]() {
-      std::cerr << "[overview] Wayland protocol error on its own display\n";
-      for (auto& ed : mux.extra_displays) {
-        if (ed.display == ovDisplay) {
-          ed.fd = -1;
-          ed.display = nullptr;
-          break;
-        }
-      }
-    };
-    mux.extra_displays.push_back(std::move(ov));
-  }
 
   std::cout << "[horizon-dock] running pid=" << ::getpid() << " ipc=" << (ipc_ok ? 1 : 0)
             << " pollTimerFd=" << app.pollTimerFd << " trayEventFd=" << app.trayEventFd

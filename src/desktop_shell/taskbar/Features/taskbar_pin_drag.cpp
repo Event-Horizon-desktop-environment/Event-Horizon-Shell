@@ -8,7 +8,7 @@
 #include "configuration/shell_config.hpp"
 
 namespace eh::shell::taskbar {
-extern std::vector<TaskbarWidgetHit> g_widgetHits;
+extern std::vector<std::vector<TaskbarWidgetHit>> g_layerHits;
 }
 
 #include <algorithm>
@@ -30,16 +30,21 @@ void taskbar_pin_drag_init(TaskbarApp& app, const std::string& widgetId) {
   app.pinDragStartX = app.pointerX;
   app.pinDragStartY = app.pointerY;
 
-  // Snapshot pinned-section geometry from g_widgetHits (un-reordered state at press).
-  // This avoids feedback when g_widgetHits shifts after reorder paint.
+  // Snapshot pinned-section geometry from this layer's hits (un-reordered
+  // state at press). This avoids feedback when hits shift after reorder
+  // paint. Rects (not just stride) are recorded so variable-width labeled
+  // slots still reorder correctly.
   double firstLeft = 0.0;
   double iconW = 0.0;
   double prevRight = 0.0;
   double gap = 0.0;
   int pinnedCount = 0;
-  for (const auto& h : g_widgetHits) {
+  app.pinDragRects.clear();
+  const auto& initHits = taskbar_layer_hits(app, app.pressedLayerIdx);
+  for (const auto& h : initHits) {
     if (h.slotKind != 0) continue;
     if (!h.isPinned) continue;
+    app.pinDragRects.emplace_back(h.x, h.w);
     if (pinnedCount == 0) {
       firstLeft = h.x;
       iconW = h.w;
@@ -89,6 +94,7 @@ PinDragReleaseResult taskbar_pin_drag_release(TaskbarApp& app, bool left) {
 
   app.pinDragPinsSnapshot.clear();
   app.pinDragPaintOrder.clear();
+  app.pinDragRects.clear();
   app.pinDragCandidate = false;
   app.pinDragging = false;
   app.pinDragDirty = false;
@@ -119,6 +125,8 @@ void taskbar_pin_drag_motion(TaskbarApp& app) {
     debug_log("taskbar", "pin_drag: threshold crossed key=%s startXY=%.0f,%.0f pointerXY=%.0f,%.0f",
               app.pinDragKey.c_str(), app.pinDragStartX, app.pinDragStartY, app.pointerX, app.pointerY);
     app.pinDragging = true;
+    // A drag is not a click: drop any preview popup the press just opened.
+    taskbar_thumbs_dismiss(app);
   }
   if (!app.pinDragging) return;
   if (app.pinDragKey.empty()) return;
@@ -134,9 +142,11 @@ void taskbar_pin_drag_motion(TaskbarApp& app) {
     return;
   }
 
-  // Count how many pinned apps exist (excluding the dragged one) using g_widgetHits
+  // Count how many pinned apps exist (excluding the dragged one) using the
+  // press layer's hits.
+  const auto& dragHits = taskbar_layer_hits(app, app.pressedLayerIdx);
   int reducedCount = 0;
-  for (const auto& h : g_widgetHits) {
+  for (const auto& h : dragHits) {
     if (h.slotKind != 0) continue;
     if (!h.isPinned) continue;
     if (eh::shell::paths::normalize_desktop_app_id(h.widgetId) == app.pinDragKey) continue;
@@ -147,36 +157,52 @@ void taskbar_pin_drag_motion(TaskbarApp& app) {
     return;
   }
 
-  // Clamp pointer to the pinned section bounds (computed from saved geometry, not g_widgetHits)
-  // lastRight = firstLeft + (reducedCount + 1) * stride - (stride - iconW)
-  const double pinnedRight = firstLeft + static_cast<double>(reducedCount + 1) * stride - (stride - iconW);
-  const double pxHit = std::clamp(app.pointerX, firstLeft, pinnedRight);
-
-  // Find raw insertion index in the reduced (n-1) array using uniform stride
-  int rawInsert = reducedCount;
-  for (int i = 0; i < reducedCount; i++) {
-    const double slotMid = firstLeft + static_cast<double>(i) * stride + iconW * 0.5;
-    if (pxHit < slotMid) {
-      rawInsert = i;
-      break;
-    }
+  // Insertion math over the actual hit rects (variable-width safe): midpoint
+  // of each non-dragged pinned slot decides the slot boundary.
+  std::vector<std::pair<double, double>> rects;
+  rects.reserve(app.pinDragRects.size());
+  for (const auto& h : dragHits) {
+    if (h.slotKind != 0 || !h.isPinned) continue;
+    if (eh::shell::paths::normalize_desktop_app_id(h.widgetId) == app.pinDragKey) continue;
+    rects.emplace_back(h.x, h.w);
   }
-  rawInsert = std::clamp(rawInsert, 0, reducedCount);
+  // Fall back to the init-time snapshot when live hits shifted mid-drag.
+  if (rects.empty() && !app.pinDragRects.empty()) {
+    for (const auto& r : app.pinDragRects) rects.push_back(r);
+  }
+  if (rects.empty()) return;
+  const double firstRectLeft = rects.front().first;
+  const double pinnedRight = rects.back().first + rects.back().second;
+  const double pxHit = std::clamp(app.pointerX, firstRectLeft, pinnedRight);
+
+  // Find raw insertion index in the reduced array using rect midpoints.
+  int rawInsert = static_cast<int>(rects.size());
+  for (size_t ri = 0; ri < rects.size(); ++ri) {
+    const double mid = rects[ri].first + rects[ri].second * 0.5;
+    if (pxHit < mid) { rawInsert = static_cast<int>(ri); break; }
+  }
+  rawInsert = std::clamp(rawInsert, 0, static_cast<int>(rects.size()));
 
   // Hysteresis: only accept a change when the pointer has moved past the midpoint + threshold
   int insertInReduced = rawInsert;
   const int committed = app.pinDragInsertIdx;
+  const int nRects = static_cast<int>(rects.size());
   if (committed >= 0 && rawInsert != committed) {
-    const double hyst = std::clamp(iconW * 0.12, 4.0, 12.0);
+    const double refW = (committed >= 0 && committed < nRects)
+        ? rects[static_cast<size_t>(committed)].second
+        : rects[static_cast<size_t>(std::clamp(rawInsert, 0, nRects - 1))].second;
+    const double hyst = std::clamp(refW * 0.12, 4.0, 12.0);
     bool accept = false;
     if (rawInsert > committed) {
-      if (committed < reducedCount) {
-        const double mid = firstLeft + static_cast<double>(committed) * stride + iconW * 0.5;
+      if (committed < nRects) {
+        const double mid = rects[static_cast<size_t>(committed)].first +
+                           rects[static_cast<size_t>(committed)].second * 0.5;
         if (pxHit >= mid + hyst) accept = true;
       }
     } else {
       if (committed > 0) {
-        const double mid = firstLeft + static_cast<double>(committed - 1) * stride + iconW * 0.5;
+        const double mid = rects[static_cast<size_t>(committed - 1)].first +
+                           rects[static_cast<size_t>(committed - 1)].second * 0.5;
         if (pxHit <= mid - hyst) accept = true;
       }
     }

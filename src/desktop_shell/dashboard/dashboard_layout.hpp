@@ -16,14 +16,14 @@
 #include <string_view>
 #include <vector>
 
-struct DockApp;
+namespace eh::shell::stage { struct StageApp; }
 
 namespace eh::shell::dashboard {
 
 [[nodiscard]] DashCardKind dash_kind_from_id(std::string_view id);
 
 // True when the configured widget list contains `id` ("clock", "media", ...).
-[[nodiscard]] bool dashboard_has_card(const DockApp& app, std::string_view id);
+[[nodiscard]] bool dashboard_has_card(const eh::shell::stage::StageApp& app, std::string_view id);
 
 // Mixer row geometry, derived from the card box alone so paint and layout
 // agree without re-measuring each other.
@@ -35,8 +35,8 @@ struct DashMixerGeom {
 };
 [[nodiscard]] DashMixerGeom dashboard_mixer_geom(double cardX, double cardW);
 
-[[nodiscard]] DashboardLayout dashboard_compute_layout(DockApp& app, double surfaceW);
-[[nodiscard]] double dashboard_desired_height(DockApp& app, double surfaceW);
+[[nodiscard]] DashboardLayout dashboard_compute_layout(eh::shell::stage::StageApp& app, double surfaceW);
+[[nodiscard]] double dashboard_desired_height(eh::shell::stage::StageApp& app, double surfaceW);
 
 // Row sources shared by layout/paint/hit/dispatch (single order everywhere):
 // wifi APs with the active network first, bluetooth with connected devices
@@ -76,10 +76,10 @@ struct DashClockText {
 [[nodiscard]] DashClockText dashboard_clock_text(const eh::config::ShellConfig& sc);
 
 // Samples /proc + /sys into the dashboard state (>=1s cache).
-void dashboard_sample_system(DockApp& app);
+void dashboard_sample_system(eh::shell::stage::StageApp& app);
 
 // Weather widget instance: explicit id, else the first weather widget in the
 // dock layout, else the control-center instance.
-[[nodiscard]] std::string dashboard_weather_instance_id(const DockApp& app);
+[[nodiscard]] std::string dashboard_weather_instance_id(const eh::shell::stage::StageApp& app);
 
 }  // namespace eh::shell::dashboard

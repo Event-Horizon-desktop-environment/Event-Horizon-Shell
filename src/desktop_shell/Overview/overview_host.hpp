@@ -18,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-struct DockApp;
 struct wl_array;
 struct wl_callback;
 struct wl_keyboard;
@@ -41,7 +40,7 @@ class Host {
   friend void overview_host_page_frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms);
 
 public:
-  explicit Host(DockApp& dock, std::unique_ptr<eh::wayland::WaylandConnection> wl);
+  explicit Host(ShellCtx& ctx, std::unique_ptr<eh::wayland::WaylandConnection> wl);
   ~Host();
 
   Host(const Host&) = delete;
@@ -122,7 +121,7 @@ public:
   [[nodiscard]] std::string& search_query() noexcept { return search_query_; }
   [[nodiscard]] const std::string& search_query() const noexcept { return search_query_; }
   [[nodiscard]] const std::vector<SpotlightHit>& apps() const noexcept { return apps_; }
-  [[nodiscard]] DockApp& dock() noexcept { return dock_; }
+  [[nodiscard]] ShellCtx& ctx() noexcept { return ctx_; }
   [[nodiscard]] const std::unique_ptr<eh::wayland::WaylandConnection>& wl() const noexcept { return wl_; }
   [[nodiscard]] bool open() const noexcept { return open_; }
   [[nodiscard]] bool has_frame_cb() const noexcept { return frame_cb_ != nullptr; }
@@ -202,7 +201,7 @@ private:
   void clear_extra_outputs();
   int count_painted_windows() const;
 
-  DockApp& dock_;
+  ShellCtx& ctx_;
   std::unique_ptr<eh::wayland::WaylandConnection> wl_;
 
   std::unique_ptr<Input> input_;

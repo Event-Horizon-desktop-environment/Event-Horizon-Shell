@@ -1,7 +1,7 @@
 #include "desktop_shell/osd/audio/osd_audio.hpp"
 
 #include "configuration/shell_config.hpp"
-#include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/stage/core/stage_app.hpp"
 #include "desktop_shell/osd/host/osd_host.hpp"
 #include "services/audio/pipewire_service.hpp"
 
@@ -13,7 +13,7 @@
 namespace eh::shell::osd {
 namespace {
 
-DockApp* g_dock = nullptr;
+eh::shell::stage::StageApp* g_stage = nullptr;
 std::atomic<bool> g_audio_osd_dirty{false};
 
 uint32_t g_sink_id = 0;
@@ -63,26 +63,26 @@ void prime_from_snapshot() {
 
 void emit_sink_osd(int pct, bool mute) {
    
-  if (!g_dock || !g_dock->osdHost) return;
+  if (!g_stage || !g_stage->osd) return;
   const int shown = std::clamp(pct, 0, 150);
   const float prog = std::min(1.f, static_cast<float>(shown) / 100.f);
   OsdContent c{};
   c.icon_ligature = sink_glyph(shown, mute);
   c.value_text = std::to_string(shown) + "%";
   c.progress = mute ? 0.f : prog;
-  g_dock->osdHost->show(c);
+  g_stage->osd->show(c);
 }
 
 void emit_source_osd(int pct, bool mute) {
    
-  if (!g_dock || !g_dock->osdHost) return;
+  if (!g_stage || !g_stage->osd) return;
   const int shown = std::clamp(pct, 0, 150);
   const float prog = std::min(1.f, static_cast<float>(shown) / 100.f);
   OsdContent c{};
   c.icon_ligature = mute ? "mic_off" : "mic";
   c.value_text = std::to_string(shown) + "%";
   c.progress = mute ? 0.f : prog;
-  g_dock->osdHost->show(c);
+  g_stage->osd->show(c);
 }
 
 void on_pw_notification() {
@@ -140,9 +140,9 @@ void try_boot_audio_defaults() {
 
 }  // namespace
 
-void apply_pending_audio_osd(DockApp& app) {
+void apply_pending_audio_osd(eh::shell::stage::StageApp& app) {
    
-  if (!app.osdHost) return;
+  if (!app.osd) return;
   const eh::audio::Snapshot s = eh::audio::PipeWireService::instance().snapshot();
   if (!s.available) return;
 
@@ -172,9 +172,9 @@ void apply_pending_audio_osd(DockApp& app) {
 
 }
 
-void osd_audio_bind(DockApp& app) {
+void osd_audio_bind(eh::shell::stage::StageApp& app) {
    
-  g_dock = &app;
+  g_stage = &app;
   // PipeWire connects at boot so previously saved audio defaults (default
   // output device, engine/graph rates, PCM format) are reapplied after a DE
   // restart. The OSD shows an overlay whenever PipeWire notifies a change;
@@ -185,9 +185,7 @@ void osd_audio_bind(DockApp& app) {
   pw.set_change_callback([]() { on_pw_notification(); });
 }
 
-void osd_audio_apply_saved_defaults(DockApp& app) {
-   
-  (void)app;
+void osd_audio_apply_saved_defaults() {
   eh::audio::PipeWireService::instance().start();
 
   const auto& au = eh::config::shell_config_snapshot_skip_matugen().audio;
@@ -206,7 +204,7 @@ void osd_audio_apply_saved_defaults(DockApp& app) {
   try_boot_audio_defaults();
 }
 
-void osd_audio_poll_pending(DockApp& app) {
+void osd_audio_poll_pending(eh::shell::stage::StageApp& app) {
    
   try_boot_audio_defaults();
   if (!g_audio_osd_dirty.exchange(false, std::memory_order_acq_rel)) return;
@@ -218,7 +216,7 @@ void osd_audio_shutdown() noexcept {
   eh::audio::PipeWireService::instance().set_change_callback({});
   g_audio_osd_dirty.store(false, std::memory_order_relaxed);
   g_boot.enabled = false;
-  g_dock = nullptr;
+  g_stage = nullptr;
 }
 
 }

@@ -5,7 +5,7 @@
 #include "desktop_shell/dashboard/dashboard_layout.hpp"
 #include "desktop_shell/dashboard/dashboard_paint.hpp"
 #include "desktop_shell/dashboard/dashboard_dispatch.hpp"
-#include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/stage/core/stage_app.hpp"
 #include "desktop_shell/dock/core/dock_bar.h"
 #include "desktop_shell/dock/core/dock_boot_log.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
@@ -35,27 +35,25 @@ bool cfg_equal(const eh::config::DashboardConfig& a, const eh::config::Dashboard
   return true;
 }
 
-wl_output* pick_output(DockApp& app) {
-  if (app.dockLayerOutput) return app.dockLayerOutput;
-  if (!app.dockLayers.empty() && app.dockLayers[0] && app.dockLayers[0]->wlOut) return app.dockLayers[0]->wlOut;
-  for (auto& slot : app.outputSlots)
-    if (slot && slot->ready && slot->output) return slot->output;
-  for (auto& slot : app.outputSlots)
-    if (slot && slot->output) return slot->output;
+wl_output* pick_output(eh::shell::stage::StageApp& app) {
+  // Stage owns a plain output list (refreshed on the poll tick); the first
+  // entry is the primary. No dock layer/output-slot machinery here.
+  for (auto* out : app.stageOutputs)
+    if (out) return out;
   return nullptr;
 }
 
-double output_width_px(const DockApp& app) {
+double output_width_px(const eh::shell::stage::StageApp& app) {
   if (app.dash.panelW > 0) return app.dash.panelW;
   return app.primaryOutputWidthPx > 0 ? app.primaryOutputWidthPx : 1920.0;
 }
 
-int trig_height_px(DockApp& app) { return std::clamp(app.dash.cfg.triggerHeight, 4, 48); }
+int trig_height_px(eh::shell::stage::StageApp& app) { return std::clamp(app.dash.cfg.triggerHeight, 4, 48); }
 
 // Static input regions only: set at creation (and re-set on configure,
 // still pre-map), never updated afterwards — post-map region updates are not
 // reliably applied, so open/close must not depend on them.
-void set_full_region(DockApp& app, wl_surface* surface, int w, int h) {
+void set_full_region(eh::shell::stage::StageApp& app, wl_surface* surface, int w, int h) {
   if (!surface || !app.compositor || w <= 0 || h <= 0) return;
   wl_region* r = wl_compositor_create_region(app.compositor);
   if (!r) return;
@@ -66,7 +64,7 @@ void set_full_region(DockApp& app, wl_surface* surface, int w, int h) {
 
 // The trigger strip is input-only: one static transparent buffer so the
 // surface maps, never repainted afterwards.
-void paint_trigger(DockApp& app) {
+void paint_trigger(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.trigSurface || !app.shm) return;
   const int w = d.trigW > 0 ? d.trigW : static_cast<int>(std::ceil(output_width_px(app)));
@@ -85,7 +83,7 @@ void paint_trigger(DockApp& app) {
 
 // Never request a zero-height surface: configure would loop with nothing to
 // anchor the input strip to.
-int desired_height_px(DockApp& app) {
+int desired_height_px(eh::shell::stage::StageApp& app) {
   const int floor = static_cast<int>(
       std::ceil(std::clamp(static_cast<double>(app.dash.cfg.triggerHeight), 4.0, 48.0))) + 24;
   const int want = static_cast<int>(std::ceil(dashboard_desired_height(app, output_width_px(app))));
@@ -93,18 +91,18 @@ int desired_height_px(DockApp& app) {
 }
 
 void on_buffer_release(void* user) {
-  auto* app = static_cast<DockApp*>(user);
+  auto* app = static_cast<eh::shell::stage::StageApp*>(user);
   if (!app) return;
   auto& d = app->dash;
   // Guard: without this the release -> redraw -> attach -> release loop spins
   // at refresh rate even when nothing changed.
   if (!d.needsDraw) return;
   d.needsDraw = false;
-  dock_schedule_frame(*app);
+  dashboard_frame_draw(*app);
 }
 
 void on_configure(void* data, zwlr_layer_surface_v1* ls, std::uint32_t serial, std::uint32_t w, std::uint32_t h) {
-  auto& app = *static_cast<DockApp*>(data);
+  auto& app = *static_cast<eh::shell::stage::StageApp*>(data);
   auto& d = app.dash;
   const bool isTrig = d.trigLayer && d.trigLayer == ls;
   const bool isPanel = d.panelLayer && d.panelLayer == ls;
@@ -144,10 +142,11 @@ void on_configure(void* data, zwlr_layer_surface_v1* ls, std::uint32_t serial, s
 
   d.dirty = true;
   dashboard_draw(app);
+  eh::shell::stage::stage_dashboard_kick_frames(app);
 }
 
 void on_closed(void* data, zwlr_layer_surface_v1* ls) {
-  auto& app = *static_cast<DockApp*>(data);
+  auto& app = *static_cast<eh::shell::stage::StageApp*>(data);
   auto& d = app.dash;
   if (d.trigLayer && d.trigLayer == ls) {
     dashboard_destroy_trigger(app);
@@ -172,7 +171,7 @@ const zwlr_layer_surface_v1_listener kLayerListener = {
     .closed = on_closed,
 };
 
-std::string media_signature(DockApp& app) {
+std::string media_signature(eh::shell::stage::StageApp& app) {
   if (!app.mpris) return {};
   const auto ms = app.mpris->snapshot();
   if (!ms.active) return "idle";
@@ -213,7 +212,7 @@ std::string mixer_signature() {
   return s;
 }
 
-bool refresh_size_impl(DockApp& app) {
+bool refresh_size_impl(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.panelLayer || !d.panelSurface || !d.panelConfigured || d.panelW <= 0) return false;
   const int want = desired_height_px(app);
@@ -226,15 +225,15 @@ bool refresh_size_impl(DockApp& app) {
 
 }  // namespace
 
-bool dashboard_refresh_size(DockApp& app) { return refresh_size_impl(app); }
+bool dashboard_refresh_size(eh::shell::stage::StageApp& app) { return refresh_size_impl(app); }
 
-void dashboard_changed(DockApp& app) {
+void dashboard_changed(eh::shell::stage::StageApp& app) {
   app.dash.dirty = true;
   if (refresh_size_impl(app)) return;  // configure will repaint at the new height
   dashboard_draw(app);
 }
 
-void dashboard_ensure_trigger(DockApp& app) {
+void dashboard_ensure_trigger(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (d.trigSurface) return;
   if (!d.cfgValid || !d.cfg.enabled || !d.cfg.hoverReveal) return;
@@ -270,7 +269,7 @@ void dashboard_ensure_trigger(DockApp& app) {
   if (app.display) wl_display_flush(app.display);
 }
 
-void dashboard_ensure_panel(DockApp& app) {
+void dashboard_ensure_panel(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (d.panelSurface) return;
   if (!d.cfgValid || !d.cfg.enabled) return;
@@ -319,7 +318,7 @@ void dashboard_ensure_panel(DockApp& app) {
   wl_surface_commit(d.panelSurface);
 }
 
-void dashboard_destroy_trigger(DockApp& app) {
+void dashboard_destroy_trigger(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   d.trigShm.set_release_hook(nullptr, nullptr);
   d.trigShm.destroy();
@@ -334,8 +333,12 @@ void dashboard_destroy_trigger(DockApp& app) {
   d.trigW = 0;
 }
 
-void dashboard_destroy_panel(DockApp& app) {
+void dashboard_destroy_panel(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
+  if (app.dashFrameCb) {
+    wl_callback_destroy(app.dashFrameCb);
+    app.dashFrameCb = nullptr;
+  }
   d.panelShm.set_release_hook(nullptr, nullptr);
   d.panelShm.destroy();
   if (d.panelLayer) {
@@ -354,7 +357,7 @@ void dashboard_destroy_panel(DockApp& app) {
   d.layout.valid = false;
 }
 
-void dashboard_shutdown(DockApp& app) {
+void dashboard_shutdown(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (d.animId) {
     app.shellAnim.cancel(d.animId);
@@ -381,7 +384,7 @@ void dashboard_shutdown(DockApp& app) {
   dashboard_destroy_panel(app);
 }
 
-void dashboard_draw(DockApp& app) {
+void dashboard_draw(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.panelSurface || !d.panelConfigured || d.panelW <= 0 || d.panelH <= 0) return;
 
@@ -416,11 +419,11 @@ void dashboard_draw(DockApp& app) {
   if (app.display) wl_display_flush(app.display);
 }
 
-void dashboard_frame_draw(DockApp& app) {
+void dashboard_frame_draw(eh::shell::stage::StageApp& app) {
   if (app.dash.dirty) dashboard_draw(app);
 }
 
-void dashboard_weather_redraw(DockApp& app) {
+void dashboard_weather_redraw(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.panelSurface || !d.cfg.enabled) return;
   if (!d.open && d.revealT <= 0.f) return;
@@ -429,7 +432,7 @@ void dashboard_weather_redraw(DockApp& app) {
   dashboard_draw(app);
 }
 
-void dashboard_timer_tick(DockApp& app) {
+void dashboard_timer_tick(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.cfgValid || !d.cfg.enabled) return;
   dashboard_ensure_trigger(app);
@@ -512,7 +515,7 @@ void dashboard_timer_tick(DockApp& app) {
   if (changed) dashboard_changed(app);
 }
 
-void dashboard_on_config_changed(DockApp& app, const eh::config::DashboardConfig& next) {
+void dashboard_on_config_changed(eh::shell::stage::StageApp& app, const eh::config::DashboardConfig& next) {
   auto& d = app.dash;
   const bool first = !d.cfgValid;
   const bool changed = first || cfg_equal(d.cfg, next) == false;

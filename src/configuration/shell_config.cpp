@@ -116,6 +116,7 @@ void merge_settings_drag_fields_onto(ShellConfig& base, const ShellConfig& ui) {
    
   base.dock = ui.dock;
   base.taskbar = ui.taskbar;
+  base.panel = ui.panel;
   base.appearance = ui.appearance;
   base.notifications = ui.notifications;
   base.defaultApps = ui.defaultApps;
@@ -252,7 +253,7 @@ void apply_dock_defaults_if_needed(ShellConfig& c) {
    
   if (c.dock.leftWidgets.empty() && c.dock.centerWidgets.empty() && c.dock.rightWidgets.empty()) {
     c.dock.leftWidgets = {"smenu", "media"};
-    c.dock.centerWidgets = {"launchpad", "pinned_apps", "running_apps", "trash"};
+    c.dock.centerWidgets = {"app_drawer", "pinned_apps", "running_apps", "trash"};
     c.dock.rightWidgets = {"tray", "weather", "clock", "pear_center", "settings_button"};
   }
 }
@@ -261,8 +262,17 @@ void apply_taskbar_defaults_if_needed(ShellConfig& c) {
    
   if (c.taskbar.leftWidgets.empty() && c.taskbar.centerWidgets.empty() && c.taskbar.rightWidgets.empty()) {
     c.taskbar.leftWidgets = {"smenu", "media"};
-    c.taskbar.centerWidgets = {"launchpad", "pinned_apps", "running_apps", "trash"};
+    c.taskbar.centerWidgets = {"app_drawer", "pinned_apps", "running_apps", "trash"};
     c.taskbar.rightWidgets = {"tray", "weather", "clock", "pear_center", "settings_button"};
+  }
+}
+
+void apply_panel_defaults_if_needed(ShellConfig& c) {
+   
+  if (c.panel.leftWidgets.empty() && c.panel.centerWidgets.empty() && c.panel.rightWidgets.empty()) {
+    c.panel.leftWidgets = {"workspaces"};
+    c.panel.centerWidgets = {"clock"};
+    c.panel.rightWidgets = {"tray", "battery", "control_center", "notifications"};
   }
 }
 
@@ -353,6 +363,13 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     if (const auto* a = (*tb)["right_widgets"].as_array()) c.taskbar.rightWidgets = toml_string_array(a);
     if (const auto* a = (*tb)["pinned_apps"].as_array()) c.taskbar.pinnedApps = toml_string_array(a);
     if (auto v = (*tb)["group_apps"].value<bool>()) c.taskbar.groupApps = *v;
+    if (auto v = (*tb)["show_labels"].value<bool>()) c.taskbar.showLabels = *v;
+    if (auto v = (*tb)["collapse_when_full"].value<bool>()) c.taskbar.collapseWhenFull = *v;
+    if (auto v = (*tb)["thumbnails"].value<bool>()) c.taskbar.thumbnailsEnabled = *v;
+    if (auto v = (*tb)["thumbnail_peek"].value<bool>()) c.taskbar.thumbnailPeekEnabled = *v;
+    if (auto v = (*tb)["thumbnail_threshold"].value<int64_t>())
+      c.taskbar.thumbnailThreshold = static_cast<int>(std::clamp(*v, INT64_C(3), INT64_C(20)));
+    if (auto v = (*tb)["compact_media"].value<bool>()) c.taskbar.compactMedia = *v;
     if (auto v = (*tb)["position_top"].value<bool>()) c.taskbar.positionTop = *v;
     if (auto s = (*tb)["output"].value<std::string>()) c.taskbar.outputName = eh::shell::trim_output_assign(*s);
     if (auto v = (*tb)["slot_pill_opacity"].value<int64_t>()) c.taskbar.slotPillOpacity = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(100)));
@@ -364,6 +381,52 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     if (auto v = (*tb)["border"].value<bool>()) c.taskbar.border = *v;
     if (auto v = (*tb)["border_size"].value<int64_t>()) c.taskbar.borderSize = static_cast<int>(std::clamp(*v, INT64_C(1), INT64_C(12)));
     if (auto s = (*tb)["icon_theme"].value<std::string>()) c.taskbar.iconTheme = trim(*s);
+  }
+
+  if (const auto* pn = root.get_as<toml::table>("panel")) {
+    if (auto v = (*pn)["enabled"].value<bool>()) c.panel.enabled = *v;
+    if (auto v = (*pn)["width_mode"].value<int64_t>()) c.panel.widthMode = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(2)));
+    if (auto v = (*pn)["height"].value<int64_t>()) c.panel.height = static_cast<int>(std::clamp(*v, INT64_C(20), INT64_C(120)));
+    if (auto v = (*pn)["radius"].value<int64_t>()) c.panel.radius = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(50)));
+    if (auto v = (*pn)["opacity"].value<int64_t>()) c.panel.opacity = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(100)));
+    if (auto v = (*pn)["icon_size"].value<int64_t>()) c.panel.iconSize = static_cast<int>(std::clamp(*v, INT64_C(8), INT64_C(96)));
+    if (auto v = (*pn)["icon_spacing"].value<int64_t>()) c.panel.iconSpacing = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(50)));
+    if (auto v = (*pn)["floating_amount"].value<int64_t>()) c.panel.floatingAmount = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(50)));
+    if (auto v = (*pn)["edge_gap"].value<int64_t>()) c.panel.edgeGap = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(25)));
+    if (auto v = (*pn)["exclusive_zone_gap"].value<int64_t>())
+      c.panel.exclusiveZoneGap = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(100)));
+    if (auto d = (*pn)["scale"].value<double>()) {
+      if (std::isfinite(*d)) c.panel.scale = std::clamp(*d, 0.5, 2.0);
+    } else if (auto i = (*pn)["scale"].value<int64_t>()) {
+      c.panel.scale = std::clamp(static_cast<double>(*i), 0.5, 2.0);
+    }
+    if (const auto* a = (*pn)["left_widgets"].as_array()) c.panel.leftWidgets = toml_string_array(a);
+    if (const auto* a = (*pn)["center_widgets"].as_array()) c.panel.centerWidgets = toml_string_array(a);
+    if (const auto* a = (*pn)["right_widgets"].as_array()) c.panel.rightWidgets = toml_string_array(a);
+    if (auto v = (*pn)["position_top"].value<bool>()) c.panel.positionTop = *v;
+    if (auto s = (*pn)["output"].value<std::string>()) c.panel.outputName = eh::shell::trim_output_assign(*s);
+    if (auto v = (*pn)["auto_hide"].value<bool>()) c.panel.autoHide = *v;
+    if (auto v = (*pn)["tooltips"].value<bool>()) c.panel.tooltipsEnabled = *v;
+    if (auto v = (*pn)["widgets_enabled"].value<bool>()) c.panel.widgetsEnabled = *v;
+    if (auto v = (*pn)["reserve_space"].value<bool>()) c.panel.reserveSpace = *v;
+    if (auto v = (*pn)["overlay_layer"].value<bool>()) c.panel.overlayLayer = *v;
+    if (auto v = (*pn)["hover_highlight"].value<bool>()) c.panel.hoverHighlight = *v;
+    if (auto v = (*pn)["smart_auto_hide"].value<bool>()) c.panel.smartAutoHide = *v;
+    if (auto v = (*pn)["reveal_on_switch"].value<bool>()) c.panel.revealOnWorkspaceSwitch = *v;
+    if (auto v = (*pn)["scroll_volume"].value<bool>()) c.panel.scrollChangesVolume = *v;
+    if (auto s = (*pn)["deadzone_left"].value<std::string>()) c.panel.deadZoneLeft = *s;
+    if (auto s = (*pn)["deadzone_middle"].value<std::string>()) c.panel.deadZoneMiddle = *s;
+    if (auto s = (*pn)["deadzone_right"].value<std::string>()) c.panel.deadZoneRight = *s;
+    if (auto v = (*pn)["capsule"].value<bool>()) c.panel.capsuleEnabled = *v;
+    if (auto v = (*pn)["capsule_opacity"].value<int64_t>()) c.panel.capsuleOpacity = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(100)));
+    if (auto v = (*pn)["radius_tl"].value<int64_t>()) c.panel.cornerTL = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(50)));
+    if (auto v = (*pn)["radius_tr"].value<int64_t>()) c.panel.cornerTR = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(50)));
+    if (auto v = (*pn)["radius_bl"].value<int64_t>()) c.panel.cornerBL = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(50)));
+    if (auto v = (*pn)["radius_br"].value<int64_t>()) c.panel.cornerBR = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(50)));
+    if (const auto* a = (*pn)["click_through"].as_array()) c.panel.clickThroughWidgets = toml_string_array(a);
+    if (auto v = (*pn)["border"].value<bool>()) c.panel.border = *v;
+    if (auto v = (*pn)["border_size"].value<int64_t>()) c.panel.borderSize = static_cast<int>(std::clamp(*v, INT64_C(1), INT64_C(12)));
+    if (auto s = (*pn)["icon_theme"].value<std::string>()) c.panel.iconTheme = trim(*s);
   }
 
   if (const auto* db = root.get_as<toml::table>("dashboard")) {
@@ -444,6 +507,7 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     if (auto v = (*nt)["dbus"].value<bool>()) c.notifications.dbusEnabled = *v;
     if (auto v = (*nt)["dbus_enabled"].value<bool>()) c.notifications.dbusEnabled = *v;
     if (auto v = (*nt)["do_not_disturb"].value<bool>()) c.notifications.doNotDisturb = *v;
+    if (auto s = (*nt)["output"].value<std::string>()) c.notifications.outputName = eh::shell::trim_output_assign(*s);
     if (auto v = (*nt)["default_timeout_ms"].value<int64_t>()) {
       c.notifications.defaultTimeoutMs =
           static_cast<std::int32_t>(std::clamp(*v, INT64_C(1000), INT64_C(600000)));
@@ -488,6 +552,14 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     if (auto v = (*tm)["date_format"].value<int64_t>()) c.time.dateFormat = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(3)));
     if (auto s = (*tm)["custom_format"].value<std::string>()) c.time.customFormat = *s;
     if (auto s = (*tm)["timezone"].value<std::string>()) c.time.timezone = *s;
+  }
+
+  if (const auto* tf = root.get_as<toml::table>("taskflip")) {
+    if (auto v = (*tf)["gallery_style"].value<bool>()) c.taskflip.galleryStyle = *v;
+    if (auto v = (*tf)["mru_order"].value<bool>()) c.taskflip.mruOrder = *v;
+    if (auto v = (*tf)["show_caption"].value<bool>()) c.taskflip.showCaption = *v;
+    if (auto v = (*tf)["show_count"].value<bool>()) c.taskflip.showCount = *v;
+    if (auto v = (*tf)["show_icons"].value<bool>()) c.taskflip.showIcons = *v;
   }
 
   if (const auto* kb = root.get_as<toml::table>("keyboard")) {
@@ -833,6 +905,7 @@ constexpr ComponentInfo kComponents[] = {
   {"autostart",     "autostart"},
   {"dock",          "dock"},
   {"taskbar",       "taskbar"},
+  {"panel",         "panel"},
   {"dashboard",     "dashboard"},
   {"appearance",    "appearance"},
   {"wallpaper",     "wallpaper"},
@@ -1025,6 +1098,7 @@ ShellConfig load_uncached(bool skip_matugen = false) {
   ShellConfig c;
   apply_dock_defaults_if_needed(c);
   apply_taskbar_defaults_if_needed(c);
+  apply_panel_defaults_if_needed(c);
   const auto t_after_defaults = std::chrono::steady_clock::now();
 
   toml::table merged = merge_declarative_and_state();
@@ -1036,6 +1110,7 @@ ShellConfig load_uncached(bool skip_matugen = false) {
 
   apply_dock_defaults_if_needed(c);
   apply_taskbar_defaults_if_needed(c);
+  apply_panel_defaults_if_needed(c);
   normalize_legacy_tray_tokens(c);
   dock_migrate_legacy_autosep_slots(c);
   dashboard_migrate_legacy_defaults(c);
@@ -1108,6 +1183,7 @@ std::string state_desktop_toml_path()   { return state_component_toml_path("desk
 std::string state_autostart_toml_path() { return state_component_toml_path("autostart"); }
 std::string state_dock_toml_path()      { return state_component_toml_path("dock"); }
 std::string state_taskbar_toml_path()   { return state_component_toml_path("taskbar"); }
+std::string state_panel_toml_path()     { return state_component_toml_path("panel"); }
 std::string state_appearance_toml_path(){ return state_component_toml_path("appearance"); }
 std::string state_wallpaper_toml_path() { return state_component_toml_path("wallpaper"); }
 std::string state_notifications_toml_path() { return state_component_toml_path("notifications"); }
@@ -1344,6 +1420,12 @@ bool write_state_settings_toml(const ShellConfig& c) {
     tb.insert_or_assign("right_widgets", str_vec_to_array(merged.taskbar.rightWidgets));
     tb.insert_or_assign("pinned_apps", str_vec_to_array(merged.taskbar.pinnedApps));
     tb.insert_or_assign("group_apps", merged.taskbar.groupApps);
+    tb.insert_or_assign("show_labels", merged.taskbar.showLabels);
+    tb.insert_or_assign("collapse_when_full", merged.taskbar.collapseWhenFull);
+    tb.insert_or_assign("thumbnails", merged.taskbar.thumbnailsEnabled);
+    tb.insert_or_assign("thumbnail_peek", merged.taskbar.thumbnailPeekEnabled);
+    tb.insert_or_assign("thumbnail_threshold", static_cast<int64_t>(merged.taskbar.thumbnailThreshold));
+    tb.insert_or_assign("compact_media", merged.taskbar.compactMedia);
     tb.insert_or_assign("slot_pill_opacity", static_cast<int64_t>(merged.taskbar.slotPillOpacity));
     tb.insert_or_assign("auto_hide", merged.taskbar.autoHide);
     tb.insert_or_assign("tooltips", merged.taskbar.tooltipsEnabled);
@@ -1356,6 +1438,48 @@ bool write_state_settings_toml(const ShellConfig& c) {
     tb.insert_or_assign("position_top", merged.taskbar.positionTop);
     tb.insert_or_assign("output", merged.taskbar.outputName.empty() ? std::string("") : merged.taskbar.outputName);
     root.insert_or_assign("taskbar", std::move(tb));
+  }
+  {
+    toml::table pn;
+    pn.insert_or_assign("enabled", merged.panel.enabled);
+    pn.insert_or_assign("width_mode", static_cast<int64_t>(merged.panel.widthMode));
+    pn.insert_or_assign("height", static_cast<int64_t>(merged.panel.height));
+    pn.insert_or_assign("radius", static_cast<int64_t>(merged.panel.radius));
+    pn.insert_or_assign("opacity", static_cast<int64_t>(merged.panel.opacity));
+    pn.insert_or_assign("icon_size", static_cast<int64_t>(merged.panel.iconSize));
+    pn.insert_or_assign("icon_spacing", static_cast<int64_t>(merged.panel.iconSpacing));
+    pn.insert_or_assign("floating_amount", static_cast<int64_t>(merged.panel.floatingAmount));
+    pn.insert_or_assign("edge_gap", static_cast<int64_t>(merged.panel.edgeGap));
+    pn.insert_or_assign("exclusive_zone_gap", static_cast<int64_t>(merged.panel.exclusiveZoneGap));
+    pn.insert_or_assign("scale", merged.panel.scale);
+    pn.insert_or_assign("left_widgets", str_vec_to_array(merged.panel.leftWidgets));
+    pn.insert_or_assign("center_widgets", str_vec_to_array(merged.panel.centerWidgets));
+    pn.insert_or_assign("right_widgets", str_vec_to_array(merged.panel.rightWidgets));
+    pn.insert_or_assign("position_top", merged.panel.positionTop);
+    pn.insert_or_assign("auto_hide", merged.panel.autoHide);
+    pn.insert_or_assign("tooltips", merged.panel.tooltipsEnabled);
+    pn.insert_or_assign("widgets_enabled", merged.panel.widgetsEnabled);
+    pn.insert_or_assign("reserve_space", merged.panel.reserveSpace);
+    pn.insert_or_assign("overlay_layer", merged.panel.overlayLayer);
+    pn.insert_or_assign("hover_highlight", merged.panel.hoverHighlight);
+    pn.insert_or_assign("smart_auto_hide", merged.panel.smartAutoHide);
+    pn.insert_or_assign("reveal_on_switch", merged.panel.revealOnWorkspaceSwitch);
+    pn.insert_or_assign("scroll_volume", merged.panel.scrollChangesVolume);
+    pn.insert_or_assign("deadzone_left", merged.panel.deadZoneLeft);
+    pn.insert_or_assign("deadzone_middle", merged.panel.deadZoneMiddle);
+    pn.insert_or_assign("deadzone_right", merged.panel.deadZoneRight);
+    pn.insert_or_assign("capsule", merged.panel.capsuleEnabled);
+    pn.insert_or_assign("capsule_opacity", static_cast<int64_t>(merged.panel.capsuleOpacity));
+    pn.insert_or_assign("radius_tl", static_cast<int64_t>(merged.panel.cornerTL));
+    pn.insert_or_assign("radius_tr", static_cast<int64_t>(merged.panel.cornerTR));
+    pn.insert_or_assign("radius_bl", static_cast<int64_t>(merged.panel.cornerBL));
+    pn.insert_or_assign("radius_br", static_cast<int64_t>(merged.panel.cornerBR));
+    pn.insert_or_assign("click_through", str_vec_to_array(merged.panel.clickThroughWidgets));
+    pn.insert_or_assign("border", merged.panel.border);
+    pn.insert_or_assign("border_size", static_cast<int64_t>(merged.panel.borderSize));
+    pn.insert_or_assign("icon_theme", merged.panel.iconTheme.empty() ? std::string("") : merged.panel.iconTheme);
+    pn.insert_or_assign("output", merged.panel.outputName.empty() ? std::string("") : merged.panel.outputName);
+    root.insert_or_assign("panel", std::move(pn));
   }
   {
     toml::table db;
@@ -1447,6 +1571,8 @@ bool write_state_settings_toml(const ShellConfig& c) {
     toml::table nt;
     nt.insert_or_assign("dbus", merged.notifications.dbusEnabled);
     nt.insert_or_assign("do_not_disturb", merged.notifications.doNotDisturb);
+    nt.insert_or_assign("output", merged.notifications.outputName.empty() ? std::string("")
+                                                                          : merged.notifications.outputName);
     nt.insert_or_assign("default_timeout_ms", static_cast<int64_t>(merged.notifications.defaultTimeoutMs));
     {
       toml::table toast;
@@ -2309,12 +2435,16 @@ const ShellConfig& shell_config_snapshot() {
 }
 
 const ShellConfig& shell_config_snapshot_skip_matugen() {
-    
+   
   std::lock_guard<std::mutex> lock(g_mu);
   if (!g_cache_no_matugen) {
     g_cache_no_matugen = load_uncached(true);
   }
   return *g_cache_no_matugen;
+}
+
+std::uint64_t shell_config_generation() {
+  return g_load_gen.load(std::memory_order_relaxed);
 }
 
 void shell_config_trigger_async_matugen() {

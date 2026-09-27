@@ -23,6 +23,7 @@ std::string widget_display_title(const std::string& id) {
    
   if (id == "pinned_apps") return "Pinned Apps";
   if (id == "running_apps") return "Running Apps";
+  if (id == "win7_tasks") return "Win7 Tasklist";
   if (eh::config::widget_token_is_system_tray(id)) return "System Tray";
   if (id == "settings_button") return "Settings";
   if (id == "distro_spotlight") return "Spotlight";

@@ -1,6 +1,7 @@
 #include "desktop_shell/osd/host/osd_host.hpp"
 
-#include "desktop_shell/dock/core/dock_app.h"
+#include "configuration/shell_config.hpp"
+#include "desktop_shell/stage/core/stage_app.hpp"
 #include "desktop_shell/common/glyph/material_glyph.hpp"
 #include "desktop_shell/common/animation/animations.hpp"
 #include "desktop_shell/common/ns/namespaces.hpp"
@@ -52,7 +53,7 @@ void rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r)
 struct OsdOutputInst;
 
 struct OsdHost::Impl {
-  DockApp* dock = nullptr;
+  eh::shell::stage::StageApp* stage = nullptr;
   std::vector<std::unique_ptr<OsdOutputInst>> inst;
   OsdContent content{};
   std::string position = "top_right";
@@ -95,11 +96,11 @@ struct OsdOutputInst {
 static void osd_shm_release(void* user) {
    
   auto* in = static_cast<OsdOutputInst*>(user);
-  if (!in || !in->impl || !in->impl->dock) return;
+  if (!in || !in->impl || !in->impl->stage) return;
   if (!in->want_repaint) return;
   in->want_repaint = false;
   in->impl->paint(*in);
-  if (in->impl->dock->display) wl_display_flush(in->impl->dock->display);
+  if (in->impl->stage->display) wl_display_flush(in->impl->stage->display);
 }
 
 static void osd_layer_configure(void* data, zwlr_layer_surface_v1* layer_surface, uint32_t serial, uint32_t width,
@@ -180,11 +181,11 @@ void OsdHost::Impl::destroy_surfaces() {
 
 void OsdHost::Impl::ensure_instances() {
    
-  if (!dock || !dock->compositor || !dock->layerShell || !dock->shm) return;
+  if (!stage || !stage->compositor || !stage->layerShell || !stage->shm) return;
 
   size_t count = 0;
-  for (const auto& slot : dock->outputSlots)
-    if (slot && slot->output) ++count;
+  for (wl_output* out : stage->stageOutputs)
+    if (out) ++count;
 
   if (!inst.empty() && inst.size() != count) destroy_surfaces();
   if (!inst.empty()) return;
@@ -236,22 +237,22 @@ void OsdHost::Impl::ensure_instances() {
   cfg.marginLeft = ml;
   cfg.keyboard = ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
 
-  for (const auto& slot : dock->outputSlots) {
-    if (!slot || !slot->output) continue;
+  for (wl_output* out : stage->stageOutputs) {
+    if (!out) continue;
     auto up = std::make_unique<OsdOutputInst>();
     OsdOutputInst* raw = up.get();
     raw->impl = this;
-    raw->wl_out = slot->output;
+    raw->wl_out = out;
     raw->card_w = card_w_px;
     raw->card_h = card_h_px;
     wl_surface* surf = nullptr;
     zwlr_layer_surface_v1* layer = nullptr;
-    if (!eh::wayland::create_layer_surface(dock->compositor, dock->layerShell, slot->output, cfg, &k_layer_listener, raw,
+    if (!eh::wayland::create_layer_surface(stage->compositor, stage->layerShell, out, cfg, &k_layer_listener, raw,
                                            &surf, &layer))
       continue;
     raw->surface = surf;
     raw->layer = layer;
-    wl_region* region = wl_compositor_create_region(dock->compositor);
+    wl_region* region = wl_compositor_create_region(stage->compositor);
     if (region) {
       wl_surface_set_input_region(surf, region);
       wl_region_destroy(region);
@@ -349,7 +350,7 @@ void OsdHost::Impl::begin_show_and_hide_cycle(OsdOutputInst& in) {
 
 void OsdHost::Impl::paint(OsdOutputInst& in) {
    
-  if (!dock || !in.surface || !in.configured || in.cfg_w <= 0 || in.cfg_h <= 0) return;
+  if (!stage || !in.surface || !in.configured || in.cfg_w <= 0 || in.cfg_h <= 0) return;
   if (in.shm.busy()) {
     in.want_repaint = true;
     return;
@@ -369,7 +370,7 @@ void OsdHost::Impl::paint(OsdOutputInst& in) {
       bottom ? (static_cast<double>(in.cfg_h) - inner_pad - ch + static_cast<double>(in.slide_y))
              : (inner_pad + static_cast<double>(in.slide_y));
 
-  if (!in.shm.ensure(dock->shm, eh::shell::kOsdNamespace, in.cfg_w, in.cfg_h)) return;
+  if (!in.shm.ensure(stage->shm, eh::shell::kOsdNamespace, in.cfg_w, in.cfg_h)) return;
   in.shm.set_release_hook(osd_shm_release, &in);
 
   cairo_t* cr = in.shm.cairo();
@@ -438,26 +439,27 @@ OsdHost::OsdHost() : impl_(std::make_unique<Impl>()) {
 }
 OsdHost::~OsdHost() = default;
 
-void OsdHost::init(DockApp& dock) {
+void OsdHost::init(eh::shell::stage::StageApp& stage) {
    
-  impl_->dock = &dock;
+  impl_->stage = &stage;
   impl_->initialized = true;
   if (const char* p = std::getenv("EH_OSD_POSITION"); p && p[0]) impl_->position = p;
-  impl_->ui_scale = static_cast<float>(std::clamp(dock_ui_scale(dock.settings), 0.5, 2.0));
+  impl_->ui_scale = static_cast<float>(
+      std::clamp(eh::config::shell_config_snapshot().dock.shellUiScale, 0.5, 2.0));
 }
 
 void OsdHost::shutdown() {
    
   if (impl_) impl_->destroy_surfaces();
   if (impl_) {
-    impl_->dock = nullptr;
+    impl_->stage = nullptr;
     impl_->initialized = false;
   }
 }
 
 void OsdHost::show(const OsdContent& content) {
    
-  if (!impl_ || !impl_->dock || !impl_->initialized) return;
+  if (!impl_ || !impl_->stage || !impl_->initialized) return;
   impl_->content = content;
   impl_->ensure_instances();
   for (auto& up : impl_->inst) {

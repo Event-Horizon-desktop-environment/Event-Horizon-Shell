@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-struct DockApp;
 
 namespace eh::shell::overview {
 

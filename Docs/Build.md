@@ -8,7 +8,7 @@ Event Horizon uses the Meson build system with Ninja as the backend.
 - Meson (>= 1.11) and Ninja — distro packages can lag; if your Meson is older,
   install a newer one without root-first: `pipx install meson` (re-login after)
 - python3 (used by Meson and the build-time material-color generator)
-- A Wayland session to run the shell (Hyprland, Niri, Sway, Mango, Labwc, or Triad)
+- A Wayland session to run the shell (Hyprland, Niri, Sway, Mango, or Labwc)
 
 ## Quick Start
 

@@ -125,7 +125,6 @@ void apply_cursor_config(const App& app) {
     }
     case CompositorKind::Niri:
     case CompositorKind::Labwc:
-    case CompositorKind::Triad:
     case CompositorKind::Mango:
     default:
       break;

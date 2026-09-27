@@ -85,7 +85,7 @@ Organized into subdirectories by role:
 
 ## `src/backends/` -- Compositor Backends
 
-An abstraction layer so the shell works across Hyprland, Niri, Sway, Mango, Labwc, and Triad. Each compositor gets its own directory with keyboard, output, workspace, and runtime backends.
+An abstraction layer so the shell works across Hyprland, Niri, Sway, Mango, and Labwc. Each compositor gets its own directory with keyboard, output, workspace, and runtime backends.
 
 The base interfaces live in `interfaces/`:
 
@@ -97,7 +97,7 @@ The base interfaces live in `interfaces/`:
 
 **`ext_workspace/`** -- `ext_workspace_manager.cpp` / `.h` -- client-side helper for binding and tracking `ext-workspace-v1` objects.
 
-Root level: `compositor_kind.hpp` -- `enum class CompositorKind` with values `Unknown, Niri, Hyprland, Sway, Mango, Labwc, Triad`. Free functions like `detect_compositor_kind()`, `compositor_kind_cstr()`, `is_niri()`, etc.
+Root level: `compositor_kind.hpp` -- `enum class CompositorKind` with values `Unknown, Niri, Hyprland, Sway, Mango, Labwc`. Free functions like `detect_compositor_kind()`, `compositor_kind_cstr()`, `is_niri()`, etc.
 
 ### Hyprland (`hyprland/`)
 
@@ -126,15 +126,6 @@ Root level: `compositor_kind.hpp` -- `enum class CompositorKind` with values `Un
 | `sway_keyboard_backend.cpp` / `.h` | Layout via `swaymsg -t get_inputs` |
 | `sway_output_backend.cpp` / `.h` | Outputs via `swaymsg -t get_outputs` |
 | `sway_workspace_backend.cpp` / `.h` | Workspaces via `swaymsg -t get_workspaces` + subscribe |
-
-### Triad (`triad/`)
-
-| File | What it does |
-|---|---|
-| `triad_runtime.cpp` / `.h` | Custom `dwl-ipc-unstable-v2` protocol connection |
-| `triad_keyboard_backend.cpp` / `.h` | Uses Wayland virtual keyboard protocol directly |
-| `triad_output_backend.cpp` / `.h` | Output geometry from `dwl-ipc-unstable-v2` events |
-| `triad_workspace_backend.cpp` / `.h` | Tag/workspace tracking via `dwl-ipc-unstable-v2` |
 
 ### Mango (`mango/`)
 

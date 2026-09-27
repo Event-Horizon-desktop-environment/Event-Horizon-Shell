@@ -9,7 +9,6 @@
 #include <unordered_map>
 #include <vector>
 
-struct DockApp;
 
 namespace eh::wayland {
 class WaylandConnection;

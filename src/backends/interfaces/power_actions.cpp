@@ -5,7 +5,6 @@
 #include "backends/niri/niri_workspace_manager.h"
 #include "backends/mango/mango_backends.h"
 #include "backends/sway/sway_backends.h"
-#include "backends/triad/triad_backends.h"
 
 #include "desktop_shell/unified/compositor_kind.hpp"
 #include "wl/core/connection.hpp"
@@ -89,11 +88,6 @@ void CompositorPlatform::create_backends() {
       wire_keyboard<SwayKeyboardBackend>(sway_kb_, wl_.runtime_registry().sway());
       wire_output<SwayOutputBackend>(sway_out_, wl_.runtime_registry().sway(),
                                      wspace::sway::swaySetOutputPower);
-      break;
-    case CompositorKind::Triad:
-      wire_keyboard<TriadKeyboardBackend>(triad_kb_, wl_.runtime_registry().triad());
-      wire_output<TriadOutputBackend>(triad_out_, wl_.runtime_registry().triad(),
-                                      wspace::triad::setMonitorPower);
       break;
     case CompositorKind::Mango:
       wire_keyboard<MangoKeyboardBackend>(mango_kb_, wl_.runtime_registry().mango());

@@ -8,7 +8,16 @@
 namespace eh::shell::taskbar {
 
 TaskbarOutputLayer* taskbar_ref_layer(TaskbarApp& app) {
-   
+  // Popups open where the user clicked: prefer the pressed layer, then the
+  // pointer layer, and only fall back to the first configured layer.
+  auto at = [&](int li) -> TaskbarOutputLayer* {
+    if (li < 0 || static_cast<size_t>(li) >= app.layers.size()) return nullptr;
+    auto& up = app.layers[static_cast<size_t>(li)];
+    if (up && up->configured) return up.get();
+    return nullptr;
+  };
+  if (auto* L = at(app.pressedLayerIdx)) return L;
+  if (auto* L = at(static_cast<int>(app.pointerTaskbarLayerIdx))) return L;
   for (auto& up : app.layers)
     if (up && up->configured) return up.get();
   if (!app.layers.empty()) return app.layers[0].get();

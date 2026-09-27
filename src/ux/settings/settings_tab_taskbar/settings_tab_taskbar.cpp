@@ -5,6 +5,10 @@
 
 const char* const kWidthModeLabels[] = {"Floating", "Edge-to-edge", "Fill"};
 
+const char* const kThumbThresholdLabels[] = {"Up to 5", "Up to 8", "Up to 10", "Up to 15", "Up to 20"};
+const int kThumbThresholdValues[] = {5, 8, 10, 15, 20};
+const int kThumbThresholdCount = 5;
+
 // Paint function, delegating to the M3 widgets.
 void paint_taskbar_tab(App& app, cairo_t* cr, int contentX, int contentW,
                        double glassOv, double dockMatA, double paintPointerYOffset,
@@ -54,4 +58,12 @@ bool taskbar_m3_is_appearance_child_tab() {
 
 bool taskbar_m3_is_widgets_child_tab() {
   return m3::detail::taskbarM3_is_widgets_child_tab();
+}
+
+void taskbar_display_dd_sync(App& app, int contentX, int contentW) {
+  m3::detail::taskbar_display_dd_sync(app, contentX, contentW);
+}
+
+bool taskbar_display_dd_commit_pointer_up(App& app, float px, float py, int contentX, int contentW) {
+  return m3::detail::taskbar_display_dd_commit_pointer_up(app, px, py, contentX, contentW);
 }

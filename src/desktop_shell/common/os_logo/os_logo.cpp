@@ -48,6 +48,20 @@ std::optional<OsReleaseInfo> read_os_release() {
       if (!val.empty() && val.front() == '"' && val.back() == '"') val = val.substr(1, val.size() - 2);
       if (key == "ID") out.id = val;
       else if (key == "LOGO") out.logo_icon_name = val;
+      else if (key == "ID_LIKE") {
+        std::string cur;
+        for (char c : val) {
+          if (c == ' ' || c == '\t') {
+            if (!cur.empty()) {
+              out.id_like.push_back(cur);
+              cur.clear();
+            }
+          } else {
+            cur.push_back(c);
+          }
+        }
+        if (!cur.empty()) out.id_like.push_back(cur);
+      }
     }
     if (!out.id.empty() || !out.logo_icon_name.empty()) return out;
   }
@@ -55,31 +69,45 @@ std::optional<OsReleaseInfo> read_os_release() {
 }
 
 std::optional<std::string> resolve_logo_image_path(const OsReleaseInfo& info) {
-   
+
   const bool id_cachy = info.id == "cachyos";
   if (id_cachy && file_readable("/usr/share/icons/cachyos.svg")) return std::string("/usr/share/icons/cachyos.svg");
 
-  const std::string logo = info.logo_icon_name;
-  if (logo.empty()) return std::nullopt;
-
-  static constexpr const char* dirs[] = {
-      "/usr/share/icons/hicolor/scalable/apps/",
-      "/usr/share/icons/hicolor/symbolic/apps/",
-      "/usr/share/icons/hicolor/128x128/apps/",
-      "/usr/share/icons/hicolor/256x256/apps/",
-      "/usr/share/icons/hicolor/512x512/apps/",
-      "/usr/share/icons/hicolor/64x64/apps/",
-      "/usr/share/pixmaps/",
-      "/usr/share/icons/",
-  };
-  static constexpr const char* exts[] = {".svg", ".png"};
-  for (const char* dir : dirs) {
-    for (const char* ext : exts) {
-      std::string p = std::string(dir) + logo + ext;
-      if (file_readable(p)) return p;
+  auto try_dirs = [](const std::string& base) -> std::optional<std::string> {
+    static constexpr const char* dirs[] = {
+        "/usr/share/icons/hicolor/scalable/apps/",
+        "/usr/share/icons/hicolor/symbolic/apps/",
+        "/usr/share/icons/hicolor/128x128/apps/",
+        "/usr/share/icons/hicolor/256x256/apps/",
+        "/usr/share/icons/hicolor/512x512/apps/",
+        "/usr/share/icons/hicolor/64x64/apps/",
+        "/usr/share/pixmaps/",
+        "/usr/share/icons/",
+    };
+    static constexpr const char* exts[] = {".svg", ".png"};
+    for (const char* dir : dirs) {
+      for (const char* ext : exts) {
+        std::string p = std::string(dir) + base + ext;
+        if (file_readable(p)) return p;
+      }
     }
-  }
+    return std::nullopt;
+  };
 
+  if (!info.logo_icon_name.empty()) {
+    if (auto hit = try_dirs(info.logo_icon_name)) return hit;
+  }
+  if (!info.id.empty()) {
+    if (auto hit = try_dirs(info.id)) return hit;
+    if (auto hit = try_dirs(info.id + "linux")) return hit;
+    if (auto hit = try_dirs("distributor-logo-" + info.id)) return hit;
+  }
+  for (const auto& like : info.id_like) {
+    if (like.empty()) continue;
+    if (auto hit = try_dirs(like)) return hit;
+  }
+  if (auto hit = try_dirs("distributor-logo")) return hit;
+  if (auto hit = try_dirs("start-here")) return hit;
   return std::nullopt;
 }
 

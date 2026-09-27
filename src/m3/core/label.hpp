@@ -2,12 +2,14 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 #include <string_view>
 
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
 
+#include "m3/core/measure.hpp"
 #include "m3/tokens/type_scale.hpp"
 
 namespace m3 {
@@ -35,16 +37,39 @@ public:
   // Measure text extent without painting.
   void measureExtents(float& outW, float& outH) const {
     if (text_.empty()) { outW = 0; outH = 0; return; }
-    auto* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
-    auto* cr = cairo_create(surface);
-    applyLayout(cr, [&](cairo_t*, PangoLayout* layout) {
-      int pw, ph;
-      pango_layout_get_pixel_size(layout, &pw, &ph);
-      outW = static_cast<float>(pw);
-      outH = static_cast<float>(ph);
-    });
-    cairo_destroy(cr);
-    cairo_surface_destroy(surface);
+    // Fast path: short static labels (buttons, combo titles) are measured
+    // every frame; a bounded cache turns repeats into a hash lookup and a
+    // shared scratch context avoids per-call surface create/destroy.
+    const std::string_view fam = fc_.family.empty() ? std::string_view("Inter")
+                                                    : std::string_view(fc_.family);
+    const bool cacheable = text_.size() <= 48;
+    std::string key;
+    if (cacheable) {
+      key.reserve(fam.size() + text_.size() + 24);
+      key.append(fam);
+      key.push_back('\x1f');
+      char nb[40];
+      std::snprintf(nb, sizeof(nb), "%.2f|%d|%.1f|", fc_.size, fc_.weight, w_);
+      key.append(nb);
+      key.append(text_);
+      if (m3::measure::ExtentCache::instance().lookup(key, outW, outH)) return;
+    }
+    cairo_t* cr = m3::measure::scratch_cr();
+    auto* layout = pango_cairo_create_layout(cr);
+    auto* desc = pango_font_description_new();
+    pango_font_description_set_family(desc, fam.empty() ? "Inter" : std::string(fam).c_str());
+    pango_font_description_set_size(desc, static_cast<int>(fc_.size * PANGO_SCALE));
+    pango_font_description_set_weight(desc, static_cast<PangoWeight>(fc_.weight));
+    pango_layout_set_font_description(layout, desc);
+    pango_layout_set_text(layout, text_.data(), static_cast<int>(text_.size()));
+    if (w_ > 0) pango_layout_set_width(layout, static_cast<int>(w_ * PANGO_SCALE));
+    int pw = 0, ph = 0;
+    pango_layout_get_pixel_size(layout, &pw, &ph);
+    outW = static_cast<float>(pw);
+    outH = static_cast<float>(ph);
+    pango_font_description_free(desc);
+    g_object_unref(layout);
+    if (cacheable) m3::measure::ExtentCache::instance().store(key, outW, outH);
   }
 
   void paint(cairo_t* cr) const {

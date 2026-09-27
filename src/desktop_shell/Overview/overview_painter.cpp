@@ -3,10 +3,9 @@
 
 #include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/icon_cache/icon_cache.hpp"
+#include "wl/toplevel/foreign_toplevels.hpp"
 #include "desktop_shell/common/glyph/material_glyph.hpp"
 #include "configuration/shell_config.hpp"
-#include "desktop_shell/dock/core/dock_app.h"
-#include "desktop_shell/dock/core/dock_settings.hpp"
 #include "desktop_shell/widgets/app_drawer/list/desktop_list.hpp"
 #include "desktop_shell/widgets/shared/slot_pill_style.hpp"
 
@@ -362,7 +361,7 @@ void paint_live_frame(cairo_t* cr, const OverviewCardRect& tile, const OverviewW
   cairo_surface_destroy(img);
 }
 
-void paint_window_tile(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
+void paint_window_tile(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                        const OverviewLayout& layout, const OverviewCardRect& tile,
                        const OverviewWindow& win, float alpha) {
   const double us = layout.uiScale;
@@ -411,7 +410,7 @@ void paint_window_tile(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
   const double iconX = tile.x + 6.0 * us;
   const double iconY = tile.y + 6.0 * us;
   const eh::icons::IconEntry* ic = nullptr;
-  if (!win.appId.empty()) ic = dock.icons.app_icon(win.appId);
+  if (!win.appId.empty()) ic = ctx.icons->app_icon(win.appId);
   if (ic && ic->surface) {
     cairo_save(cr);
     cairo_translate(cr, iconX, iconY);
@@ -705,7 +704,7 @@ void paint_card_content(cairo_t* cr, const OverviewColors& colors,
   // stroked live over the whole card in paint_workspace_cards.
 }
 
-void paint_workspace_cards(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
+void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                            const OverviewLayout& layout,
                            const std::vector<OverviewWorkspace>& workspaces,
                            double scrollPos, int selectedIndex,
@@ -863,7 +862,7 @@ void paint_workspace_cards(cairo_t* cr, DockApp& dock, const OverviewColors& col
               const auto& win = ws.windows[static_cast<size_t>(j)];
               if (win.special) continue;
               OverviewCardRect tile = window_tile_rect(layout, baseCard, win, tileOrd, paintedInWs);
-              paint_window_tile(rc, dock, colors, layout, tile, win, 1.0f);
+              paint_window_tile(rc, ctx, colors, layout, tile, win, 1.0f);
               ++tileOrd;
             }
           }
@@ -1018,7 +1017,7 @@ void paint_workspace_cards(cairo_t* cr, DockApp& dock, const OverviewColors& col
           cairo_translate(cr, tile.x + tile.w * 0.5, tile.y + tile.h * 0.5);
           cairo_scale(cr, 1.05, 1.05);
           cairo_translate(cr, -(tile.x + tile.w * 0.5), -(tile.y + tile.h * 0.5));
-          paint_window_tile(cr, dock, colors, layout, tile, win, alpha * 0.9f);
+          paint_window_tile(cr, ctx, colors, layout, tile, win, alpha * 0.9f);
           cairo_restore(cr);
           break;
         }
@@ -1163,7 +1162,7 @@ void compute_app_grid_layout(AppGridLayout& grid, double w, double h, double sea
   grid.startY = topY + (availH - totalH) * 0.5;
 }
 
-void paint_app_grid(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
+void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                     const OverviewLayout& layout,
                     const std::vector<SpotlightHit>& apps,
                     int hoveredIdx, float hoverLift, float progress,
@@ -1270,7 +1269,7 @@ void paint_app_grid(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
     // physical pixels (logical size × UI scale) so HiDPI never upscales a
     // small bucket — that was the source of blurry grid icons.
     const int wantPx = std::max(16, static_cast<int>(std::ceil(grid.iconSize * us)));
-    const eh::icons::IconEntry* ic = dock.icons.tray_icon(iconKey, wantPx);
+    const eh::icons::IconEntry* ic = ctx.icons->tray_icon(iconKey, wantPx);
     if (ic && ic->surface) {
       cairo_save(cr);
       cairo_translate(cr, iconX, iconY);
@@ -1597,12 +1596,11 @@ void paint_strip_contents(cairo_t* cr, const OverviewColors& colors,
 }
 } // namespace
 
-void paint_quick_select_strip(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
+void paint_quick_select_strip(cairo_t* cr, ShellCtx&, const OverviewColors& colors,
                                const QuickSelectLayout& qs, const OverviewLayout& layout,
                                const std::vector<OverviewWorkspace>& workspaces,
                                int selectedIndex, int hoveredWs, int hoveredQs,
                                float progress) {
-  (void)dock;
   (void)hoveredWs;
   const float alpha = std::clamp(progress, 0.0f, 1.0f);
   if (alpha <= 0.0f || workspaces.empty()) return;

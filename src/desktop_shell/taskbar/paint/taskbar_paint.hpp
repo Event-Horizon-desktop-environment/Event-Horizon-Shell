@@ -3,6 +3,7 @@
 #include "desktop_shell/taskbar/layout/taskbar_types.hpp"
 #include "desktop_shell/shared/core/running_snapshot.hpp"
 #include "services/mpris/mpris_player.hpp"
+#include "desktop_shell/widgets/shared/shared_slot_paint.hpp"
 
 #include <cairo.h>
 
@@ -29,7 +30,8 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
                                double taskbarHoverLiftPx,
                                bool usePanel,
                                const eh::shell::shared::RunningSnapshot& runningSnap,
-                               const eh::mpris::PlayerSnapshot& mprisSnap);
+                               const eh::mpris::PlayerSnapshot& mprisSnap,
+                               int layerIdx = -1);
 
 // Widths of the three taskbar sections (widget strip inner gaps included),
 // measured with the same rules the paint pass uses to lay them out.
@@ -38,6 +40,19 @@ struct TaskbarSectionWidths {
   double center = 0.0;
   double right = 0.0;
   double total = 0.0;
+};
+
+struct TaskbarPaintSlot {
+  using Kind = eh::widgets::shared_slot_paint::SlotKind;
+  Kind kind = Kind::App;
+  std::string key;
+  std::string iconId;
+  std::uint64_t chosenSerial = 0;
+  bool anyActivated = false;
+  bool isPinned = false;
+  // Win7 tasklist widget slot: forces the Win7 look (labels) regardless of
+  // the global show-labels toggle.
+  bool win7 = false;
 };
 
 TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,

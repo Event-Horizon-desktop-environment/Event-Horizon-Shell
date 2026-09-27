@@ -16,6 +16,7 @@
 #include "desktop_shell/shared/core/config_watch.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
 #include "services/ipc/client.hpp"
+#include "desktop_shell/notifications/types/notifications_ipc.hpp"
 #include "services/ipc/ipc_server.hpp"
 #include "ux/settings/common/embed/settings_embed_lifecycle.hpp"
 #include "wl/core/connection.hpp"
@@ -218,6 +219,9 @@ int run_taskbar_standalone() {
         }
       });
       ipc_ok = ipc.subscribe("config.applied") && ipc.subscribe("command.request");
+      // This child runs its own DockMpris: forward notify.push frames so
+      // now-playing toasts (and album art) reach horizon-notifications.
+      eh::notify::install_ipc_sender(ipc);
     }
   }
 
@@ -226,6 +230,7 @@ int run_taskbar_standalone() {
   // supervisor flips the display, and the click handler flips the paint state
   // locally (existing null-gamma fallback).
   taskbar_set_nightlight_toggle_fn([&ipc]() { (void)ipc.publish("command.request", "nightlight.toggle"); });
+  taskbar_set_overview_toggle_fn([&ipc]() { (void)ipc.publish("command.request", "overview.toggle"); });
 
   // Control Centre PearCenter compact popup commands (DND / color scheme toggles).
   eh::shell::dock::control_center::control_center_set_bus_publish_fn(

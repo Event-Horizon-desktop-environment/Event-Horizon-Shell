@@ -10,7 +10,6 @@ enum class CompositorKind : std::uint8_t {
   Sway,
   Mango,
   Labwc,
-  Triad,
 };
 
 [[nodiscard]] CompositorKind detect_compositor_kind();
@@ -21,4 +20,3 @@ enum class CompositorKind : std::uint8_t {
 [[nodiscard]] inline bool is_sway() { return detect_compositor_kind() == CompositorKind::Sway; }
 [[nodiscard]] inline bool is_mango() { return detect_compositor_kind() == CompositorKind::Mango; }
 [[nodiscard]] inline bool is_labwc() { return detect_compositor_kind() == CompositorKind::Labwc; }
-[[nodiscard]] inline bool is_triad() { return detect_compositor_kind() == CompositorKind::Triad; }

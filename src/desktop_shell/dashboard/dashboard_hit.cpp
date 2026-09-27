@@ -1,10 +1,10 @@
 #include "desktop_shell/dashboard/dashboard_hit.hpp"
 
-#include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/stage/core/stage_app.hpp"
 
 namespace eh::shell::dashboard {
 
-DashboardHit dashboard_hit_at(const DockApp& app, double px, double py) {
+DashboardHit dashboard_hit_at(const eh::shell::stage::StageApp& app, double px, double py) {
   DashboardHit out{};
   const DashboardLayout& L = app.dash.layout;
   if (!L.valid) return out;

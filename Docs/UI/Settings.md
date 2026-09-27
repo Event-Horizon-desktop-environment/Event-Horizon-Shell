@@ -159,7 +159,6 @@ Each tab is a `.cpp`/`.hpp` pair in its own directory implementing the `Settings
 | `settings_tab_bing.cpp` / `settings_tab_bing.hpp` | Bing daily wallpaper enable, download directory, resolution selector, market selector, auto-update interval |
 | `settings_tab_hyprland.cpp` / `settings_tab_hyprland.hpp` | Hyprland-specific: window rules editor, animation settings, blur settings, input config |
 | `settings_tab_mango.cpp` / `settings_tab_mango.hpp` | Mango-specific: display tags, scratchpad, per-output layout |
-| `settings_tab_layout.cpp` / `settings_tab_layout.hpp` | Bar layout configuration through interactive widget drag-drop |
 | `settings_tab_default_apps.cpp` / `settings_tab_default_apps.hpp` | MIME type → application association table |
 
 ### Network Sub-Dialogs

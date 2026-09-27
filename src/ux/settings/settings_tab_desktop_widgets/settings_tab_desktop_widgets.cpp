@@ -4,6 +4,7 @@
 #include "ux/settings/data/settings_desktop_widgets_data.hpp"
 #include "ux/settings/settings_app_types.hpp"
 #include "ux/settings/settings_serialize.hpp"
+#include "ux/settings/utils/display/settings_display_dropdown.hpp"
 #include "ux/settings/utils/helpers/material_glyphs.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 #include "ux/settings/utils/widget_picker/settings_widget_drag.hpp"
@@ -34,6 +35,15 @@ static constexpr double kCogHit = 26.0;
 static constexpr double kCogGap = 8.0;
 static constexpr double kRightPad = 16.0;
 static constexpr double kDragHandleW = 48.0;
+
+static int desktop_widgets_display_card_top() { return kContentTop + 12; }
+static int desktop_widgets_display_card_h() { return 52 + 60 + 24; }
+int desktop_widgets_display_band_top() {
+  return desktop_widgets_display_card_top() + 52;
+}
+static int desktop_widgets_list_card_top() {
+  return desktop_widgets_display_card_top() + desktop_widgets_display_card_h() + 12;
+}
 
 static int list_content_height(int nwidgets) {
   if (nwidgets <= 0) return 0;
@@ -116,13 +126,36 @@ void paint_desktop_widgets_tab(App& app, cairo_t* cr, int contentX, int contentW
   const int cardW = contentW - 16;
 
   const int listH = list_content_height(static_cast<int>(configs.size()));
-  const int cardH = 12 + 20 + 8 + listH + 18 + kAddBtnH + kListPadB + 16;
+  const int listCardH = 12 + 20 + 8 + listH + 18 + kAddBtnH + kListPadB + 16;
 
   cairo_save(cr);
 
-  const int cy = kContentTop + 12;
+  // Display-output card.
+  {
+    const int dTop = desktop_widgets_display_card_top();
+    const int dH = desktop_widgets_display_card_h();
+    const int dBand = desktop_widgets_display_band_top();
+    settings_card(app, cr, cardX, dTop, cardW, dH, glassOv);
+    settings_cat_label(cr, static_cast<double>(cardX + kCardPad), static_cast<double>(dTop + 21), "Display");
+    settings_show_text(cr, cardX + kCardPad, dTop + 38, "Choose which display desktop widgets appear on.",
+                       11.f, 400, Theme::TextR, Theme::TextG, Theme::TextB, 0.46f);
+    cairo_set_source_rgba(cr, Theme::TextR, Theme::TextG, Theme::TextB, 0.15);
+    cairo_set_line_width(cr, 1.0);
+    cairo_move_to(cr, static_cast<double>(cardX + kCardPad + 8), dBand);
+    cairo_line_to(cr, static_cast<double>(cardX + cardW - kCardPad - 8), dBand);
+    cairo_stroke(cr);
+    settings_show_text(cr, cardX + kCardPad, dBand + 36, "Display", 14.f, 500, Theme::TextR, Theme::TextG,
+                       Theme::TextB, 0.93f);
+    settings_show_text(cr, cardX + kCardPad, dBand + 53, "Auto = one monitor, All = every display.", 11.f, 400,
+                       Theme::TextR, Theme::TextG, Theme::TextB, 0.46f);
+    eh::settings::display::sync_dropdown(app, app.desktopWidgetsDisplayDd, app.settings.desktopWidgetsOutputName,
+                                         contentX, contentW, dBand);
+    app.desktopWidgetsDisplayDd.paint_trigger(app, cr, glassOv, settings_scroll_px(app));
+  }
 
-  settings_card(app, cr, cardX, cy, cardW, cardH, glassOv);
+  const int cy = desktop_widgets_list_card_top();
+
+  settings_card(app, cr, cardX, cy, cardW, listCardH, glassOv);
 
   settings_show_text(cr, cardX + kCardPad, cy + 24, "Desktop widgets", 14.f, 700, Theme::TextR, Theme::TextG, Theme::TextB, 0.96f);
 
@@ -225,7 +258,7 @@ void paint_desktop_widgets_tab(App& app, cairo_t* cr, int contentX, int contentW
   }
 
   // Add widget button.
-  const int addBtnY = cy + cardH - 16 - kAddBtnH - kListPadB;
+  const int addBtnY = cy + listCardH - 16 - kAddBtnH - kListPadB;
   const double abx = cardX + 24.0;
   const double aby = static_cast<double>(addBtnY);
   const double hoverPY = app.pointerY + settings_scroll_px(app);
@@ -255,7 +288,7 @@ void paint_desktop_widgets_tab(App& app, cairo_t* cr, int contentX, int contentW
 bool settings_desktop_widgets_handle_remove_click(App& app, int contentX, int contentW) {
    
   auto configs = eh::shell::desktop::desktop_widgets_prefs_load();
-  const int cy = kContentTop + 12;
+  const int cy = desktop_widgets_list_card_top();
   const int listY0 = cy + 12 + 20 + 8;
   const double py = app.pointerY + settings_scroll_px(app);
 
@@ -277,7 +310,7 @@ bool settings_desktop_widgets_handle_remove_click(App& app, int contentX, int co
 bool settings_desktop_widgets_handle_toggle_click(App& app, int contentX, int contentW) {
    
   auto configs = eh::shell::desktop::desktop_widgets_prefs_load();
-  const int cy = kContentTop + 12;
+  const int cy = desktop_widgets_list_card_top();
   const int listY0 = cy + 12 + 20 + 8;
   const double py = app.pointerY + settings_scroll_px(app);
 
@@ -306,7 +339,7 @@ bool settings_desktop_widgets_handle_toggle_click(App& app, int contentX, int co
 
 bool settings_desktop_widgets_handle_settings_click(App& app, int contentX, int contentW) {
   auto configs = eh::shell::desktop::desktop_widgets_prefs_load();
-  const int cy = kContentTop + 12;
+  const int cy = desktop_widgets_list_card_top();
   const int listY0 = cy + 12 + 20 + 8;
   const double py = app.pointerY + settings_scroll_px(app);
 
@@ -326,9 +359,9 @@ bool settings_desktop_widgets_handle_settings_click(App& app, int contentX, int 
   return false;
 }
 
-bool settings_desktop_widgets_handle_add_click(App& app, int contentX, int) {   
+bool settings_desktop_widgets_handle_add_click(App& app, int contentX, int) {
   auto configs = eh::shell::desktop::desktop_widgets_prefs_load();
-  const int cy = kContentTop + 12;
+  const int cy = desktop_widgets_list_card_top();
   const int listH = list_content_height(static_cast<int>(configs.size()));
   const int cardH = 12 + 20 + 8 + listH + 18 + kAddBtnH + kListPadB + 16;
 
@@ -348,4 +381,32 @@ bool settings_desktop_widgets_handle_add_click(App& app, int contentX, int) {
     return true;
   }
   return false;
+}
+
+void desktop_widgets_display_dd_sync(App& app, int contentX, int contentW) {
+  eh::settings::display::sync_dropdown(app, app.desktopWidgetsDisplayDd,
+                                       app.settings.desktopWidgetsOutputName,
+                                       contentX, contentW,
+                                       desktop_widgets_display_band_top());
+}
+
+bool desktop_widgets_display_dd_handle_pointer_down(App& app, int contentX, int contentW) {
+  return eh::settings::display::handle_pointer_down(app, app.desktopWidgetsDisplayDd,
+                                                   app.settings.desktopWidgetsOutputName,
+                                                   contentX, contentW,
+                                                   desktop_widgets_display_band_top());
+}
+
+bool desktop_widgets_display_dd_commit_pointer_up(App& app, float px, float py, int contentX, int contentW) {
+  if (!app.desktopWidgetsDisplayDd.open()) return false;
+  return eh::settings::display::commit_pointer_up(app, app.desktopWidgetsDisplayDd,
+                                                 app.settings.desktopWidgetsOutputName, contentX, contentW,
+                                                 desktop_widgets_display_band_top(), px, py);
+}
+
+bool desktop_widgets_display_dd_update_hover(App& app, int contentX, int contentW) {
+  return eh::settings::display::update_hover(app, app.desktopWidgetsDisplayDd,
+                                             contentX, contentW,
+                                             app.settings.desktopWidgetsOutputName,
+                                             desktop_widgets_display_band_top());
 }

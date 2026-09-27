@@ -7,7 +7,7 @@
 #include "desktop_shell/common/glyph/material_glyph.hpp"
 #include "desktop_shell/common/time/mono_time.hpp"
 #include "desktop_shell/dashboard/dashboard_layout.hpp"
-#include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/stage/core/stage_app.hpp"
 #include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
 #include "desktop_shell/ui/slider/ui_slider.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
@@ -132,7 +132,7 @@ void eyebrow(cairo_t* cr, const std::string& s, double x, double baseline) {
 // Current-week strip (v5): seven day cells for the week containing today,
 // today highlighted. No navigation state.
 
-void paint_clock(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
+void paint_clock(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   (void)app;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
@@ -149,7 +149,7 @@ void paint_clock(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
 // ------------------------------------------------------------- calendar ----
 
-void paint_calendar(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
+void paint_calendar(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   (void)app;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
@@ -187,7 +187,7 @@ void paint_calendar(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
 // -------------------------------------------------------------- weather ----
 
-void paint_weather(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
+void paint_weather(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
 
@@ -218,7 +218,7 @@ void paint_weather(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
 // ---------------------------------------------------------------- media ----
 
-void paint_media(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
+void paint_media(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   auto& d = app.dash;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
@@ -292,7 +292,7 @@ void paint_media(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
 // ---------------------------------------------------------------- mixer ----
 
-void paint_mixer(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
+void paint_mixer(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   auto& d = app.dash;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
@@ -364,7 +364,7 @@ void paint_mixer(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
 // --------------------------------------------------------------- system ----
 
-void paint_system(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
+void paint_system(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   auto& d = app.dash;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
@@ -406,7 +406,7 @@ void paint_system(DockApp& app, cairo_t* cr, const CardRect& c, double s) {
 
 // ------------------------------------------- expanded network/bluetooth ----
 
-void paint_wifi_rows(DockApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc,
+void paint_wifi_rows(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc,
                      double innerGlass) {
   auto& d = app.dash;
   if (!d.netExpanded) return;
@@ -459,7 +459,7 @@ void paint_wifi_rows(DockApp& app, cairo_t* cr, const CardRect& c, const eh::con
   (void)innerGlass;
 }
 
-void paint_bt_rows(DockApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc) {
+void paint_bt_rows(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc) {
   auto& d = app.dash;
   if (!d.btExpanded) return;
   const auto devs = dashboard_sorted_bt_devices();
@@ -577,7 +577,7 @@ void paint_bt_compact(cairo_t* cr, const CardRect& c, const eh::config::ChromePa
 // Eyebrow device label on top, then mute icon + flat bar + percent. Replaces
 // the shared two-line audio cards (same mute/slider behavior, new geometry).
 
-void paint_audio_compact(DockApp& app, cairo_t* cr, const CardRect& c,
+void paint_audio_compact(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c,
                          const eh::config::ChromePaintColors& mc, double s, bool isInput) {
   auto& d = app.dash;
   bool muted = false;
@@ -639,7 +639,7 @@ void paint_audio_compact(DockApp& app, cairo_t* cr, const CardRect& c,
 
 // ----------------------------------------------------------------- card ----
 
-void paint_card(DockApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc, double inner) {
+void paint_card(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc, double inner) {
   switch (c.kind) {
     case DashCardKind::Clock:
       paint_clock(app, cr, c, inner);
@@ -684,7 +684,7 @@ void paint_card(DockApp& app, cairo_t* cr, const CardRect& c, const eh::config::
 
 }  // namespace
 
-void dashboard_paint(DockApp& app, cairo_t* cr, double surfaceW, double surfaceH) {
+void dashboard_paint(eh::shell::stage::StageApp& app, cairo_t* cr, double surfaceW, double surfaceH) {
   auto& d = app.dash;
   if (!cr) return;
 

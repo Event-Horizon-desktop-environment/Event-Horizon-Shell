@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdio>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/socket.h>
@@ -66,10 +67,9 @@ void SwayWorkspaceManager::setOutputResolver(Resolver resolver) {
 }
 
 int SwayWorkspaceManager::resolveWsId(const std::string& id) const {
-   
-  char* end = nullptr;
-  const long parsed = std::strtol(id.c_str(), &end, 10);
-  if (end == id.c_str() || parsed < 0 || parsed > 2147483647) return -1;
+  long parsed = -1;
+  if (std::sscanf(id.c_str(), "%ld", &parsed) != 1) return -1;
+  if (parsed < 0 || parsed > 2147483647L) return -1;
   return static_cast<int>(parsed);
 }
 

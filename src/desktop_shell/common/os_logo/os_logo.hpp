@@ -4,12 +4,14 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace eh_os_logo {
 
 struct OsReleaseInfo {
   std::string id;
   std::string logo_icon_name;
+  std::vector<std::string> id_like;
 };
 
 std::optional<OsReleaseInfo> read_os_release();

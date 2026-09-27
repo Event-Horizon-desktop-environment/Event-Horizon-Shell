@@ -93,6 +93,8 @@ static void cc_update_hover(DockApp& app) {
       if (t == CcHoverTarget::None && pear_input_slider_hit(pctx, px, py, &dummy)) t = CcHoverTarget::InputAudioSlider;
       if (t == CcHoverTarget::None && pear_brightness_slider_hit(pctx, px, py, &dummy))
         t = CcHoverTarget::BrightnessCard;
+
+
       if (t == CcHoverTarget::None && pear_output_device_row_hit(pctx, px, py, &row))
         t = CcHoverTarget::OutputDeviceRow;
       if (t == CcHoverTarget::None && pear_input_device_row_hit(pctx, px, py, &row))
@@ -461,10 +463,9 @@ bool handle_button_press(DockApp& app, uint32_t serial) {
           s.inputDragVisualT = -1.0;
           s.pearBriDragActive = true;
           s.pearBriDragT = t;
-          s.inputLastAppliedPct = pct;
-          s.inputLastApplyMs = now_mono_ms();
-          s.inputIgnoreStateUntilMs = s.inputLastApplyMs + 180;
-          s.inputLastLoggedPct = pct;
+          s.pearBriLastAppliedPct = pct;
+          s.pearBriLastApplyMs = now_mono_ms();
+          s.pearBriLastLoggedPct = pct;
           popup_draw_surface(app);
           wl_display_flush(app.display);
           return true;
@@ -752,6 +753,14 @@ bool handle_motion(DockApp& app) {
   }
 
   auto& s = app.ccState;
+  const uint64_t motionNowMs = now_mono_ms();
+  auto motion_redraw = [&]() {
+    static uint64_t lastMs = 0;
+    if (motionNowMs - lastMs < 16) return;
+    lastMs = motionNowMs;
+    popup_draw_surface(app);
+    wl_display_flush(app.display);
+  };
 
   if (s.mixerDragActive) {
     const double t = std::clamp((app.pointerX - s.mixerDragSx) /
@@ -762,7 +771,6 @@ bool handle_motion(DockApp& app) {
     s.mixerDragUiPct = pct;
     if (pct != s.mixerLastLoggedPct) {
       s.mixerLastLoggedPct = pct;
-      std::cout << "[cc-audio][mixer][dock] drag_move x=" << app.pointerX << " t=" << t << " pct=" << pct << "\n";
     }
     const uint64_t nowMs = now_mono_ms();
     if (s.mixerLastApplyMs == 0 || nowMs - s.mixerLastApplyMs >= 16) {
@@ -822,15 +830,14 @@ bool handle_motion(DockApp& app) {
           }
         } else {
           s.pearBriDragT = t;
-          if (s.inputLastApplyMs == 0 || nowMs - s.inputLastApplyMs >= 16) {
+          if (s.pearBriLastApplyMs == 0 || nowMs - s.pearBriLastApplyMs >= 16) {
             (void)eh::shell::dock::control_center::pear_set_brightness_pct(pct);
-            s.inputLastAppliedPct = pct;
-            s.inputLastApplyMs = nowMs;
-            s.inputIgnoreStateUntilMs = nowMs + 180;
+            s.pearBriLastAppliedPct = pct;
+            s.pearBriLastApplyMs = nowMs;
           }
         }
-        popup_draw_surface(app);
-        wl_display_flush(app.display);
+    motion_redraw();
+
         return true;
       }
     }
@@ -843,7 +850,6 @@ bool handle_motion(DockApp& app) {
     s.audioDragUiPct = pct;
     if (pct != s.audioLastLoggedPct) {
       s.audioLastLoggedPct = pct;
-      std::cout << "[cc-audio][dock] drag_move x=" << app.pointerX << " t=" << t << " pct=" << pct << "\n";
     }
     if (s.audioLastApplyMs == 0 || nowMs - s.audioLastApplyMs >= 16) {
       eh::shell::dock_slot_hooks::control_center_set_audio_output_volume(t);
@@ -856,7 +862,6 @@ bool handle_motion(DockApp& app) {
     s.inputDragUiPct = pct;
     if (pct != s.inputLastLoggedPct) {
       s.inputLastLoggedPct = pct;
-      std::cout << "[cc-audio][input][dock] drag_move x=" << app.pointerX << " t=" << t << " pct=" << pct << "\n";
     }
     if (s.inputLastApplyMs == 0 || nowMs - s.inputLastApplyMs >= 16) {
       eh::shell::dock_slot_hooks::control_center_set_audio_input_volume(t);
@@ -865,8 +870,7 @@ bool handle_motion(DockApp& app) {
       s.inputIgnoreStateUntilMs = nowMs + 180;
     }
   }
-  popup_draw_surface(app);
-  wl_display_flush(app.display);
+  motion_redraw();
   return true;
 }
 

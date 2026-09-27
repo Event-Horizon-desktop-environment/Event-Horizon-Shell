@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 
-struct DockApp;
+namespace eh::shell::stage { struct StageApp; }
 
 namespace eh::shell::osd {
 
@@ -23,7 +23,7 @@ public:
   OsdHost(const OsdHost&) = delete;
   OsdHost& operator=(const OsdHost&) = delete;
 
-  void init(DockApp& dock);
+  void init(eh::shell::stage::StageApp& stage);
   void shutdown();
 
   void show(const OsdContent& content);

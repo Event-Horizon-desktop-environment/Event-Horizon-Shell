@@ -60,7 +60,7 @@ you skipped step 2.
 ## 5. Run
 
 Event Horizon is a layer-shell client — it must run inside a Wayland session
-(Hyprland, Niri, Sway, Mango, Labwc, or Triad). To test it before wiring up
+(Hyprland, Niri, Sway, Mango, or Labwc). To test it before wiring up
 autostart, open a terminal in your session and run:
 
 ```bash

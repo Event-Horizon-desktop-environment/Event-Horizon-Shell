@@ -32,6 +32,7 @@ struct PearHitContext {
 [[nodiscard]] bool pear_input_row_hit(const PearHitContext& ctx, double px, double py);
 [[nodiscard]] bool pear_input_device_row_hit(const PearHitContext& ctx, double px, double py, int* out_index);
 [[nodiscard]] bool pear_brightness_slider_hit(const PearHitContext& ctx, double px, double py, double* out_t);
+
 // Media button 0/1/2 or -1.
 [[nodiscard]] int pear_media_button_hit(const PearHitContext& ctx, double px, double py);
 [[nodiscard]] bool pear_networks_back_hit(const PearHitContext& ctx, double px, double py);

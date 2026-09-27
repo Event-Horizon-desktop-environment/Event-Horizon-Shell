@@ -5,8 +5,6 @@
 #include "desktop_shell/common/log/debug_log.hpp"
 #include "configuration/shell_config.hpp"
 #include "backends/hyprland/hyprland_backends.h"
-#include "desktop_shell/dock/core/dock_app.h"
-#include "desktop_shell/dock/core/dock_settings.hpp"
 #include "wallpaper/thumbnail/wallpaper_thumbnail.hpp"
 #include "wl/capture/screencopy_png.hpp"
 #include "wl/capture/toplevel_stream.hpp"
@@ -123,7 +121,7 @@ Capture::Capture(Host& host) : host_(host) {}
 
 bool Capture::live_enabled() const noexcept {
   if (!host_.open()) return false;
-  if (host_.dock().compositorKind != CompositorKind::Hyprland) return false;
+  if (host_.ctx().compositorKind != CompositorKind::Hyprland) return false;
   const auto& ov = eh::config::shell_config_snapshot().appearance;
   if (!ov.overviewLiveUpdates) return false;
   return host_.wl() && host_.wl()->display() && host_.wl()->shm() &&
@@ -210,7 +208,7 @@ void Capture::sync_snapshot_streams() {
   }
   if (!host_.wl() || !host_.wl()->display() || !host_.wl()->shm() ||
       !host_.wl()->hyprland_toplevel_export_manager()) return;
-  if (host_.dock().compositorKind != CompositorKind::Hyprland) return;
+  if (host_.ctx().compositorKind != CompositorKind::Hyprland) return;
 
   if (!live_stream_ || !live_stream_->active()) {
     live_stream_ = std::make_unique<eh::wayland::ToplevelStream>();
@@ -259,7 +257,7 @@ void Capture::handle_live_frame(eh::wayland::ToplevelStreamFrame&& frame) {
 }
 
 void Capture::capture_workspaces(bool preserving) {
-  auto& dock = host_.dock();
+  auto& ctx = host_.ctx();
   auto& workspaces = host_.workspaces_mut();
   const auto& ov = eh::config::shell_config_snapshot().appearance;
   const bool live = ov.overviewLiveUpdates;
@@ -287,9 +285,9 @@ void Capture::capture_workspaces(bool preserving) {
   if (ov.overviewCaptureMode != 1)
     debug_log("overview", "capture_workspaces: mode=%d (Snapshot) — taking static captures",
               ov.overviewCaptureMode);
-  if (dock.compositorKind != CompositorKind::Hyprland) {
+  if (ctx.compositorKind != CompositorKind::Hyprland) {
     debug_log("overview", "capture_workspaces: compositorKind=%d (not Hyprland) — skipping",
-              static_cast<int>(dock.compositorKind));
+              static_cast<int>(ctx.compositorKind));
     return;
   }
   if (!host_.wl() || !host_.wl()->display() || !host_.wl()->screencopy_manager() || !host_.wl()->shm()) {
@@ -359,16 +357,18 @@ void Capture::capture_workspaces(bool preserving) {
   if (cfg.wallpaperEnabled && !cfg.wallpaperImage.empty()) {
     if (desktop_wallpaper_path_ != cfg.wallpaperImage) {
       int outW = 640, outH = 360;
-      if (dock.primaryOutputWidthPx > 0 && dock.primaryOutputHeightPx > 0) {
+      const int outW0 = ctx.primaryOutputWidthPx ? *ctx.primaryOutputWidthPx : 0;
+      const int outH0 = ctx.primaryOutputHeightPx ? *ctx.primaryOutputHeightPx : 0;
+      if (outW0 > 0 && outH0 > 0) {
         constexpr int kMaxDim = 640;
-        if (dock.primaryOutputWidthPx >= dock.primaryOutputHeightPx) {
+        if (outW0 >= outH0) {
           outW = kMaxDim;
           outH = std::max(1, static_cast<int>(
-              kMaxDim * static_cast<double>(dock.primaryOutputHeightPx) / dock.primaryOutputWidthPx + 0.5));
+              kMaxDim * static_cast<double>(outH0) / outW0 + 0.5));
         } else {
           outH = kMaxDim;
           outW = std::max(1, static_cast<int>(
-              kMaxDim * static_cast<double>(dock.primaryOutputWidthPx) / dock.primaryOutputHeightPx + 0.5));
+              kMaxDim * static_cast<double>(outW0) / outH0 + 0.5));
         }
       }
       desktop_wallpaper_path_ = cfg.wallpaperImage;

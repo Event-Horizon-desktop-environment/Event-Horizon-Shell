@@ -292,7 +292,22 @@ void TrayManager::setup_name_owner_watch() {
       .onInterface("org.freedesktop.DBus")
       .call([this](const std::string& name, const std::string& oldOwner, const std::string& newOwner) {
         try {
-          // Name lost: newOwner is empty, oldOwner is set
+          if (name == "org.kde.StatusNotifierWatcher") {
+            if (newOwner.empty()) {
+              {
+                std::lock_guard<std::mutex> lock(mutex_);
+                items_.clear();
+              }
+              notify_subscribers();
+              return;
+            }
+            if (oldOwner.empty() || oldOwner != newOwner) {
+              discover_existing_items();
+              notify_subscribers();
+              return;
+            }
+            return;
+          }
           if (!newOwner.empty() || oldOwner.empty()) return;
           std::cerr << "[tray] name lost: '" << name << "' old=" << oldOwner << "\n";
           remove_items_for_service(name);

@@ -70,8 +70,20 @@ bool dock_renderer_dd_commit_pointer_up(App& app, float px, float py) {
                                         app.width, app.height);
   if (rr >= 0 && rr < m3::detail::kRendererCount) {
     app.settings.renderer = m3::detail::kRendererValues[rr];
+    save_settings(app.settings);
+    app.rendererDd.close();
+    draw(app);
+    return true;
   }
-  app.rendererDd.close();
-  draw(app);
+  // Miss on release (e.g. the opening click releases on the trigger):
+  // keep the popup open but swallow the event.
   return true;
+}
+
+void dock_display_dd_sync(App& app, int contentX, int contentW) {
+  m3::detail::dock_display_dd_sync(app, contentX, contentW);
+}
+
+bool dock_display_dd_commit_pointer_up(App& app, float px, float py, int contentX, int contentW) {
+  return m3::detail::dock_display_dd_commit_pointer_up(app, px, py, contentX, contentW);
 }

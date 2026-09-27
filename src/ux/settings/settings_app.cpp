@@ -46,6 +46,7 @@
 #include "desktop_shell/common/palette/matugen_palette.hpp"
 #include "desktop_shell/common/log/verbose_log.hpp"
 #include "desktop_shell/common/log/debug_log.hpp"
+#include "ux/settings/settings_tab_monitors/monitors_log.hpp"
 #include "ux/settings/common/trace/settings_trace.hpp"
 #include "xdg-shell-client-protocol.h"
 #include "wl/buffer/shm_buffer.hpp"
@@ -66,7 +67,6 @@
 #include "ux/settings/settings_app_types.hpp"
 #include "ux/settings/data/default_apps/settings_default_apps.hpp"
 #include "ux/settings/settings_tab_default_apps/settings_tab_default_apps.hpp"
-#include "ux/settings/settings_tab_ui_layout/settings_tab_layout.hpp"
 #include "ux/settings/common/embed/settings_embed.hpp"
 #include "ux/settings/common/embed/settings_embed_lifecycle.hpp"
 #include "ux/settings/utils/widget_picker/widget_picker.hpp"
@@ -87,6 +87,7 @@
 #include "ux/settings/settings_tab_bing/settings_tab_bing.hpp"
 #include "ux/settings/settings_tab_dock/settings_tab_dock.hpp"
 #include "ux/settings/settings_tab_taskbar/settings_tab_taskbar.hpp"
+#include "ux/settings/settings_tab_panel/settings_tab_panel.hpp"
 #include "ux/settings/settings_tab_sound/settings_tab_sound.hpp"
 #include "ux/settings/settings_tab_notifications/settings_tab_notifications.hpp"
 #include "ux/settings/settings_tab_appearance/settings_tab_appearance.hpp"
@@ -110,7 +111,6 @@
 #include "ux/settings/settings_tab_bluetooth/settings_tab_bluetooth.hpp"
 #include "ux/settings/settings_tab_accounts/settings_tab_accounts.hpp"
 #include "ux/settings/settings_tab_autostart/settings_tab_autostart.hpp"
-#include "ux/settings/settings_tab_ui_layout/settings_tab_layout.hpp"
 #include "ux/settings/settings_serialize.hpp"
 #include "ux/settings/common/logo/settings_logo.hpp"
 #include "ux/settings/utils/gpu/settings_gpu.hpp"
@@ -290,12 +290,12 @@ struct SidebarItemDef {
   const int* subTabIds = nullptr;
 };
 
-static const char* const kPanelsAndUISubs[] = {"Dock", "Taskbar", "Launcher", "Desktop", "Desktop Widgets"};
-static const char* const kPanelsAndUISubGlyphs[] = {"dock_to_bottom", "dock_to_bottom", "apps", "desktop_windows", "widgets"};
-static const int kPanelsAndUITabIds[] = {0, 11, 9, 29, 27};
-static const char* const kDisplaySubs[] = {"Monitors", "Appearance", "Themes", "Color Themes", "Icons", "UI Layout", "Nightlight"};
-static const char* const kDisplaySubGlyphs[] = {"monitor", "palette", "palette", "colorize", "photo_library", "view_quilt", "dark_mode"};
-static const int kDisplayTabIds[] = {7, 2, 45, 50, 44, 3, 19};
+static const char* const kPanelsAndUISubs[] = {"Dock", "Panel", "Taskbar", "Launcher", "Desktop", "Desktop Widgets"};
+static const char* const kPanelsAndUISubGlyphs[] = {"dock_to_bottom", "dock_to_top", "dock_to_bottom", "apps", "desktop_windows", "widgets"};
+static const int kPanelsAndUITabIds[] = {0, 1, 11, 9, 29, 27};
+static const char* const kDisplaySubs[] = {"Monitors", "Appearance", "Themes", "Color Themes", "Icons", "Nightlight"};
+static const char* const kDisplaySubGlyphs[] = {"monitor", "palette", "palette", "colorize", "photo_library", "dark_mode"};
+static const int kDisplayTabIds[] = {7, 2, 45, 50, 44, 19};
 static const char* const kSystemSubs[] = {"Notifications", "Sound", "Default Apps", "Time", "Keyboard & Language", "Bluetooth", "Power", "Accounts", "Startup"};
 static const char* const kSystemSubGlyphs[] = {"notifications", "volume_up", "app_registration", "schedule", "keyboard", "bluetooth", "power_settings_new", "account_circle", "play_arrow"};
 static const int kSystemTabIds[] = {5, 8, 10, 30, 31, 47, 32, 46, 48};
@@ -308,8 +308,8 @@ static const char* const kNetworkSubGlyphs[] = {"wifi", "lan", "vpn_key"};
 static const int kNetworkTabIds[] = {17, 18, 28};
 
 static const SidebarItemDef kSidebarDefs[] = {
-    {12, "Panels & UI", "dashboard", kPanelsAndUISubs, kPanelsAndUISubGlyphs, 5, true, kPanelsAndUITabIds},
-    {13, "Display", "display_settings", kDisplaySubs, kDisplaySubGlyphs, 7, true, kDisplayTabIds},
+    {12, "Panels & UI", "dashboard", kPanelsAndUISubs, kPanelsAndUISubGlyphs, 6, true, kPanelsAndUITabIds},
+    {13, "Display", "display_settings", kDisplaySubs, kDisplaySubGlyphs, 6, true, kDisplayTabIds},
     {16, "MangoWM", "view_module", kMangoSubs, kMangoSubGlyphs, 7, true, kMangoTabIds},
     {33, "Hyprland", "view_module", nullptr, nullptr, 0, false, nullptr},
     {14, "System", "tune", kSystemSubs, kSystemSubGlyphs, 9, true, kSystemTabIds},
@@ -444,8 +444,8 @@ void schedule_settings_surface_frame(App& app) {
 
 static void settings_paint_monitors_dropdown_unclipped(App& app, cairo_t* cr, int contentX, int contentW,
                                                        double glassOv) {
-   
   if (app.monitorsActiveDd < 0 || app.monitorsTab.outputs.empty()) return;
+  const auto t_dd0 = SettingsBenchClock::now();
 
   eh::settings_monitors_tab::MonitorsTabLayout monLay{};
   eh::settings_monitors_tab::compute_monitors_tab_layout(static_cast<int>(contentX), contentW, kContentTop,
@@ -539,17 +539,50 @@ static void settings_paint_monitors_dropdown_unclipped(App& app, cairo_t* cr, in
   const int list_device_y = list_doc_top - settings_scroll_px_int(app);
   settings_paint_combo_list_popup(app, cr, dcx, list_device_y, dcw, kSettingsDdRowH, nrows, monDdPtrs.data(), selIx,
                                   app.monitorsDdHoverRow, glassOv, 0, 0, true);
+  eh::settings::monitors_log::MonitorsLog::instance().writef(
+      "paint dropdown kind=%d nrows=%d sel=%d total=%lldus", app.monitorsActiveDd, nrows, selIx,
+      settings_bench_us(t_dd0, SettingsBenchClock::now()));
 }
 
 extern const char* const kWidthModeLabels[];
+extern const char* const kPanelWidthModeLabels[];
+extern const char* const kThumbThresholdLabels[];
+extern const int kThumbThresholdValues[];
+extern const int kThumbThresholdCount;
 
 static void settings_paint_mode_dropdown_popups(App& app, cairo_t* cr, int contentX, int contentW, double glassOv) {
 
   if (app.activeTab == 0 && !dock_m3_is_widgets_child_tab() &&
       !dock_m3_is_appearance_child_tab()) {
     dock_renderer_dd_sync(app, contentX, contentW);
+    dock_display_dd_sync(app, contentX, contentW);
     const int scr = settings_scroll_px_int(app);
     app.rendererDd.paint_popup(app, cr, scr, app.width, app.height, glassOv);
+    app.dockDisplayDd.paint_popup(app, cr, scr, app.width, app.height, glassOv);
+  }
+
+  if (app.activeTab == 1 && !panel_m3_is_appearance_child_tab() && !panel_m3_is_widgets_child_tab()) {
+    panel_display_dd_sync(app, contentX, contentW);
+    const int scr = settings_scroll_px_int(app);
+    app.panelDisplayDd.paint_popup(app, cr, scr, app.width, app.height, glassOv);
+  }
+
+  if (app.activeTab == 11 && !taskbar_m3_is_appearance_child_tab() && !taskbar_m3_is_widgets_child_tab()) {
+    taskbar_display_dd_sync(app, contentX, contentW);
+    const int scr = settings_scroll_px_int(app);
+    app.taskbarDisplayDd.paint_popup(app, cr, scr, app.width, app.height, glassOv);
+  }
+
+  if (app.activeTab == 27) {
+    desktop_widgets_display_dd_sync(app, contentX, contentW);
+    const int scr = settings_scroll_px_int(app);
+    app.desktopWidgetsDisplayDd.paint_popup(app, cr, scr, app.width, app.height, glassOv);
+  }
+
+  if (app.activeTab == 5) {
+    notif_display_dd_sync(app, contentX, contentW);
+    const int scr = settings_scroll_px_int(app);
+    app.notifDisplayDd.paint_popup(app, cr, scr, app.width, app.height, glassOv);
   }
 
   if (app.activeTab == 2 && app.appearanceChildTab == kAppearanceGeneral) {
@@ -568,6 +601,31 @@ static void settings_paint_mode_dropdown_popups(App& app, cairo_t* cr, int conte
     settings_paint_combo_list_popup(app, cr, cbx, ly, kSettingsComboW, kSettingsDdRowH, 3, kWidthModeLabels,
                                     std::clamp(app.settings.taskbarWidthMode, 0, 2),
                                     app.taskbarWidthModeDropdownHoverRow, glassOv);
+  }
+
+  if (app.taskbarThumbThresholdDropdownOpen && app.activeTab == 11) {
+    const int kVisCardTopM3 = kContentTop + kDockChildTabH + 12;
+    const int cbx = contentX + 8 + contentW - 16 - kCardPad - kSettingsComboW;
+    const int cby = kVisCardTopM3 + 52 + 13 * kDockVisRowPitch + (kDockVisRowPitch - kSettingsComboH) / 2;
+    const int ly = cby + kSettingsComboH + 2 - settings_scroll_px_int(app);
+    int selIx = 2;
+    const int curV = std::clamp(app.settings.taskbarThumbnailThreshold, 3, 20);
+    for (int i = 0; i < kThumbThresholdCount; ++i) {
+      if (kThumbThresholdValues[i] == curV) { selIx = i; break; }
+    }
+    settings_paint_combo_list_popup(app, cr, cbx, ly, kSettingsComboW, kSettingsDdRowH, kThumbThresholdCount,
+                                    kThumbThresholdLabels, selIx,
+                                    app.taskbarThumbThresholdDropdownHoverRow, glassOv);
+  }
+
+  if (app.panelWidthModeDropdownOpen && app.activeTab == 1) {
+    const int kVisCardTopM3 = kContentTop + kDockChildTabH + 12;
+    const int cbx = contentX + 8 + contentW - 16 - kCardPad - kSettingsComboW;
+    const int cby = kVisCardTopM3 + 52 + 1 * kDockVisRowPitch + (kDockVisRowPitch - kSettingsComboH) / 2;
+    const int ly = cby + kSettingsComboH + 2 - settings_scroll_px_int(app);
+    settings_paint_combo_list_popup(app, cr, cbx, ly, kSettingsComboW, kSettingsDdRowH, 3, kPanelWidthModeLabels,
+                                    std::clamp(app.settings.panelWidthMode, 0, 2),
+                                    app.panelWidthModeDropdownHoverRow, glassOv);
   }
 
   // Qt color scheme dropdown (themes tab, QT sub-tab)
@@ -627,6 +685,7 @@ void draw(App& app) {
               app.pendingRedraw ? 1 : 0, app.embedPresentT);
   }
   if (app.activeTab > 48 && app.activeTab != 50) app.activeTab = 44;
+  if (app.activeTab == 3) app.activeTab = 7;  // UI Layout page removed; fall back to Monitors.
   if (app.activeTab != 10) app.defaultAppsPillRectValid = false;
   if (app.activeTab == 7 && !app.monitorsTabDidInitialRefresh) {
     app.monitorsTab.refresh_from_system();
@@ -779,6 +838,7 @@ void draw(App& app) {
   const double dockMatA = dockMatRaw * glassOv;
 
   if (app.activeTab == 0) settings_clamp_dock_scroll_px(app);
+  else if (app.activeTab == 1) settings_clamp_panel_scroll_px(app);
   else if (app.activeTab == 11) settings_clamp_taskbar_scroll_px(app);
   else if (app.activeTab == 46) settings_clamp_accounts_scroll_px(app);
   else if (app.activeTab == 48) settings_clamp_autostart_scroll_px(app);
@@ -794,6 +854,7 @@ void draw(App& app) {
   if (app.activeTab == 45) settings_clamp_themes_scroll_px(app);
   if (app.activeTab == 50) app.settingsColorThemesScrollPx = std::max(0, app.settingsColorThemesScrollPx);
    int dockPanelScrollPxPaint = app.activeTab == 0   ? app.settingsDockScrollPx
+                                 : app.activeTab == 1 ? app.settingsPanelScrollPx
                                  : app.activeTab == 11 ? app.settingsTaskbarScrollPx
                                  : app.activeTab == 6 ? app.settingsWallpaperScrollPx
                                 : app.activeTab == 7 ? app.settingsMonitorsScrollPx
@@ -983,10 +1044,11 @@ void draw(App& app) {
 
   const uint64_t contentDrawCountBefore = g_settings_content_draw_count;
 
-  if (app.activeTab == 0 || app.activeTab == 11) {
+  if (app.activeTab == 0 || app.activeTab == 1 || app.activeTab == 11) {
     const std::unordered_set<std::string>& widgetDisabled =
         app.activeTab == 0 ? app.settings.dockWidgetSlotsDisabled
-        : app.settings.taskbarWidgetSlotsDisabled;
+        : app.activeTab == 1 ? app.settings.panelWidgetSlotsDisabled
+                             : app.settings.taskbarWidgetSlotsDisabled;
 
     auto paint_one_row_surface_c = [&](const std::string& wid, double rx, double ry, double rw, double rh,
                                        double tgX, double tgY, double rmX, double rmY, bool hoverToggle, bool hoverRemove,
@@ -1085,6 +1147,10 @@ void draw(App& app) {
     paint_taskbar_tab(app, cr, contentX, contentW, glassOv, dockMatA, paintPointerYOffset, 0);
   }
 
+  if (app.activeTab == 1) {
+    paint_panel_tab(app, cr, contentX, contentW, glassOv, dockMatA, paintPointerYOffset, 0);
+  }
+
     settings_paint_mode_dropdown_popups(app, cr, contentX, contentW, glassOv);
 
       cairo_restore(cr);
@@ -1151,8 +1217,6 @@ void draw(App& app) {
     cairo_translate(cr, 0.0, -paintPointerYOffset);
     paint_color_themes_tab(app, cr, contentX, contentW, glassOv);
     cairo_restore(cr);
-  } else if (app.activeTab == 3) {
-    paint_layout_tab(app, cr, contentX, contentW, glassOv);
   } else if (app.activeTab == 4) {
     paint_workspaces_tab(app, cr, contentX, contentW, glassOv, paintPointerYOffset, dockMatA);
   } else if (app.activeTab == 5) {
@@ -1713,6 +1777,36 @@ void draw(App& app) {
     debug_log("settings", "draw: committed %dx%d", app.width, app.height);
   }
   const SettingsBenchClock::time_point t_after_wl = SettingsBenchClock::now();
+  // Always-on Monitors render log (NOT gated behind EH_BENCH): render times
+  // for the full draw when the Monitors tab is visible, so paint (from
+  // paint_monitors_tab) can be compared against shell_snapshot / cairo_body /
+  // commit. Goes to ~/.local/state/event-horizon/Horizon-monitors.log.
+  if (app.activeTab == 7) {
+    const int64_t us_shell_snap = settings_bench_us(t_draw_enter, t_after_shell_snapshot);
+    const int64_t us_sync_gpu = settings_bench_us(t_after_shell_snapshot, t_after_sync_renderer);
+    const int64_t us_thumbs = settings_bench_us(t_after_sync_renderer, t_after_thumb_merge);
+    const int64_t us_want_vk = settings_bench_us(t_after_thumb_merge, t_after_want_vk);
+    const int64_t us_buffers = settings_bench_us(t_after_want_vk, t_after_ensure);
+    const int64_t us_buf_prep = settings_bench_us(t_after_ensure, t_after_cairo_buf_prep);
+    const int64_t us_glass_alpha = settings_bench_us(t_before_glass_alpha, t_after_glass_alpha);
+    const int64_t us_cairo_body = settings_bench_us(t_after_glass_alpha, t_after_cairo);
+    const int64_t us_commit = settings_bench_us(t_after_cairo, t_after_wl);
+    const int64_t us_total = settings_bench_us(t_draw_enter, t_after_wl);
+    const double fps_inst = us_total > 0 ? 1000000.0 / static_cast<double>(us_total) : 0.0;
+    eh::settings::monitors_log::MonitorsLog::instance().writef(
+        "render %dx%d slot=%s shell_snapshot=%lldus sync_gpu=%lldus thumb_merge=%lldus "
+        "want_vk=%lldus buffers=%lldus buf_prep=%lldus glass_alpha=%lldus cairo_body=%lldus "
+        "commit=%lldus total=%lldus fps_inst=%.1f cause=%s nOut=%zu dirty=%d",
+        app.width, app.height, vk_path ? "vk" : std::to_string(paintBi).c_str(), us_shell_snap,
+        us_sync_gpu, us_thumbs, us_want_vk, us_buffers, us_buf_prep, us_glass_alpha, us_cairo_body,
+        us_commit, us_total, fps_inst, eh::settings::monitors_log::mon_cause_last(),
+        app.monitorsTab.outputs.size(), app.monitorsTab.dirty ? 1 : 0);
+    if (us_total >= 16000) {
+      eh::settings::monitors_log::MonitorsLog::instance().writef(
+          "slow render total=%lldus cairo_body=%lldus commit=%lldus (>16ms)", us_total, us_cairo_body,
+          us_commit);
+    }
+  }
   if (eh_settings_bench()) {
     ++s_settings_bench_draw_n;
     const int64_t us_shell_snap = settings_bench_us(t_draw_enter, t_after_shell_snapshot);

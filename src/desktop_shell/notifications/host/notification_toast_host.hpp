@@ -99,6 +99,7 @@ private:
 
   double pointerX_ = 0.0;
   double pointerY_ = 0.0;
+  std::uint32_t hoverCloseId_ = 0;  // card id whose close X is hovered (0 = none)
 };
 
 }

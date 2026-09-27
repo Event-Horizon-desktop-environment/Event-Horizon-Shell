@@ -84,6 +84,9 @@ struct ControlCenterState {
   // can keep using inputDragActive).
   bool pearBriDragActive = false;
   double pearBriDragT = -1.0;
+  uint64_t pearBriLastApplyMs = 0;
+  int pearBriLastAppliedPct = -1;
+  int pearBriLastLoggedPct = -1;
 
   // Mixer drag state
   bool mixerDragActive = false;

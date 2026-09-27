@@ -22,6 +22,8 @@
 #include "ux/settings/utils/helpers/material_glyphs.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 
+#include "ux/settings/utils/display/settings_display_dropdown.hpp"
+
 #include "ux/settings/settings_tab_dock_appearance/settings_tab_dock_appearance.hpp"
 #include "ux/settings/utils/scroll/settings_scroll.hpp"
 
@@ -49,6 +51,9 @@ inline int renderer_card_top();
 // painting and hit tests so geometry is never stale.
 inline void renderer_dd_sync(App& app, int contentX, int contentW);
 
+inline int dock_display_band_top();
+inline void dock_display_dd_sync(App& app, int contentX, int contentW);
+
 } // namespace m3::detail
 
 // Persistent M3 widget state for the dock settings tab.
@@ -58,9 +63,12 @@ inline void renderer_dd_sync(App& app, int contentX, int contentW);
 
 namespace m3::detail {
 
+inline int dock_display_band_top();
+
 struct DockTabM3State {
-  // Card heights (fixed).
-  static constexpr int kVisCardH = 52 + kDockVisRowPitch * kDockVisToggleRows + 24;
+  // Card heights (fixed). Visibility card holds 6 toggles + 1 display row.
+  static constexpr int kVisRowsWithDisplay = kDockVisToggleRows + 1;
+  static constexpr int kVisCardH = 52 + kDockVisRowPitch * kVisRowsWithDisplay + 24;
   static constexpr int kRendererCardH = 52 + kDockVisRowPitch + 24;
   static constexpr int kAppearCardH = kSpacingXL + kSpacingS +
       2 * kSliderRowH + kSpacingM +
@@ -499,6 +507,25 @@ struct DockTabM3State {
       vrows[i].tg->paint(cr, 0);
     }
 
+    // Display row (output picker).
+    {
+      const int bandTop = visBandTop(6);
+      cairo_set_source_rgba(cr, outlineR_, outlineG_, outlineB_, 0.15);
+      cairo_set_line_width(cr, 1.0);
+      cairo_move_to(cr, static_cast<double>(cardX) + kCardPad + 8.0, bandTop);
+      cairo_line_to(cr, static_cast<double>(cardX + cardW) - kCardPad - 8.0, bandTop);
+      cairo_stroke(cr);
+      settings_show_text(cr, cardX + kCardPad, bandTop + 36, "Display", 14.f, 500,
+                         textR_, textG_, textB_, 0.93f);
+      settings_show_text(cr, cardX + kCardPad, bandTop + 53,
+                         "Auto = one monitor, All = every display.", 11.f, 400,
+                         textR_, textG_, textB_, 0.46f);
+      eh::settings::display::sync_dropdown(app, app.dockDisplayDd,
+                                           app.settings.dockOutputName,
+                                           contentX, contentW, bandTop);
+      app.dockDisplayDd.paint_trigger(app, cr, glassOv, settings_scroll_px(app));
+    }
+
     // Renderer card (Vulkan / Cairo picker).
     {
       const int cardTop = renderer_card_top();
@@ -527,6 +554,8 @@ struct DockTabM3State {
     if (tabHit >= 0 && tabHit != activeChildTab_) {
       activeChildTab_ = tabHit;
       activeSlider_ = -1;
+      app.rendererDd.close();
+      app.dockDisplayDd.close();
       draw(app);
       return true;
     }
@@ -638,23 +667,67 @@ struct DockTabM3State {
 
     activeSlider_ = -1;  // reset any stale drag
 
-    // Renderer dropdown: while open, swallow clicks so they don't fall
-    // through to toggles underneath; clicking the trigger toggles it.
+    // Display + renderer dropdowns. Display uses the shared helper (row
+    // select + trigger toggle + outside-close on pointer-down). Renderer
+    // follows the same pattern so both stay open across the opening
+    // click's release.
     if (activeChildTab_ == kTabSettings) {
-      renderer_dd_sync(app, contentX, contentW);
-      const int scr = settings_scroll_px(app);
-      if (app.rendererDd.open()) {
-        if (app.rendererDd.hit_trigger(px, py, scr)) {
-          app.rendererDd.close();  // click-away on trigger closes
+      // If either popup is open, give it first crack at the press.
+      if (app.dockDisplayDd.open() || app.rendererDd.open()) {
+        // Display open: row select / trigger close / outside close.
+        if (app.dockDisplayDd.open()) {
+          const std::string before = app.settings.dockOutputName;
+          if (eh::settings::display::handle_pointer_down(app, app.dockDisplayDd,
+                                                         app.settings.dockOutputName,
+                                                         contentX, contentW,
+                                                         dock_display_band_top())) {
+            return true;
+          }
+          (void)before;
+        }
+        // Renderer open: row select on down, trigger toggle, outside close.
+        if (app.rendererDd.open()) {
+          ::m3::detail::renderer_dd_sync(app, contentX, contentW);
+          const int scr = settings_scroll_px_int(app);
+          const int sx = static_cast<int>(app.pointerX);
+          const int sy = static_cast<int>(app.pointerY);
+          const int row = app.rendererDd.hit_row(sx, sy, scr, app.width, app.height);
+          if (row >= 0 && row < kRendererCount) {
+            app.settings.renderer = kRendererValues[row];
+            save_settings(app.settings);
+            app.rendererDd.close();
+            draw(app);
+            return true;
+          }
+          if (app.rendererDd.hit_trigger(sx, sy, scr)) {
+            app.rendererDd.close();
+            draw(app);
+            return true;
+          }
+          app.rendererDd.close();
           draw(app);
           return true;
         }
-        return true;  // commit happens on pointer-up; consume the down
       }
-      if (app.rendererDd.hit_trigger(px, py, scr)) {
-        app.rendererDd.open_popup();
-        draw(app);
-        return true;
+      // Both closed: trigger hits open one (and close the other).
+      {
+        ::m3::detail::dock_display_dd_sync(app, contentX, contentW);
+        ::m3::detail::renderer_dd_sync(app, contentX, contentW);
+        const int scr = settings_scroll_px_int(app);
+        const int sx = static_cast<int>(app.pointerX);
+        const int sy = static_cast<int>(app.pointerY);
+        if (app.dockDisplayDd.hit_trigger(sx, sy, scr)) {
+          app.rendererDd.close();
+          app.dockDisplayDd.open_popup();
+          draw(app);
+          return true;
+        }
+        if (app.rendererDd.hit_trigger(sx, sy, scr)) {
+          app.dockDisplayDd.close();
+          app.rendererDd.open_popup();
+          draw(app);
+          return true;
+        }
       }
     }
 
@@ -828,6 +901,30 @@ inline void renderer_dd_sync(App& app, int contentX, int contentW) {
   app.rendererDd.set_selected(renderer_ui_index(app));
   app.rendererDd.set_row_h(kSettingsDdRowH);
   app.rendererDd.set_anchor(cx, cy, kSettingsComboW, kSettingsComboH);
+}
+
+inline int dock_display_band_top() {
+  const int kVisCardTop = kContentTop + kDockChildTabH + 12;
+  return kVisCardTop + 52 + 6 * kDockVisRowPitch;
+}
+
+inline void dock_display_dd_sync(App& app, int contentX, int contentW) {
+  eh::settings::display::sync_dropdown(app, app.dockDisplayDd,
+                                       app.settings.dockOutputName, contentX,
+                                       contentW, dock_display_band_top());
+}
+
+inline bool dock_display_dd_commit_pointer_up(App& app, float px, float py,
+                                              int contentX, int contentW) {
+  auto& m3 = dockM3();
+  if (!app.dockDisplayDd.open()) return false;
+  if (m3.activeChildTab_ != DockTabM3State::kTabSettings) {
+    app.dockDisplayDd.close();
+    return false;
+  }
+  return eh::settings::display::commit_pointer_up(
+      app, app.dockDisplayDd, app.settings.dockOutputName, contentX, contentW,
+      dock_display_band_top(), px, py);
 }
 
 } // namespace m3::detail

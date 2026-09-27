@@ -58,7 +58,9 @@
 #include <cairo/cairo.h>
 
 #include <algorithm>
+#include <chrono>
 #include <iomanip>
+#include <map>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -90,7 +92,40 @@ static bool eh_taskbar_fast_start() {
   return v;
 }
 
-std::vector<TaskbarWidgetHit> g_widgetHits;
+std::vector<std::vector<TaskbarWidgetHit>> g_layerHits;
+
+// Hits for one output layer. With a single bar this is layer 0 and behaves
+// exactly like the old shared vector; with output=all each monitor keeps
+// its own geometry so bars stop cloning each other's input.
+static const std::vector<TaskbarWidgetHit>& tb_hits_for_layer(int layer) {
+  if (layer >= 0 && static_cast<size_t>(layer) < g_layerHits.size())
+    return g_layerHits[static_cast<size_t>(layer)];
+  for (const auto& v : g_layerHits) {
+    if (!v.empty()) return v;
+  }
+  static const std::vector<TaskbarWidgetHit> kEmpty;
+  return kEmpty;
+}
+
+static int tb_pointer_layer(const TaskbarApp& app) {
+  if (static_cast<size_t>(app.pointerTaskbarLayerIdx) < g_layerHits.size())
+    return static_cast<int>(app.pointerTaskbarLayerIdx);
+  if (!g_layerHits.empty()) return 0;
+  return -1;
+}
+
+const std::vector<TaskbarWidgetHit>& taskbar_layer_hits(const TaskbarApp& app, int layer) {
+  (void)app;
+  return tb_hits_for_layer(layer);
+}
+
+int taskbar_pointer_layer(const TaskbarApp& app) { return tb_pointer_layer(app); }
+
+// Motion-handler bench accumulators, consumed by the taskbar-perf summary.
+uint64_t g_motionN = 0;
+double g_motionMs = 0.0;
+double g_motionMaxMs = 0.0;
+double g_drawMaxMs = 0.0;
 
 namespace {
 
@@ -255,19 +290,33 @@ static void taskbar_popup_frame_done(void* data, wl_callback* cb, uint32_t /*com
   wl_callback_destroy(cb);
   app.popupFrameCb = nullptr;
   if (!app.popupSurface || !app.popupLayer) return;
-  if (app.popupKind != TaskbarPopupKind::PowerConfirm) return;
-  if (!app.appDrawerPowerConfirmOpen) return;
-  const bool motionDirty = app.popupMotionDirty;
-  app.popupMotionDirty = false;
-  const uint64_t now = eh::shell::monotonic_ms();
-  if (motionDirty || now - app.popupLastDrawMs >= 250) {
-    taskbar_popup_draw(app);
-  } else {
-    if (!app.popupFrameCb) {
-      app.popupFrameCb = wl_surface_frame(app.popupSurface);
-      wl_callback_add_listener(app.popupFrameCb, &g_taskbar_popup_frame_listener, &app);
+  if (app.popupKind == TaskbarPopupKind::PowerConfirm) {
+    if (!app.appDrawerPowerConfirmOpen) return;
+    const bool motionDirty = app.popupMotionDirty;
+    app.popupMotionDirty = false;
+    const uint64_t now = eh::shell::monotonic_ms();
+    if (motionDirty || now - app.popupLastDrawMs >= 250) {
+      taskbar_popup_draw(app);
+    } else {
+      if (!app.popupFrameCb) {
+        app.popupFrameCb = wl_surface_frame(app.popupSurface);
+        wl_callback_add_listener(app.popupFrameCb, &g_taskbar_popup_frame_listener, &app);
+      }
+      wl_surface_commit(app.popupSurface);
     }
-    wl_surface_commit(app.popupSurface);
+    return;
+  }
+  if (app.popupKind == TaskbarPopupKind::ControlCenter) {
+    if (app.popupMotionDirty) {
+      app.popupMotionDirty = false;
+      const auto tH0 = std::chrono::steady_clock::now();
+      taskbar_popup_draw(app);
+      const double hms = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - tH0).count();
+      debug_log("taskbar-perf", "hover target=%d row=%d redraw_ms=%.2f",
+                (int)app.ccState.hoverTarget, app.ccState.hoverRowIdx, hms);
+    }
+    return;
   }
 }
 
@@ -321,6 +370,7 @@ static void taskbar_set_keyboard_interactivity(TaskbarApp& app, uint32_t mode) {
 }
 
 static void taskbar_popup_close(TaskbarApp& app) {
+  app.popupHoverItem = -1;
   if (app.popupSurface) {
     if (app.popupFrameCb) {
       wl_callback_destroy(app.popupFrameCb);
@@ -431,7 +481,8 @@ static void draw_context_menu(TaskbarApp& app, cairo_t* cr, int w, int h) {
   cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
   cairo_set_font_size(cr, 13.0);
   double yy = 4.0;
-  for (const auto& it : app.popupItems) {
+  for (size_t idx = 0; idx < app.popupItems.size(); ++idx) {
+    const auto& it = app.popupItems[idx];
     if (it.id < 0) {
       cairo_set_source_rgba(cr, 1, 1, 1, 0.10);
       cairo_set_line_width(cr, 1.0);
@@ -440,6 +491,11 @@ static void draw_context_menu(TaskbarApp& app, cairo_t* cr, int w, int h) {
       cairo_stroke(cr);
       yy += 13.0;
       continue;
+    }
+    if ((int)idx == app.popupHoverItem && it.enabled) {
+      cairo_set_source_rgba(cr, 0.35, 0.55, 1.0, 0.16);
+      path_rounded_rect(cr, 4.0, yy, static_cast<double>(w) - 8.0, 26.0, 6.0);
+      cairo_fill(cr);
     }
     cairo_set_source_rgba(cr, 1, 1, 1, it.enabled ? 0.87 : 0.35);
     cairo_move_to(cr, 12.0, yy + 17.0);
@@ -530,6 +586,397 @@ bool taskbar_cc_settle_resize(TaskbarApp& app) {
   return ok && app.popupSurface != nullptr;
 }
 } // namespace
+
+// ── Win7-style hover window previews (thumbnail cards) ─────────────────
+// Popup-local geometry lives in taskbar_types.hpp so paint, motion and
+// click share it; state handling lives here. v1 paints the app icon in
+// each card and live window pixels plug into the same rect later.
+
+// Local toplevel lookup for the preview popup.
+static const eh::wayland::ForeignToplevels::Toplevel* thumbs_toplevel_by_serial(
+    const eh::wayland::ForeignToplevels& tl, std::uint64_t serial) {
+  if (serial == 0) return nullptr;
+  for (const auto& t : tl) {
+    if (t.serial == serial && t.handle && !t.closed) return &t;
+  }
+  return nullptr;
+}
+
+static std::string thumbs_trim_title(const std::string& title, cairo_t* cr, double fontPx,
+                                     double maxW) {
+  if (title.empty()) return std::string("(untitled)");
+  cairo_save(cr);
+  cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+  cairo_set_font_size(cr, fontPx);
+  auto adv = [&](const std::string& t) {
+    cairo_text_extents_t ex{};
+    cairo_text_extents(cr, t.c_str(), &ex);
+    return ex.x_advance;
+  };
+  if (adv(title) <= maxW) {
+    cairo_restore(cr);
+    return title;
+  }
+  static constexpr const char* kEll = "\xe2\x80\xa6";
+  const double ellW = adv(kEll);
+  std::string out;
+  size_t i = 0;
+  while (i < title.size()) {
+    size_t len = 1;
+    const unsigned char c = static_cast<unsigned char>(title[i]);
+    if ((c & 0x80) == 0) len = 1;
+    else if ((c & 0xE0) == 0xC0) len = 2;
+    else if ((c & 0xF0) == 0xE0) len = 3;
+    else if ((c & 0xF8) == 0xF0) len = 4;
+    out.append(title, i, len);
+    i += len;
+    if (adv(out) + ellW > maxW) {
+      out.erase(out.size() - len);
+      while (!out.empty() && adv(out) + ellW > maxW) {
+        size_t e = out.size();
+        do { --e; } while (e > 0 && (static_cast<unsigned char>(out[e]) & 0xC0) == 0x80);
+        out.erase(e);
+      }
+      break;
+    }
+  }
+  out += kEll;
+  cairo_restore(cr);
+  return out;
+}
+
+static void thumbs_rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r) {
+  const double rr = std::min({r, w * 0.5, h * 0.5});
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, x + w - rr, y + rr, rr, -M_PI_2, 0);
+  cairo_arc(cr, x + w - rr, y + h - rr, rr, 0, M_PI_2);
+  cairo_arc(cr, x + rr, y + h - rr, rr, M_PI_2, M_PI);
+  cairo_arc(cr, x + rr, y + rr, rr, M_PI, 3 * M_PI_2);
+  cairo_close_path(cr);
+}
+
+static void thumbs_draw_close(cairo_t* cr, double x, double y, double sz, bool hover) {
+  if (hover) {
+    thumbs_rounded_rect(cr, x, y, sz, sz, 5.0);
+    cairo_set_source_rgba(cr, 0.85, 0.25, 0.22, 0.95);
+    cairo_fill(cr);
+  }
+  cairo_set_source_rgba(cr, 1, 1, 1, hover ? 0.95 : 0.65);
+  cairo_set_line_width(cr, 1.6);
+  cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+  const double m = sz * 0.30;
+  cairo_move_to(cr, x + m, y + m);
+  cairo_line_to(cr, x + sz - m, y + sz - m);
+  cairo_move_to(cr, x + sz - m, y + m);
+  cairo_line_to(cr, x + m, y + sz - m);
+  cairo_stroke(cr);
+}
+
+// Window count for a bar hit (grouped or pinned): single-window slots
+// resolve to 1, multi-window groups to N, anything else to 0.
+static int tb_hit_window_count(TaskbarApp& app, const TaskbarWidgetHit& hit) {
+  if (!app.toplevels) return 0;
+  if (hit.widgetId == eh::shell::taskbar::kTbChevronKey) return 0;
+  if (hit.widgetId.rfind("__eh_tl_", 0) == 0) {
+    const auto* tl = thumbs_toplevel_by_serial(*app.toplevels, hit.chosenSerial);
+    return (tl && tl->handle && !tl->closed) ? 1 : 0;
+  }
+  const std::string norm = eh::shell::paths::normalize_desktop_app_id(hit.widgetId);
+  int n = 0;
+  for (const auto& tl : *app.toplevels) {
+    if (!tl.handle || tl.closed) continue;
+    if (eh::shell::paths::normalize_desktop_app_id(tl.appId) == norm) ++n;
+  }
+  return n;
+}
+
+void taskbar_thumbs_dismiss(TaskbarApp& app) {
+  if (app.popupKind == TaskbarPopupKind::Thumbs && app.popupSurface) {
+    taskbar_popup_close(app);
+    taskbar_thumbs_clear(app);
+  }
+}
+// the single chosen window, grouped slots to every live window of the app.
+std::vector<std::pair<uint64_t, std::string>> thumbs_windows_for_hit(
+    TaskbarApp& app, const TaskbarWidgetHit& hit) {
+  std::vector<std::pair<uint64_t, std::string>> out;
+  if (!app.toplevels) return out;
+  const bool single = hit.widgetId.rfind("__eh_tl_", 0) == 0;
+  if (single) {
+    if (const auto* tl = thumbs_toplevel_by_serial(*app.toplevels, hit.chosenSerial)) {
+      if (tl->handle && !tl->closed) out.emplace_back(tl->serial, tl->title);
+    }
+    return out;
+  }
+  const std::string norm = eh::shell::paths::normalize_desktop_app_id(hit.widgetId);
+  for (const auto& tl : *app.toplevels) {
+    if (!tl.handle || tl.closed) continue;
+    if (eh::shell::paths::normalize_desktop_app_id(tl.appId) == norm)
+      out.emplace_back(tl.serial, tl.title);
+  }
+  std::sort(out.begin(), out.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+  return out;
+}
+
+void taskbar_thumbs_clear(TaskbarApp& app) {
+  app.thumbGroupKey.clear();
+  app.thumbAppName.clear();
+  app.thumbIconId.clear();
+  app.thumbWindows.clear();
+  app.thumbHoverRow = -1;
+  app.thumbCloseHover = false;
+  app.thumbListMode = false;
+  app.thumbAnchorX = 0;
+}
+
+void taskbar_thumbs_open(TaskbarApp& app, const TaskbarWidgetHit& hit, int anchorX) {
+  auto wins = thumbs_windows_for_hit(app, hit);
+  if (wins.empty()) return;
+  app.thumbGroupKey = hit.widgetId + "|" + (hit.isPinned ? "p" : "r");
+  app.thumbIconId = hit.widgetId;
+  if (auto desktop = find_desktop_file_for_appid(hit.widgetId)) {
+    if (auto info = read_desktop_entry_info(*desktop)) {
+      if (!info->name.empty()) app.thumbAppName = info->name;
+    }
+  }
+  if (app.thumbAppName.empty()) app.thumbAppName = hit.widgetId;
+  app.thumbWindows = std::move(wins);
+  app.thumbHoverRow = -1;
+  app.thumbCloseHover = false;
+  app.thumbListMode = static_cast<int>(app.thumbWindows.size()) >
+                      std::clamp(app.settings.thumbnailThreshold, 3, 20);
+  app.thumbAnchorX = anchorX;
+  const ThumbGeom g = thumbs_geom(app.thumbWindows.size(), app.thumbListMode);
+  app.popupKind = TaskbarPopupKind::Thumbs;
+  taskbar_popup_close(app);
+  taskbar_popup_create(app, anchorX, static_cast<int>(std::ceil(g.w)),
+                       static_cast<int>(std::ceil(g.h)));
+}
+
+// Re-resolve the open popup's windows (titles, closed windows, new windows).
+// Closes the popup when nothing remains; recreates it when the size class
+// changed, otherwise just redraws. Returns true when the popup is still open.
+bool taskbar_thumbs_refresh(TaskbarApp& app) {
+  if (app.popupKind != TaskbarPopupKind::Thumbs || !app.popupSurface) return false;
+  if (!app.settings.thumbnailsEnabled) {
+    taskbar_popup_close(app);
+    taskbar_thumbs_clear(app);
+    return false;
+  }
+  std::vector<std::pair<uint64_t, std::string>> wins;
+  if (app.toplevels) {
+    const std::string key = app.thumbGroupKey.substr(0, app.thumbGroupKey.find('|'));
+    if (key == eh::shell::taskbar::kTbChevronKey) {
+      // Overflow popup: keep the stored custom list, dropping dead windows.
+      for (const auto& p : app.thumbWindows) {
+        if (const auto* tl = thumbs_toplevel_by_serial(*app.toplevels, p.first)) {
+          if (tl->handle && !tl->closed) wins.emplace_back(tl->serial, tl->title);
+        }
+      }
+    } else if (key.rfind("__eh_tl_", 0) == 0) {
+      const uint64_t s = app.thumbWindows.empty() ? 0 : app.thumbWindows.front().first;
+      if (const auto* tl = thumbs_toplevel_by_serial(*app.toplevels, s)) {
+        if (tl->handle && !tl->closed) wins.emplace_back(tl->serial, tl->title);
+      }
+    } else {
+      for (const auto& tl : *app.toplevels) {
+        if (!tl.handle || tl.closed) continue;
+        if (eh::shell::paths::normalize_desktop_app_id(tl.appId) == key)
+          wins.emplace_back(tl.serial, tl.title);
+      }
+      std::sort(wins.begin(), wins.end(),
+                [](const auto& a, const auto& b) { return a.first < b.first; });
+    }
+  }
+  const auto serials = [](const std::vector<std::pair<uint64_t, std::string>>& v) {
+    std::vector<uint64_t> s;
+    s.reserve(v.size());
+    for (const auto& p : v) s.push_back(p.first);
+    return s;
+  };
+  if (wins.empty()) {
+    taskbar_popup_close(app);
+    taskbar_thumbs_clear(app);
+    return false;
+  }
+  const bool listMode = static_cast<int>(wins.size()) >
+                        std::clamp(app.settings.thumbnailThreshold, 3, 20);
+  if (serials(wins) != serials(app.thumbWindows) || listMode != app.thumbListMode) {
+    app.thumbWindows = std::move(wins);
+    app.thumbListMode = listMode;
+    if (app.thumbHoverRow >= static_cast<int>(app.thumbWindows.size())) app.thumbHoverRow = -1;
+    app.thumbCloseHover = false;
+    const ThumbGeom g = thumbs_geom(app.thumbWindows.size(), app.thumbListMode);
+    const int nw = static_cast<int>(std::ceil(g.w));
+    const int nh = static_cast<int>(std::ceil(g.h));
+    if (nw != app.popupW || nh != app.popupH) {
+      const int anchor = app.thumbAnchorX;
+      taskbar_popup_close(app);
+      app.popupKind = TaskbarPopupKind::Thumbs;
+      taskbar_popup_create(app, anchor, nw, nh);
+      return true;
+    }
+    taskbar_popup_draw(app);
+    return true;
+  }
+  if (wins != app.thumbWindows) {
+    // Same set, titles changed: refresh in place.
+    app.thumbWindows = std::move(wins);
+    taskbar_popup_draw(app);
+  }
+  return true;
+}
+
+void taskbar_thumbs_blit_icon(TaskbarApp& app, cairo_t* cr, const std::string& iconId,
+                                     double cx, double cy, double size) {
+  const auto* ic = app.icons.app_icon(iconId, eh::icons::kHiResIconPx);
+  if (!ic || !ic->surface) return;
+  const double avail = std::max(4.0, size);
+  const double s = avail / static_cast<double>(std::max(1, std::max(ic->width, ic->height)));
+  const int tw = std::max(1, static_cast<int>(std::ceil(ic->width * s)));
+  const int th = std::max(1, static_cast<int>(std::ceil(ic->height * s)));
+  cairo_surface_t* scaled = app.scaledIcons.getOrScale(ic->surface, tw, th);
+  cairo_set_source_surface(cr, scaled ? scaled : ic->surface,
+                           cx - static_cast<double>(tw) * 0.5,
+                           cy - static_cast<double>(th) * 0.5);
+  cairo_paint(cr);
+}
+
+void taskbar_thumbs_paint(TaskbarApp& app, cairo_t* cr, int w, int h) {
+  (void)w;
+  (void)h;
+  const ThumbGeom g = thumbs_geom(app.thumbWindows.size(), app.thumbListMode);
+  const bool peek = app.settings.thumbnailPeekEnabled;
+  const int hov = app.thumbHoverRow;
+
+  // Panel backdrop.
+  cairo_new_path(cr);
+  thumbs_rounded_rect(cr, 0.5, 0.5, g.w - 1.0, g.h - 1.0, 10.0);
+  cairo_set_source_rgba(cr, 0.13, 0.13, 0.15, 0.96);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgba(cr, 1, 1, 1, 0.14);
+  cairo_set_line_width(cr, 1.0);
+  cairo_stroke(cr);
+
+  const auto active_serial = [&]() -> uint64_t {
+    if (!app.toplevels) return 0;
+    for (const auto& tl : *app.toplevels) {
+      if (!tl.handle || tl.closed) continue;
+      for (const auto& p : app.thumbWindows) {
+        if (p.first == tl.serial && tl.activated) return tl.serial;
+      }
+    }
+    return 0;
+  }();
+  const uint64_t activeSerial = active_serial;
+
+  auto paint_card = [&](size_t i, bool dimmed) {
+    cairo_new_path(cr);
+    double cx = 0.0, cy = 0.0;
+    thumbs_card_rect(g, i, &cx, &cy);
+    const auto& win = app.thumbWindows[i];
+    const bool isHov = (static_cast<int>(i) == hov);
+    // Card body.
+    thumbs_rounded_rect(cr, cx, cy, g.cardW, g.cardH, 8.0);
+    if (isHov) cairo_set_source_rgba(cr, 0.32, 0.42, 0.62, dimmed ? 0.35 : 0.55);
+    else cairo_set_source_rgba(cr, 1, 1, 1, dimmed ? 0.04 : 0.07);
+    cairo_fill_preserve(cr);
+    if (isHov) {
+      cairo_set_source_rgba(cr, 0.45, 0.65, 1.0, 0.9);
+      cairo_set_line_width(cr, 2.0);
+    } else if (win.first == activeSerial) {
+      cairo_set_source_rgba(cr, 0.45, 0.65, 1.0, 0.45);
+      cairo_set_line_width(cr, 1.5);
+    } else {
+      cairo_set_source_rgba(cr, 1, 1, 1, 0.10);
+      cairo_set_line_width(cr, 1.0);
+    }
+    cairo_stroke(cr);
+    // Title.
+    const std::string title = win.second.empty() ? std::string("(untitled)") : win.second;
+    const double closeX0 = cx + g.cardW - kThumbCloseSz - 4.0;
+    const double titleMax = (closeX0 - 8.0) - (cx + 8.0);
+    const std::string shown = isHov && peek ? title
+                                            : thumbs_trim_title(title, cr, 12.0, titleMax);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL,
+                           isHov ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 12.0);
+    cairo_text_extents_t te{};
+    cairo_text_extents(cr, shown.c_str(), &te);
+    cairo_set_source_rgba(cr, 1, 1, 1, dimmed ? 0.55 : 0.92);
+    cairo_save(cr);
+    thumbs_rounded_rect(cr, cx, cy, g.cardW, kThumbTitleH, 8.0);
+    cairo_clip(cr);
+    cairo_move_to(cr, cx + 8.0 - te.x_bearing,
+                  cy + (kThumbTitleH - te.height) * 0.5 - te.y_bearing);
+    cairo_show_text(cr, shown.c_str());
+    cairo_restore(cr);
+    // Close button (Win7 shows it on hover).
+    if (isHov) {
+      double qx = 0.0, qy = 0.0;
+      thumbs_close_rect(g, i, &qx, &qy);
+      thumbs_draw_close(cr, qx, qy, kThumbCloseSz, app.thumbCloseHover);
+    }
+    // Preview area: dark well + large app icon (live pixels plug in here).
+    const double px0 = cx + 6.0, py0 = cy + kThumbTitleH + 4.0;
+    const double pw = g.cardW - 12.0, ph = kThumbPreviewH - 4.0;
+    thumbs_rounded_rect(cr, px0, py0, pw, ph, 6.0);
+    cairo_set_source_rgba(cr, 0, 0, 0, dimmed ? 0.30 : 0.45);
+    cairo_fill(cr);
+    taskbar_thumbs_blit_icon(app, cr, app.thumbIconId, px0 + pw * 0.5, py0 + ph * 0.5,
+                             isHov && peek ? 52.0 : 34.0);
+  };
+
+  auto paint_row = [&](size_t i, bool dimmed) {
+    cairo_new_path(cr);
+    const double ry = kThumbPad + i * kThumbListRowH;
+    const double rw = g.w - kThumbPad * 2.0;
+    const auto& win = app.thumbWindows[i];
+    const bool isHov = (static_cast<int>(i) == hov);
+    if (isHov) {
+      thumbs_rounded_rect(cr, kThumbPad, ry, rw, kThumbListRowH, 6.0);
+      cairo_set_source_rgba(cr, 0.32, 0.42, 0.62, 0.55);
+      cairo_fill(cr);
+    }
+    taskbar_thumbs_blit_icon(app, cr, app.thumbIconId, kThumbPad + 17.0, ry + kThumbListRowH * 0.5, 20.0);
+    const std::string t = win.second.empty() ? std::string("(untitled)") : win.second;
+    const std::string shown = thumbs_trim_title(t, cr, 12.0, rw - 34.0 - kThumbCloseSz - 8.0);
+    cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 12.0);
+    cairo_text_extents_t te{};
+    cairo_text_extents(cr, shown.c_str(), &te);
+    cairo_set_source_rgba(cr, 1, 1, 1, dimmed ? 0.55 : 0.92);
+    cairo_move_to(cr, kThumbPad + 34.0 - te.x_bearing,
+                  ry + (kThumbListRowH - te.height) * 0.5 - te.y_bearing);
+    cairo_show_text(cr, shown.c_str());
+    if (isHov) {
+      double qx = 0.0, qy = 0.0;
+      thumbs_close_rect(g, i, &qx, &qy);
+      thumbs_draw_close(cr, qx, qy, kThumbCloseSz, app.thumbCloseHover);
+    }
+    if (win.first == activeSerial) {
+      cairo_arc(cr, kThumbPad + 6.0, ry + kThumbListRowH * 0.5, 2.5, 0, 2 * M_PI);
+      cairo_set_source_rgba(cr, 0.45, 0.65, 1.0, 0.9);
+      cairo_fill(cr);
+    }
+  };
+
+  if (g.list) {
+    for (size_t i = 0; i < app.thumbWindows.size(); ++i) {
+      const bool dimmed = peek && hov >= 0 && static_cast<int>(i) != hov;
+      paint_row(i, dimmed);
+    }
+    return;
+  }
+  // Non-hovered first (dimmed under the peeked card), hovered last.
+  for (size_t i = 0; i < app.thumbWindows.size(); ++i) {
+    if (static_cast<int>(i) == hov) continue;
+    paint_card(i, peek && hov >= 0);
+  }
+  if (hov >= 0 && static_cast<size_t>(hov) < app.thumbWindows.size())
+    paint_card(static_cast<size_t>(hov), false);
+}
 
 void taskbar_popup_draw(TaskbarApp& app) {
   if (!app.popupSurface || !app.popupLayer) return;
@@ -635,6 +1082,9 @@ void taskbar_popup_draw(TaskbarApp& app) {
     case TaskbarPopupKind::App:
       draw_context_menu(app, cr, w, h);
       break;
+    case TaskbarPopupKind::Thumbs:
+      taskbar_thumbs_paint(app, cr, w, h);
+      break;
     default:
       break;
   }
@@ -694,11 +1144,24 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
   auto& s = app.ccState;
 
   {
-    // Same "press x= y=" line the dock logs, so a taskbar session is
-    // distinguishable in horizon-controlcenter.log.
     namespace ccl = eh::shell::dock::control_center;
     ccl::cc_log("press taskbar x=" + std::to_string(static_cast<int>(px)) +
                 " y=" + std::to_string(static_cast<int>(py)));
+    const eh::config::ShellConfig& scDbg = eh::config::shell_config_snapshot();
+    const std::string widDbg("control_center");
+    if (ccl::pear_layout_enabled(scDbg, widDbg)) {
+      auto& sDbg = app.ccState;
+      const auto cfgDbg = ccl::pear_center_config(scDbg, widDbg);
+      const auto LDbg = ccl::cc_compute_pear_layout(
+          static_cast<double>(app.popupW > 0 ? app.popupW : 360), sDbg, cfgDbg,
+          dock_ui_scale(scDbg.dock));
+      ccl::cc_log("layout W=" + std::to_string((int)LDbg.W) +
+                  " volY=" + std::to_string((int)LDbg.volY) +
+                  " briY=" + std::to_string((int)LDbg.briY) +
+                  " mediaY=" + std::to_string((int)LDbg.mediaY) +
+                  " togY=" + std::to_string((int)LDbg.togY) +
+                  " totalH=" + std::to_string((int)LDbg.totalH));
+    }
   }
 
   // PearCenter compact layout press path (mirrors the dock handler; settle-resize in
@@ -785,6 +1248,8 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
         return;
       }
       if (pear_settings_row_hit(pctx, px, py)) {
+        taskbar_popup_close(app);
+        wl_display_flush(app.display);
         eh::settings::request_launch_settings();
         return;
       }
@@ -871,6 +1336,20 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
           const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
           eh::shell::dock_slot_hooks::control_center_set_audio_output_volume(
               static_cast<double>(pct) / 100.0);
+          const uint64_t nowMs = eh::shell::monotonic_ms();
+          s.inputDragActive = false;
+          s.inputDragVisualT = -1.0;
+          s.mixerDragActive = false;
+          s.mixerDragVisualT = -1.0;
+          s.pearBriDragActive = false;
+          s.pearBriDragT = -1.0;
+          s.audioDragActive = true;
+          s.audioDragVisualT = t;
+          s.audioDragUiPct = pct;
+          s.audioLastAppliedPct = pct;
+          s.audioLastApplyMs = nowMs;
+          s.audioIgnoreStateUntilMs = nowMs + 180;
+          s.audioLastLoggedPct = pct;
           redraw();
           return;
         }
@@ -892,6 +1371,20 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
           const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
           eh::shell::dock_slot_hooks::control_center_set_audio_input_volume(
               static_cast<double>(pct) / 100.0);
+          const uint64_t nowMs = eh::shell::monotonic_ms();
+          s.audioDragActive = false;
+          s.audioDragVisualT = -1.0;
+          s.mixerDragActive = false;
+          s.mixerDragVisualT = -1.0;
+          s.pearBriDragActive = false;
+          s.pearBriDragT = -1.0;
+          s.inputDragActive = true;
+          s.inputDragVisualT = t;
+          s.inputDragUiPct = pct;
+          s.inputLastAppliedPct = pct;
+          s.inputLastApplyMs = nowMs;
+          s.inputIgnoreStateUntilMs = nowMs + 180;
+          s.inputLastLoggedPct = pct;
           redraw();
           return;
         }
@@ -904,8 +1397,19 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
       {
         double t = 0.0;
         if (pear_brightness_slider_hit(pctx, px, py, &t)) {
-          (void)pearcc::pear_set_brightness_pct(
-              std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100));
+          const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
+          (void)pearcc::pear_set_brightness_pct(pct);
+          const uint64_t nowMs = eh::shell::monotonic_ms();
+          s.audioDragActive = false;
+          s.audioDragVisualT = -1.0;
+          s.inputDragActive = false;
+          s.inputDragVisualT = -1.0;
+          s.mixerDragActive = false;
+          s.mixerDragVisualT = -1.0;
+          s.pearBriDragActive = true;
+          s.pearBriDragT = t;
+          s.pearBriLastAppliedPct = pct;
+          s.pearBriLastApplyMs = nowMs;
           redraw();
           return;
         }
@@ -1319,7 +1823,32 @@ static void taskbar_handle_popup_click(TaskbarApp& app, uint32_t serial) {
   const double py = app.pointerY;
 
   switch (app.popupKind) {
-    case TaskbarPopupKind::Calendar:
+    case TaskbarPopupKind::Calendar: {
+      const double W = 320.0;
+      const auto nav = eh::shell::desktop::cal_nav_geom(W, 1.0);
+      const double px = app.pointerX;
+      const double py = app.pointerY;
+      bool onPrev = px >= nav.prevX && px < nav.prevX + nav.btnSz && py >= nav.navY && py < nav.navY + nav.btnSz;
+      bool onNext = px >= nav.nextX && px < nav.nextX + nav.btnSz && py >= nav.navY && py < nav.navY + nav.btnSz;
+      if (onPrev || onNext) {
+        std::tm d = app.calDisplayDate;
+        if (d.tm_year == 0 && d.tm_mon == 0) {
+          std::time_t t = std::time(nullptr);
+          d = *std::localtime(&t);
+        }
+        int m = d.tm_mon + (onPrev ? -1 : 1);
+        int y = d.tm_year;
+        if (m < 0) { m = 11; y -= 1; }
+        if (m > 11) { m = 0; y += 1; }
+        d.tm_mon = m;
+        d.tm_year = y;
+        app.calDisplayDate = d;
+        taskbar_popup_draw(app);
+        return;
+      }
+      taskbar_popup_close(app);
+      return;
+    }
     case TaskbarPopupKind::Weather:
       taskbar_popup_close(app);
       return;
@@ -1405,6 +1934,58 @@ static void taskbar_handle_popup_click(TaskbarApp& app, uint32_t serial) {
         }
         y += 26.0;
       }
+      return;
+    }
+    case TaskbarPopupKind::Thumbs: {
+      const ThumbGeom tg = thumbs_geom(app.thumbWindows.size(), app.thumbListMode);
+      const int row = thumbs_row_at(tg, app.thumbWindows.size(), app.pointerX, app.pointerY);
+      if (row < 0 || static_cast<size_t>(row) >= app.thumbWindows.size()) return;
+      const uint64_t serial = app.thumbWindows[static_cast<size_t>(row)].first;
+      if (thumbs_point_in_close(tg, static_cast<size_t>(row), app.pointerX, app.pointerY)) {
+        if (app.toplevels) {
+          if (const auto* tl = toplevel_by_serial(*app.toplevels, serial)) {
+            if (tl->handle) {
+              zwlr_foreign_toplevel_handle_v1_close(tl->handle);
+              wl_display_flush(app.display);
+            }
+          }
+        }
+        // Optimistic removal: the compositor confirms async. Refresh the
+        // popup against what remains; close it when the group is empty.
+        app.thumbWindows.erase(app.thumbWindows.begin() + row);
+        if (app.thumbHoverRow == row) app.thumbHoverRow = -1;
+        else if (app.thumbHoverRow > row) --app.thumbHoverRow;
+        if (app.thumbWindows.empty()) {
+          taskbar_popup_close(app);
+          taskbar_thumbs_clear(app);
+          return;
+        }
+        const bool listMode = static_cast<int>(app.thumbWindows.size()) >
+                              std::clamp(app.settings.thumbnailThreshold, 3, 20);
+        app.thumbListMode = listMode;
+        const ThumbGeom ng = thumbs_geom(app.thumbWindows.size(), app.thumbListMode);
+        if (static_cast<int>(std::ceil(ng.w)) != app.popupW ||
+            static_cast<int>(std::ceil(ng.h)) != app.popupH) {
+          const int anchor = app.thumbAnchorX;
+          taskbar_popup_close(app);
+          app.popupKind = TaskbarPopupKind::Thumbs;
+          taskbar_popup_create(app, anchor, static_cast<int>(std::ceil(ng.w)),
+                               static_cast<int>(std::ceil(ng.h)));
+        } else {
+          taskbar_popup_draw(app);
+        }
+        return;
+      }
+      if (app.toplevels) {
+        if (const auto* tl = toplevel_by_serial(*app.toplevels, serial)) {
+          if (tl->handle) {
+            zwlr_foreign_toplevel_handle_v1_activate(tl->handle, app.seat);
+            wl_display_flush(app.display);
+          }
+        }
+      }
+      taskbar_popup_close(app);
+      taskbar_thumbs_clear(app);
       return;
     }
     case TaskbarPopupKind::App: {
@@ -1676,24 +2257,41 @@ static const eh::wayland::ForeignToplevels::Toplevel* toplevel_by_serial(
   return it != tl.end() ? &*it : nullptr;
 }
 
-// Tray menu helpers.
+// Tray menu helpers. See services/tray/dbus/tray_context_menu.hpp for the
+// shared bounded-timeout interactive fetch (short per-call timeouts,
+// AboutToShow before GetLayout, ContextMenu fallback) that keeps a slow
+// StatusNotifierItem such as Steam's from freezing the input thread.
+namespace {
+constexpr std::chrono::milliseconds kTrayMenuCallTimeout =
+    eh::shell::dock::tray_menu::kTrayMenuCallTimeout;
+}  // namespace
 
 static void show_tray_popup_inline(TaskbarApp& app, const TaskbarTrayItem& ti,
                                     int anchorX, uint32_t serial) {
+  namespace tray_menu = eh::shell::dock::tray_menu;
   (void)serial;
-  const std::string menuPath = ti.proxy ? eh::shell::dock::tray_menu::dock_get_menu_object_path(*ti.proxy) : std::string{};
-  if (menuPath.empty()) return;
+  if (!app.trayBus || ti.service.empty() || ti.path.empty()) return;
+  const int ptrX = static_cast<int>(app.pointerX);
+  const int ptrY = static_cast<int>(app.pointerY);
+  const std::string menuPath =
+      tray_menu::tray_menu_path_interactive(*app.trayBus, ti.service, ti.path);
+  if (menuPath.empty()) {
+    tray_menu::tray_context_menu_fallback(*app.trayBus, ti.service, ti.path, ptrX, ptrY);
+    return;
+  }
   auto build_items = [&]() -> std::vector<TaskbarPopupItem> {
     std::vector<TaskbarPopupItem> out;
     try {
       auto menu = sdbus::createProxy(*app.trayBus, sdbus::ServiceName{ti.service},
                                       sdbus::ObjectPath{menuPath});
+      tray_menu::tray_menu_about_to_show(*menu);
       using Props = std::map<std::string, sdbus::Variant>;
       using Layout = sdbus::Struct<int32_t, Props, std::vector<sdbus::Variant>>;
       uint32_t revision = 0;
       Layout root{};
       menu->callMethod("GetLayout")
           .onInterface("com.canonical.dbusmenu")
+          .withTimeout(kTrayMenuCallTimeout)
           .withArguments(int32_t{0}, int32_t{1},
                          std::vector<std::string>{"label", "enabled", "visible", "type"})
           .storeResultsTo(revision, root);
@@ -1732,7 +2330,10 @@ static void show_tray_popup_inline(TaskbarApp& app, const TaskbarTrayItem& ti,
   };
 
   auto items = build_items();
-  if (items.empty()) return;
+  if (items.empty()) {
+    tray_menu::tray_context_menu_fallback(*app.trayBus, ti.service, ti.path, ptrX, ptrY);
+    return;
+  }
 
   int maxw = 0;
   {
@@ -1767,6 +2368,7 @@ static void show_tray_popup_inline(TaskbarApp& app, const TaskbarTrayItem& ti,
 }
 
 // App context menu.
+
 
 static void show_app_menu(TaskbarApp& app, const std::string& normWid,
                            uint64_t chosenSerial, bool isPinned,
@@ -2124,6 +2726,13 @@ static void taskbar_pointer_enter(void* data, wl_pointer* p, uint32_t serial,
       app.pointerTaskbarLayerIdx = i; break;
     }
   }
+  // Hover previews dismiss when the pointer lands on anything but the bar
+  // or the preview popup itself.
+  if (app.popupKind == TaskbarPopupKind::Thumbs && app.popupSurface &&
+      !taskbar_layer_surface(app, surface) && !taskbar_popup_surface(app, surface)) {
+    taskbar_popup_close(app);
+    taskbar_thumbs_clear(app);
+  }
   // Auto-hide reveal
   if (app.settings.autoHide && !app.reveal) {
     app.reveal = true;
@@ -2142,6 +2751,13 @@ static void taskbar_pointer_leave(void* data, wl_pointer* p, uint32_t serial,
     ds.hoverListRow = -1;
     ds.hoverDrawerPinIdx = -1;
     ds.hoverPowerIdx = -1;
+  } else if (app.popupKind == TaskbarPopupKind::Thumbs) {
+    // Keep the popup across bar<->popup transitions; the enter handler
+    // below closes it when the pointer lands anywhere else.
+    if (app.thumbHoverRow != -1) {
+      app.thumbHoverRow = -1;
+      taskbar_popup_draw(app);
+    }
   } else if (app.popupKind == TaskbarPopupKind::ControlCenter) {
     auto& cs = app.ccState;
     cs.hoverTarget = eh::shell::controlcenter::CcHoverTarget::None;
@@ -2149,8 +2765,8 @@ static void taskbar_pointer_leave(void* data, wl_pointer* p, uint32_t serial,
     cs.hoverStreamId = -1;
   }
   app.pointerSurface = nullptr;
-  if (app.hoverSlot >= 0) { app.hoverSlot = -1; app.hoverLiftPx = 0.0; }
-  if (app.pressedSlot >= 0) { app.pressedSlot = -1; }
+  if (app.hoverSlot >= 0) { app.hoverSlot = -1; app.hoverLayerIdx = -1; app.hoverLiftPx = 0.0; }
+  if (app.pressedSlot >= 0) { app.pressedSlot = -1; app.pressedLayerIdx = -1; }
   taskbar_tooltip_cancel(app);
   // Auto-hide hide
   if (app.settings.autoHide && app.reveal && app.popupKind == TaskbarPopupKind::None) {
@@ -2165,6 +2781,24 @@ static void taskbar_pointer_motion(void* data, wl_pointer* p, uint32_t time,
                                     wl_fixed_t sx, wl_fixed_t sy) {
   auto& app = *static_cast<TaskbarApp*>(data);
   (void)p; (void)time;
+  // Motion bench: whole-handler timing with a slow-event log. Consumed by
+  // the taskbar-perf summary in taskbar_draw.
+  struct MotionBench {
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    uint64_t* n;
+    double* sumMs;
+    double* maxMs;
+    ~MotionBench() {
+      const double ms =
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+      ++*n;
+      *sumMs += ms;
+      if (ms > *maxMs) *maxMs = ms;
+      if (ms > 8.0) debug_log("taskbar-perf", "slow motion=%.1fms", ms);
+    }
+  };
+  MotionBench motionBench{std::chrono::steady_clock::now(), &g_motionN, &g_motionMs, &g_motionMaxMs};
+  (void)motionBench;
   app.pointerX = wl_fixed_to_double(sx);
   app.pointerY = wl_fixed_to_double(sy);
 
@@ -2187,6 +2821,71 @@ static void taskbar_pointer_motion(void* data, wl_pointer* p, uint32_t time,
     auto& cs = app.ccState;
     const uint64_t nowMs = eh::shell::now_mono_ms();
     const double W = static_cast<double>(app.popupW);
+    {
+      const eh::config::ShellConfig& scPear = eh::config::shell_config_snapshot();
+      std::string widPear = app.ccWidgetId.empty() ? std::string("control_center") : app.ccWidgetId;
+      if (eh::shell::dock::control_center::pear_layout_enabled(scPear, widPear)
+          && (cs.audioDragActive || cs.inputDragActive || cs.pearBriDragActive)) {
+        const PearHitContext pctx{static_cast<double>(app.popupW > 0 ? app.popupW : 360), cs, widPear};
+        auto coalesced_redraw = [&]() {
+          app.popupMotionDirty = true;
+          if (!app.popupFrameCb) {
+            app.popupFrameCb = wl_surface_frame(app.popupSurface);
+            wl_callback_add_listener(app.popupFrameCb, &g_taskbar_popup_frame_listener, &app);
+            wl_surface_commit(app.popupSurface);
+          }
+          wl_display_flush(app.display);
+        };
+        if (cs.audioDragActive) {
+          double tx = 0.0, tw = 1.0;
+          if (!pear_volume_track_geom(pctx, &tx, &tw)) tw = 1.0;
+          const double t = std::clamp((app.pointerX - tx) / std::max(1.0, tw), 0.0, 1.0);
+          const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
+          cs.audioDragVisualT = t;
+          cs.audioDragUiPct = pct;
+          if (pct != cs.audioLastLoggedPct) cs.audioLastLoggedPct = pct;
+          if (cs.audioLastApplyMs == 0 || nowMs - cs.audioLastApplyMs >= 16) {
+            eh::shell::dock_slot_hooks::control_center_set_audio_output_volume(t);
+            cs.audioLastAppliedPct = pct;
+            cs.audioLastApplyMs = nowMs;
+            cs.audioIgnoreStateUntilMs = nowMs + 180;
+          }
+          coalesced_redraw();
+          return;
+        }
+        if (cs.inputDragActive) {
+          double tx = 0.0, tw = 1.0;
+          if (!pear_input_track_geom(pctx, &tx, &tw)) tw = 1.0;
+          const double t = std::clamp((app.pointerX - tx) / std::max(1.0, tw), 0.0, 1.0);
+          const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
+          cs.inputDragVisualT = t;
+          cs.inputDragUiPct = pct;
+          if (pct != cs.inputLastLoggedPct) cs.inputLastLoggedPct = pct;
+          if (cs.inputLastApplyMs == 0 || nowMs - cs.inputLastApplyMs >= 16) {
+            eh::shell::dock_slot_hooks::control_center_set_audio_input_volume(t);
+            cs.inputLastAppliedPct = pct;
+            cs.inputLastApplyMs = nowMs;
+            cs.inputIgnoreStateUntilMs = nowMs + 180;
+          }
+          coalesced_redraw();
+          return;
+        }
+        if (cs.pearBriDragActive) {
+          double t = 0.0;
+          if (pear_brightness_slider_hit(pctx, app.pointerX, app.pointerY, &t)) {
+            const int pct = std::clamp(static_cast<int>(std::lround(t * 100.0)), 0, 100);
+            cs.pearBriDragT = t;
+            if (cs.pearBriLastApplyMs == 0 || nowMs - cs.pearBriLastApplyMs >= 16) {
+              (void)eh::shell::dock::control_center::pear_set_brightness_pct(pct);
+              cs.pearBriLastAppliedPct = pct;
+              cs.pearBriLastApplyMs = nowMs;
+            }
+          }
+          coalesced_redraw();
+          return;
+        }
+      }
+    }
     const double pad = 18.0;
     const double tileW = (W - pad * 2.0 - 12.0) * 0.5;
 
@@ -2244,13 +2943,79 @@ static void taskbar_pointer_motion(void* data, wl_pointer* p, uint32_t time,
           cs.inputIgnoreStateUntilMs = nowMs + 180;
         }
       }
-      taskbar_popup_draw(app);
+      app.popupMotionDirty = true;
+      if (!app.popupFrameCb) {
+        app.popupFrameCb = wl_surface_frame(app.popupSurface);
+        wl_callback_add_listener(app.popupFrameCb, &g_taskbar_popup_frame_listener, &app);
+        wl_surface_commit(app.popupSurface);
+      }
       wl_display_flush(app.display);
       return;
     }
 
     // CC popup: hover zone detection (when not dragging).
     {
+      const eh::config::ShellConfig& scPear = eh::config::shell_config_snapshot();
+      std::string widPear = app.ccWidgetId.empty() ? std::string("control_center") : app.ccWidgetId;
+      if (eh::shell::dock::control_center::pear_layout_enabled(scPear, widPear)) {
+        const PearHitContext pctx{static_cast<double>(app.popupW > 0 ? app.popupW : 360), cs, widPear};
+        using CcHT = eh::shell::controlcenter::CcHoverTarget;
+        CcHT t = CcHT::None;
+        int row = -1;
+        const int mz = pear_media_button_hit(pctx, app.pointerX, app.pointerY);
+        if (mz == 0) t = CcHT::MediaPrev;
+        else if (mz == 1) t = CcHT::MediaPlayPause;
+        else if (mz == 2) t = CcHT::MediaNext;
+        double dummy = 0.0;
+        if (t == CcHT::None && pear_volume_mute_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::OutputAudioMute;
+        if (t == CcHT::None && pear_volume_slider_hit(pctx, app.pointerX, app.pointerY, &dummy)) t = CcHT::VolumeCard;
+        if (t == CcHT::None && pear_input_mute_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::InputAudioMute;
+        if (t == CcHT::None && pear_input_slider_hit(pctx, app.pointerX, app.pointerY, &dummy)) t = CcHT::InputAudioSlider;
+        if (t == CcHT::None && pear_brightness_slider_hit(pctx, app.pointerX, app.pointerY, &dummy)) t = CcHT::BrightnessCard;
+        if (t == CcHT::None && pear_output_device_row_hit(pctx, app.pointerX, app.pointerY, &row)) t = CcHT::OutputDeviceRow;
+        if (t == CcHT::None && pear_input_device_row_hit(pctx, app.pointerX, app.pointerY, &row)) t = CcHT::InputDeviceRow;
+        if (t == CcHT::None && pear_networks_back_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::NetworkCard;
+        if (t == CcHT::None && pear_wifi_toggle_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::NetworkGrid;
+        if (t == CcHT::None && pear_network_row_hit(pctx, app.pointerX, app.pointerY, &row)) t = CcHT::NetworkRow;
+        if (t == CcHT::None && pear_network_card_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::NetworkCard;
+        if (t == CcHT::None && pear_bluetooth_card_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::BluetoothCard;
+        if (t == CcHT::None && pear_settings_row_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::SettingsRow;
+        if (t == CcHT::None && pear_dnd_card_hit(pctx, app.pointerX, app.pointerY)) t = CcHT::DndCard;
+        if (t == CcHT::None) {
+          const int ti = pear_toggle_hit(pctx, app.pointerX, app.pointerY);
+          if (ti >= 0) {
+            const auto cfg = eh::shell::dock::control_center::pear_center_config(scPear, widPear);
+            const auto L = eh::shell::dock::control_center::cc_compute_pear_layout(
+                pctx.popupW, cs, cfg, dock_ui_scale(scPear.dock));
+            if ((size_t)ti < L.toggles.size()) {
+              using PT = eh::shell::dock::control_center::PearToggle;
+              switch (L.toggles[(size_t)ti]) {
+                case PT::DeviceLink: t = CcHT::DeviceLinkCard; break;
+                case PT::NightColor: t = CcHT::NightColorCard; break;
+                case PT::ColorScheme: t = CcHT::ColorSchemeCard; break;
+                case PT::Camera: t = CcHT::CameraCard; break;
+                case PT::Cmd1: t = CcHT::CmdCard1; break;
+                case PT::Cmd2: t = CcHT::CmdCard2; break;
+                default: break;
+              }
+              row = ti;
+            }
+          }
+        }
+        if (t != cs.hoverTarget || row != cs.hoverRowIdx) {
+          cs.hoverTarget = t;
+          cs.hoverRowIdx = row;
+          cs.hoverStreamId = -1;
+          app.popupMotionDirty = true;
+          if (!app.popupFrameCb) {
+            app.popupFrameCb = wl_surface_frame(app.popupSurface);
+            wl_callback_add_listener(app.popupFrameCb, &g_taskbar_popup_frame_listener, &app);
+            wl_surface_commit(app.popupSurface);
+          }
+          wl_display_flush(app.display);
+        }
+        return;
+      }
       using CcHT = eh::shell::controlcenter::CcHoverTarget;
       const double colGap = 12.0, rowGap = 12.0, tileH = 92.0;
       const double gridTop = pad + 24.0;
@@ -2533,18 +3298,78 @@ static void taskbar_pointer_motion(void* data, wl_pointer* p, uint32_t time,
   }
 
   // Taskbar bar surface hover.
-  if (!taskbar_layer_surface(app, app.pointerSurface)) return;
+  if (!taskbar_layer_surface(app, app.pointerSurface)) {
+    if (taskbar_popup_surface(app, app.pointerSurface) &&
+        app.popupKind == TaskbarPopupKind::Thumbs) {
+      const ThumbGeom tg = thumbs_geom(app.thumbWindows.size(), app.thumbListMode);
+      const int row = thumbs_row_at(tg, app.thumbWindows.size(), app.pointerX, app.pointerY);
+      const bool closeHov =
+          row >= 0 && thumbs_point_in_close(tg, static_cast<size_t>(row), app.pointerX, app.pointerY);
+      if (row != app.thumbHoverRow || closeHov != app.thumbCloseHover) {
+        app.thumbHoverRow = row;
+        app.thumbCloseHover = closeHov;
+        taskbar_popup_draw(app);
+      }
+      return;
+    }
+    if (taskbar_popup_surface(app, app.pointerSurface)
+        && (app.popupKind == TaskbarPopupKind::Tray || app.popupKind == TaskbarPopupKind::App)) {
+      double yy = 4.0;
+      int hover = -1;
+      for (size_t i = 0; i < app.popupItems.size(); ++i) {
+        const auto& it = app.popupItems[i];
+        if (it.id < 0) {
+          yy += 13.0;
+          continue;
+        }
+        if (app.pointerY >= yy && app.pointerY < yy + 26.0) {
+          hover = (int)i;
+          break;
+        }
+        yy += 26.0;
+      }
+      if (hover != app.popupHoverItem) {
+        app.popupHoverItem = hover;
+        taskbar_popup_draw(app);
+      }
+    }
+    return;
+  }
 
+  const int motionLayer = tb_pointer_layer(app);
+  const auto& motionHits = tb_hits_for_layer(motionLayer);
   int newHover = -1;
-  for (size_t i = 0; i < g_widgetHits.size(); i++) {
-    if (point_in(app.pointerX, app.pointerY, g_widgetHits[i].x, g_widgetHits[i].y,
-                 g_widgetHits[i].w, g_widgetHits[i].h)) {
+  for (size_t i = 0; i < motionHits.size(); i++) {
+    if (point_in(app.pointerX, app.pointerY, motionHits[i].x, motionHits[i].y,
+                 motionHits[i].w, motionHits[i].h)) {
       newHover = static_cast<int>(i); break;
     }
   }
-  if (newHover != app.hoverSlot) {
+  int newMediaZone = -2;
+  if (newHover >= 0 && (size_t)newHover < motionHits.size()) {
+    const auto& hit = motionHits[(size_t)newHover];
+    if (hit.slotKind == (int)eh::widgets::shared_slot_paint::SlotKind::Media && app.mpris) {
+      const double iconSize = static_cast<double>(app.settings.iconSize);
+      newMediaZone = eh::mpris::DockMpris::media_hit_zone(app.pointerX - hit.x, hit.w, iconSize);
+    }
+  }
+  const bool mediaZoneChanged = (newMediaZone != app.mediaHoverZone);
+  if (mediaZoneChanged) app.mediaHoverZone = newMediaZone;
+  if (newHover != app.hoverSlot || motionLayer != app.hoverLayerIdx || mediaZoneChanged) {
     app.hoverSlot = newHover;
+    app.hoverLayerIdx = (newHover >= 0) ? motionLayer : -1;
     app.hoverLiftPx = (newHover >= 0) ? 5.0 : 0.0;
+    if (app.popupKind == TaskbarPopupKind::Thumbs && app.popupSurface) {
+      bool same = false;
+      if (newHover >= 0 && static_cast<size_t>(newHover) < motionHits.size()) {
+        const auto& h = motionHits[static_cast<size_t>(newHover)];
+        same = (h.widgetId + "|" + std::string(h.isPinned ? "p" : "r") == app.thumbGroupKey);
+      }
+      if (!same) {
+        taskbar_popup_close(app);
+        taskbar_thumbs_clear(app);
+      }
+    }
     if (app.settings.tooltipsEnabled) {
       if (newHover >= 0) {
         app.tooltipHoverSlot = newHover;
@@ -2555,7 +3380,23 @@ static void taskbar_pointer_motion(void* data, wl_pointer* p, uint32_t time,
         taskbar_tooltip_cancel(app);
       }
     }
-    taskbar_draw(app);
+    // Coalesced to vsync: a synchronous full draw here (4 layers × paint +
+    // present) per motion event piles up presents faster than the compositor
+    // releases buffers, stalling input. The frame chain paints within ~16ms.
+    app.frameRedrawPending = true;
+    taskbar_schedule_frame(app);
+  }
+
+  // Color Hot-track tracking: same running slot, pointer moved — repaint
+  // coalesced to the next vsync instead of a synchronous full draw per
+  // motion event, so the glow follows smoothly at display rate.
+  if (newHover >= 0 && newHover == app.hoverSlot &&
+      static_cast<size_t>(newHover) < motionHits.size()) {
+    const auto& h = motionHits[static_cast<size_t>(newHover)];
+    if (h.slotKind == 0 && h.chosenSerial != 0) {
+      app.frameRedrawPending = true;
+      taskbar_schedule_frame(app);
+    }
   }
 
   // Pin drag motion
@@ -2576,7 +3417,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     if (taskbar_popup_surface(app, app.pointerSurface) &&
         app.popupKind == TaskbarPopupKind::ControlCenter) {
       auto& cs = app.ccState;
-      if (cs.audioDragActive || cs.inputDragActive || cs.mixerDragActive) {
+      if (cs.audioDragActive || cs.inputDragActive || cs.mixerDragActive || cs.pearBriDragActive) {
         auto finalize = [](double pct) { return std::clamp(pct / 100.0, 0.0, 1.5); };
         if (cs.audioDragActive) {
           eh::shell::dock_slot_hooks::control_center_set_audio_output_volume(finalize(cs.audioDragUiPct));
@@ -2591,6 +3432,12 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
           cs.inputDragVisualT = -1.0;
           cs.inputDragUiPct = -1;
           cs.inputLastLoggedPct = -1;
+        }
+        if (cs.pearBriDragActive) {
+          cs.pearBriDragActive = false;
+          cs.pearBriDragT = -1.0;
+          cs.pearBriLastAppliedPct = -1;
+          cs.pearBriLastApplyMs = 0;
         }
         if (cs.mixerDragActive) {
           const double t = finalize(cs.mixerDragUiPct);
@@ -2656,7 +3503,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
         return;
       }
     }
-    if (app.pressedSlot >= 0) { app.pressedSlot = -1; taskbar_draw(app); }
+    if (app.pressedSlot >= 0) { app.pressedSlot = -1; app.pressedLayerIdx = -1; taskbar_draw(app); }
     return;
   }
 
@@ -2766,20 +3613,23 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
 
   if (!taskbar_layer_surface(app, app.pointerSurface)) return;
 
+  const int pressLayer = tb_pointer_layer(app);
+  const auto& pressHits = tb_hits_for_layer(pressLayer);
   int hitIdx = -1;
-  for (size_t i = 0; i < g_widgetHits.size(); i++) {
-    if (point_in(app.pointerX, app.pointerY, g_widgetHits[i].x, g_widgetHits[i].y,
-                 g_widgetHits[i].w, g_widgetHits[i].h)) {
+  for (size_t i = 0; i < pressHits.size(); i++) {
+    if (point_in(app.pointerX, app.pointerY, pressHits[i].x, pressHits[i].y,
+                 pressHits[i].w, pressHits[i].h)) {
       hitIdx = static_cast<int>(i); break;
     }
   }
   if (hitIdx < 0) return;
 
   app.pressedSlot = hitIdx;
+  app.pressedLayerIdx = pressLayer;
   taskbar_draw(app);
   wl_display_flush(app.display);
 
-  const auto& hit = g_widgetHits[static_cast<size_t>(hitIdx)];
+  const auto& hit = pressHits[static_cast<size_t>(hitIdx)];
   const std::string& wid = hit.widgetId;
 
   // Dock parity: widget popups anchor on the slot's center, not on the raw
@@ -2787,6 +3637,48 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
   // opens the popup over the widget instead of wherever the pointer happened
   // to land. compute_popup_position still centers + clamps it to the layer.
   const int slotCenterX = static_cast<int>(std::llround(hit.x + hit.w * 0.5));
+
+  // Overflow chevron: open the hidden-windows popup (Win11 "..." style).
+  if (hit.widgetId == eh::shell::taskbar::kTbChevronKey) {
+    const std::vector<std::pair<uint64_t, std::string>>* pressOverflow = nullptr;
+    if (app.pressedLayerIdx >= 0 &&
+        static_cast<size_t>(app.pressedLayerIdx) < app.layerOverflow.size())
+      pressOverflow = &app.layerOverflow[static_cast<size_t>(app.pressedLayerIdx)];
+    if (left && pressOverflow && !pressOverflow->empty()) {
+      app.thumbGroupKey = std::string(eh::shell::taskbar::kTbChevronKey) + "|r";
+      app.thumbIconId = "app_menu";
+      app.thumbAppName = "Hidden windows";
+      app.thumbWindows = *pressOverflow;
+      app.thumbHoverRow = -1;
+      app.thumbCloseHover = false;
+      app.thumbListMode = true;
+      app.thumbAnchorX = slotCenterX;
+      const ThumbGeom tg = thumbs_geom(app.thumbWindows.size(), true);
+      app.popupKind = TaskbarPopupKind::Thumbs;
+      taskbar_popup_close(app);
+      taskbar_popup_create(app, slotCenterX, static_cast<int>(std::ceil(tg.w)),
+                           static_cast<int>(std::ceil(tg.h)));
+      wl_display_flush(app.display);
+    }
+    return;
+  }
+
+  // Multi-window slot: click opens the window switcher instead of focusing
+  // one window directly (Win7 grouped-button behavior).
+  if (hit.slotKind == 0 && left && hit.widgetId != eh::shell::taskbar::kTbChevronKey &&
+      tb_hit_window_count(app, hit) > 1) {
+    const std::string gk = hit.widgetId + "|" + std::string(hit.isPinned ? "p" : "r");
+    if (!(dismissedPopKind == TaskbarPopupKind::Thumbs && app.thumbGroupKey == gk)) {
+      taskbar_thumbs_open(app, hit, slotCenterX);
+      wl_display_flush(app.display);
+    }
+    // Pinned groups stay draggable; crossing the drag threshold below
+    // dismisses the freshly opened preview popup.
+    if (hit.isPinned) {
+      taskbar_pin_drag_init(app, wid);
+    }
+    return;
+  }
 
   // ════ PIN DRAG CANDIDATE ════
   if (hit.isPinned && hit.slotKind == 0 && left) {
@@ -2796,27 +3688,40 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
 
   // ════ CLICK DISPATCH ════
 
-  // Tray
+  // Tray. NOTE: trayMutex is only held to copy the hit's service/path —
+  // the D-Bus round-trips below (menu fetch, Activate) run without the lock
+  // so a slow item (e.g. Steam) can't stall tray sync/paint or freeze input
+  // handling any longer than one short per-call timeout.
   if (wid.rfind(kSlotKeyTray, 0) == 0) {
     const std::string want = wid.substr(std::string(kSlotKeyTray).size());
-    std::lock_guard<std::mutex> lock(app.trayMutex);
-    for (const auto& ti : app.trayItems) {
-      if ((ti.service + ti.path) == want) {
-        if (right) {
-          show_tray_popup_inline(app, ti, static_cast<int>(app.pointerX), serial);
-        } else {
-          try {
-            auto proxy = sdbus::createProxy(*app.trayBus, sdbus::ServiceName{ti.service},
-                                            sdbus::ObjectPath{ti.path});
-            proxy->callMethod("Activate")
-                .onInterface("org.kde.StatusNotifierItem")
-                .withArguments(static_cast<int32_t>(app.pointerX),
-                               static_cast<int32_t>(app.pointerY));
-          } catch (const std::exception& e) {
-            eh::shell_log::dbus_tray("activate failed: ", e.what());
-          }
+    TaskbarTrayItem trayHit;
+    bool haveTrayHit = false;
+    {
+      std::lock_guard<std::mutex> lock(app.trayMutex);
+      for (const auto& ti : app.trayItems) {
+        if ((ti.service + ti.path) == want) {
+          trayHit.service = ti.service;
+          trayHit.path = ti.path;
+          haveTrayHit = true;
+          break;
         }
-        break;
+      }
+    }
+    if (haveTrayHit) {
+      if (right) {
+        show_tray_popup_inline(app, trayHit, static_cast<int>(app.pointerX), serial);
+      } else {
+        try {
+          auto proxy = sdbus::createProxy(*app.trayBus, sdbus::ServiceName{trayHit.service},
+                                          sdbus::ObjectPath{trayHit.path});
+          proxy->callMethod("Activate")
+              .onInterface("org.kde.StatusNotifierItem")
+              .withTimeout(kTrayMenuCallTimeout)
+              .withArguments(static_cast<int32_t>(app.pointerX),
+                             static_cast<int32_t>(app.pointerY));
+        } catch (const std::exception& e) {
+          eh::shell_log::dbus_tray("activate failed: ", e.what());
+        }
       }
     }
     return;
@@ -2972,7 +3877,7 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
       app.calDisplayDate.tm_hour = 0; app.calDisplayDate.tm_min = 0; app.calDisplayDate.tm_sec = 0;
       app.calDisplayDate.tm_isdst = -1;
       std::mktime(&app.calDisplayDate);
-      taskbar_popup_create(app, slotCenterX, 320, 380);
+      taskbar_popup_create(app, slotCenterX, 320, 370);
     }
     wl_display_flush(app.display);
     return;
@@ -3021,6 +3926,12 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
   }
 
   if (type == "workspaces") {
+    // Middle-click opens the overview (GNOME parity); left-click switches.
+    if (button == 0x112) {
+      taskbar_request_overview_toggle();
+      wl_display_flush(app.display);
+      return;
+    }
     const auto& scAct = eh::config::shell_config_snapshot();
     const double globalScale = std::clamp(scAct.dock.shellUiScale, 0.5, 2.0);
     const double taskbarUIScale = std::clamp(app.settings.scale, 0.5, 2.0) * globalScale;
@@ -3265,6 +4176,18 @@ void taskbar_set_nightlight_toggle_fn(TaskbarNightlightToggleFn fn) {
 
 void taskbar_request_nightlight_toggle() {
   if (g_nightlight_toggle_fn) g_nightlight_toggle_fn();
+}
+
+namespace {
+TaskbarOverviewToggleFn g_overview_toggle_fn;
+}  // namespace
+
+void taskbar_set_overview_toggle_fn(TaskbarOverviewToggleFn fn) {
+  g_overview_toggle_fn = std::move(fn);
+}
+
+void taskbar_request_overview_toggle() {
+  if (g_overview_toggle_fn) g_overview_toggle_fn();
 }
 
 bool taskbar_init_on_display(TaskbarApp& app) {
@@ -3623,26 +4546,51 @@ void taskbar_draw(TaskbarApp& app) {
   const int margin = isFloating ? ts.floatingAmount : 0;
 
   eh::shell::shared::RunningSnapshot runningSnap;
+  // Grouping follows the Group toggle only; labels are an independent
+  // overlay (one slot per app, labeled or not).
+  bool effGrouped = app.settings.groupApps;
   if (app.toplevels && app.toplevels->size() > 0) {
     runningSnap = eh::shell::shared::build_running_snapshot(
-        *app.toplevels, app.appFirstSeenSerial, app.settings.groupApps);
+        *app.toplevels, app.appFirstSeenSerial, effGrouped);
   }
   const eh::mpris::PlayerSnapshot mprisSnap =
       app.mpris ? app.mpris->snapshot() : eh::mpris::PlayerSnapshot{};
 
-  // Pre-measure section widths for fill mode (bar is sized to the three-
-  // section layout, not just the raw content width).
-  eh::shell::taskbar::TaskbarSectionWidths fillSections{};
-  if (isFill) {
-    const auto tM0 = std::chrono::steady_clock::now();
-    fillSections = eh::shell::taskbar::taskbar_measure_sections(
-        app, ts.leftWidgets, ts.centerWidgets, ts.rightWidgets, runningSnap, mprisSnap);
-    const double tM = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tM0).count();
-    g_phaseMeasureMs += tM;
-    if (tM > 0.5) std::cerr << "[taskbar-bench] measure_sections=" << tM << "ms\n";
+  // Effective labels default; the per-output loop below refines them.
+  // effLabelMaxW resets here so fill-measure uses full widths (otherwise the
+  // budget would ratchet narrower every frame).
+  app.effShowLabels = app.settings.showLabels;
+  app.effLabelMaxW = 0.0;
+  // Global regroup fallback: ungrouped icons overflowing even the widest bar
+  // combine (per-layer label collapse below handles the common case).
+  if (app.settings.collapseWhenFull && !effGrouped && app.toplevels && app.toplevels->size() > 0) {
+    double availMax = 0.0;
+    for (const auto& up : app.layers) {
+      if (up && up->configured && up->configuredWidth > 0)
+        availMax = std::max(availMax, static_cast<double>(up->configuredWidth));
+    }
+    if (availMax > 0.0) {
+      const double ui = std::clamp(app.settings.scale, 0.5, 2.0) *
+                        std::clamp(sc.dock.shellUiScale, 0.5, 2.0);
+      const double avail = availMax - (eh::shell::taskbar::strip_pad_px(ui) * 2.0 +
+                                       eh::shell::taskbar::section_gap_px(ui));
+      const double total =
+          eh::shell::taskbar::taskbar_measure_sections(
+              app, ts.leftWidgets, ts.centerWidgets, ts.rightWidgets, runningSnap, mprisSnap)
+              .total;
+      if (total > avail) {
+        runningSnap = eh::shell::shared::build_running_snapshot(
+            *app.toplevels, app.appFirstSeenSerial, true);
+        effGrouped = true;
+      }
+    }
   }
 
+  if (g_layerHits.size() != app.layers.size()) g_layerHits.resize(app.layers.size());
+  if (app.layerOverflow.size() != app.layers.size()) app.layerOverflow.resize(app.layers.size());
+  size_t layerIdx = 0;
   for (auto& up : app.layers) {
+    const size_t li = layerIdx++;
     diag("draw_loop_top");
     if (!up || !up->surface || !up->layer || !up->configured) { diag("skip:unconfigured"); continue; }
     if (up->configuredWidth <= 0 || up->configuredHeight <= 0) { diag("skip:bad_size"); continue; }
@@ -3679,7 +4627,25 @@ void taskbar_draw(TaskbarApp& app) {
     // taskbar_paint_widget_bar falls back to the centered strip (with
     // horizontal compression) when the sections would collide.
     const bool use_panel = true;
-    const double barW = [&]() -> double {
+    // Per-output fill sizing: the bar is sized to the three-section layout.
+    // effLabelMaxW resets first so sizing always uses full label widths
+    // (otherwise one layer's shrink budget would leak into the next layer's
+    // bar size and ratchet narrower every frame).
+    app.effLabelMaxW = 0.0;
+    eh::shell::taskbar::TaskbarSectionWidths fillSections{};
+    auto measure_fill = [&]() {
+      const auto tM0 = std::chrono::steady_clock::now();
+      fillSections = eh::shell::taskbar::taskbar_measure_sections(
+          app, ts.leftWidgets, ts.centerWidgets, ts.rightWidgets, runningSnap, mprisSnap);
+      const double tM = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tM0).count();
+      g_phaseMeasureMs += tM;
+      if (tM > 0.5) std::cerr << "[taskbar-bench] measure_sections=" << tM << "ms\n";
+    };
+    // Per-output collapse: a narrow bar drops labels while roomy outputs
+    // keep them (each monitor fits itself independently).
+    app.effShowLabels = app.settings.showLabels;
+    if (isFill) measure_fill();
+    auto calc_barW = [&]() -> double {
       if (isFloating) return static_cast<double>(logW) - static_cast<double>(margin) * 2.0;
       if (isFill) {
         const double ui = std::clamp(ts.scale, 0.5, 2.0) *
@@ -3693,7 +4659,29 @@ void taskbar_draw(TaskbarApp& app) {
         return std::clamp(cw2, 80.0, static_cast<double>(logW));
       }
       return static_cast<double>(logW);
-    }();
+    };
+    double barW = calc_barW();
+    if (app.settings.collapseWhenFull && app.effShowLabels) {
+      const double ui = std::clamp(ts.scale, 0.5, 2.0) *
+                        std::clamp(eh::config::shell_config_snapshot().dock.shellUiScale, 0.5, 2.0);
+      const double avail = barW - (eh::shell::taskbar::strip_pad_px(ui) * 2.0 +
+                                   eh::shell::taskbar::section_gap_px(ui));
+      double t = 0.0;
+      if (isFill) {
+        t = fillSections.total;
+      } else {
+        t = eh::shell::taskbar::taskbar_measure_sections(
+                app, ts.leftWidgets, ts.centerWidgets, ts.rightWidgets, runningSnap, mprisSnap)
+                .total;
+      }
+      if (t > avail) {
+        app.effShowLabels = false;
+        if (isFill) {
+          measure_fill();
+          barW = calc_barW();
+        }
+      }
+    }
     const double barX = isFloating ? static_cast<double>(margin)
                       : isFill   ? (static_cast<double>(logW) - barW) / 2.0
                       : 0.0;
@@ -3749,15 +4737,34 @@ void taskbar_draw(TaskbarApp& app) {
       }
 
       if (!ts.leftWidgets.empty() || !ts.centerWidgets.empty() || !ts.rightWidgets.empty()) {
-        g_widgetHits.clear();
+        g_layerHits[li].clear();
         const auto tPaint0 = std::chrono::steady_clock::now();
         taskbar_paint_widget_bar(app, cr, barX, barY, barW, barHVisible,
                                  ts.leftWidgets, ts.centerWidgets, ts.rightWidgets,
-                                 &g_widgetHits,
-                                 app.hoverSlot, app.pressedSlot, app.hoverLiftPx,
-                                 use_panel, runningSnap, mprisSnap);
+                                 &g_layerHits[li],
+                                 app.hoverLayerIdx == static_cast<int>(li) ? app.hoverSlot : -1,
+                                 app.pressedLayerIdx == static_cast<int>(li) ? app.pressedSlot : -1,
+                                 app.hoverLiftPx,
+                                 use_panel, runningSnap, mprisSnap, static_cast<int>(li));
         taskbar_phase_accum_paint(std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - tPaint0).count());
+        // DP-all layout log: one line per layer whenever its geometry changes.
+        if (li < app.layerDiag.size()) {
+          const auto& dg = app.layerDiag[li];
+          char fp[256];
+          std::snprintf(fp, sizeof(fp),
+                        "box=%dx%d slots=%zu total=%.0f avail=%.0f panel=%d lr=%d hs=%.3f lbl=%d maxW=%.0f ov=%zu hits=%zu",
+                        dg.boxW, dg.boxH, dg.nSlots, dg.totalW, dg.availW,
+                        dg.usePanel ? 1 : 0, dg.useLr ? 1 : 0, dg.hScale,
+                        dg.labels ? 1 : 0, dg.effMaxW, dg.overflowN, dg.hitsN);
+          static std::map<size_t, std::string> lastDpFp;
+          auto it = lastDpFp.find(li);
+          if (it == lastDpFp.end() || it->second != fp) {
+            lastDpFp[li] = fp;
+            debug_log("taskbar", "dp-all layer=%zu out=%p %s", li,
+                      (void*)(li < app.layers.size() && app.layers[li] ? app.layers[li]->wlOut : nullptr), fp);
+          }
+        }
       }
       cairo_restore(cr);
     }
@@ -3813,6 +4820,14 @@ void taskbar_draw(TaskbarApp& app) {
   const double tReloadMs = std::chrono::duration<double, std::milli>(tReload - tDraw0).count();
   g_phaseReloadMs += tReloadMs;
   g_phaseFrames++;
+  if (tDrawTotal > g_drawMaxMs) g_drawMaxMs = tDrawTotal;
+  if (tDrawTotal > 12.0) {
+    debug_log("taskbar-perf",
+              "slow draw=%.1fms reload=%.1fms layers=%zu hover=%d/%d thumbs=%d labels=%d",
+              tDrawTotal, tReloadMs, app.layers.size(), app.hoverLayerIdx, app.hoverSlot,
+              (app.popupKind == TaskbarPopupKind::Thumbs && app.popupSurface) ? 1 : 0,
+              app.effShowLabels ? 1 : 0);
+  }
 
   {
     static uint64_t fpsFrames = 0;
@@ -3835,22 +4850,34 @@ void taskbar_draw(TaskbarApp& app) {
     const double windowMs = std::chrono::duration<double, std::milli>(now - fpsWindowStart).count();
     if (windowMs >= 5000.0) {
       const double div = static_cast<double>(std::max<uint64_t>(g_phaseFrames, 1));
-      std::cerr << std::fixed << std::setprecision(1) << "[taskbar-fps] hz="
-                << (fpsFrames * 1000.0 / windowMs) << " frames=" << fpsFrames
-                << " avg_gap_ms=" << (windowMs / std::max<uint64_t>(fpsFrames, 1))
-                << " gap_min_ms=" << fpsMinGap << " gap_max_ms=" << fpsMaxGap
-                << " draw_p50_hint_ms=" << tDrawTotal
-                << " phase_avg_ms={reload=" << (g_phaseReloadMs / div)
-                << " measure=" << (g_phaseMeasureMs / div)
-                << " paint=" << (g_phasePaintMs / div)
-                << " present=" << (g_phasePresentMs / div) << "}"
-                << " sec_avg_ms={L=" << (app.sectionMs[0] / div)
-                << " C=" << (app.sectionMs[1] / div)
-                << " R=" << (app.sectionMs[2] / div) << "}"
-                << " cb={done=" << app.frameDoneCount
-                << " watchdog=" << app.frameWatchdogCount << "}"
-                << " icons={hit=" << app.scaledIcons.hits
-                << " miss=" << app.scaledIcons.misses << "}\n";
+      const double motionDiv = static_cast<double>(std::max<uint64_t>(g_motionN, 1));
+      char perfLine[1280];
+      std::snprintf(perfLine, sizeof(perfLine),
+          "hz=%.1f frames=%llu avg_gap_ms=%.1f gap_min_ms=%.1f gap_max_ms=%.1f draw_p50_hint_ms=%.1f draw_max_ms=%.1f"
+          " phase_avg_ms={reload=%.1f measure=%.1f paint=%.1f present=%.1f}"
+          " sec_avg_ms={L=%.1f C=%.1f R=%.1f W=%.1f S=%.1f A=%.1f B=%.1f D=%.1f}"
+          " motion={n=%llu avg_ms=%.2f max_ms=%.1f}"
+          " hottrack={computes=%llu avg_ms=%.2f cache=%zu}"
+          " cb={done=%llu watchdog=%llu} icons={hit=%llu miss=%llu}",
+          (fpsFrames * 1000.0 / windowMs), (unsigned long long)fpsFrames,
+          (windowMs / (double)std::max<uint64_t>(fpsFrames, 1)),
+          fpsMinGap, fpsMaxGap, tDrawTotal,
+          g_drawMaxMs,
+          (g_phaseReloadMs / div), (g_phaseMeasureMs / div),
+          (g_phasePaintMs / div), (g_phasePresentMs / div),
+          (app.sectionMs[0] / div), (app.sectionMs[1] / div),
+          (app.sectionMs[2] / div), (app.sectionMs[3] / div),
+          (app.sectionMs[4] / div), (app.sectionMs[5] / div),
+          (app.sectionMs[6] / div), (app.sectionMs[7] / div),
+          (unsigned long long)g_motionN, (g_motionMs / motionDiv), g_motionMaxMs,
+          (unsigned long long)app.hotTrackComputes,
+          (app.hotTrackComputes ? (app.hotTrackComputeMs / app.hotTrackComputes) : 0.0),
+          app.hotTrackCache.size(),
+          (unsigned long long)app.frameDoneCount,
+          (unsigned long long)app.frameWatchdogCount,
+          (unsigned long long)app.scaledIcons.hits,
+          (unsigned long long)app.scaledIcons.misses);
+      debug_log("taskbar-perf", "%s", perfLine);
       fpsFrames = 0;
       fpsMinGap = 0.0;
       fpsMaxGap = 0.0;
@@ -3864,9 +4891,20 @@ void taskbar_draw(TaskbarApp& app) {
       g_phasePaintMs = 0.0;
       g_phasePresentMs = 0.0;
       g_phaseFrames = 0;
+      g_motionN = 0;
+      g_motionMs = 0.0;
+      g_motionMaxMs = 0.0;
+      g_drawMaxMs = 0.0;
+      app.hotTrackComputes = 0;
+      app.hotTrackComputeMs = 0.0;
       app.sectionMs[0] = 0.0;
       app.sectionMs[1] = 0.0;
       app.sectionMs[2] = 0.0;
+      app.sectionMs[3] = 0.0;
+      app.sectionMs[4] = 0.0;
+      app.sectionMs[5] = 0.0;
+      app.sectionMs[6] = 0.0;
+      app.sectionMs[7] = 0.0;
     }
   }
 
@@ -3897,10 +4935,17 @@ void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfi
   next.rightWidgets = t.rightWidgets;
   next.pinnedApps = sc.taskbar.pinnedApps;
   next.groupApps = t.groupApps;
+  next.showLabels = t.showLabels;
+  next.collapseWhenFull = t.collapseWhenFull;
+  next.thumbnailsEnabled = t.thumbnailsEnabled;
+  next.thumbnailPeekEnabled = t.thumbnailPeekEnabled;
+  next.thumbnailThreshold = std::clamp(t.thumbnailThreshold, 3, 20);
+  next.compactMedia = t.compactMedia;
   next.slotPillOpacity = sc.taskbar.slotPillOpacity;
   next.autoHide = t.autoHide;
   next.tooltipsEnabled = t.tooltipsEnabled;
   next.pinnedAppsTrayPill = t.pinnedAppsTrayPill;
+  next.runningAppsTrayPill = t.runningAppsTrayPill;
   next.widgetsEnabled = t.widgetsEnabled;
   next.border = t.border;
   next.borderSize = t.borderSize;
@@ -3934,6 +4979,13 @@ void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfi
       next.centerWidgets      != app.settings.centerWidgets      ||
       next.rightWidgets       != app.settings.rightWidgets       ||
       next.pinnedApps         != app.settings.pinnedApps         ||
+      next.groupApps          != app.settings.groupApps          ||
+      next.showLabels         != app.settings.showLabels         ||
+      next.collapseWhenFull   != app.settings.collapseWhenFull   ||
+      next.thumbnailsEnabled  != app.settings.thumbnailsEnabled  ||
+      next.thumbnailPeekEnabled != app.settings.thumbnailPeekEnabled ||
+      next.thumbnailThreshold != app.settings.thumbnailThreshold ||
+      next.compactMedia       != app.settings.compactMedia ||
       next.slotPillOpacity    != app.settings.slotPillOpacity    ||
       next.autoHide           != app.settings.autoHide           ||
       next.tooltipsEnabled    != app.settings.tooltipsEnabled    ||
@@ -4223,9 +5275,17 @@ static constexpr int kTbTooltipFontSize = 12;
 static constexpr int kTbTooltipRadius = 4;
 static constexpr int kTbTooltipGap = 4;
 
-static std::string tb_tooltip_text(int slotIdx) {
-  if (slotIdx < 0 || static_cast<size_t>(slotIdx) >= g_widgetHits.size()) return {};
-  const auto& hit = g_widgetHits[static_cast<size_t>(slotIdx)];
+static std::string tb_tooltip_text(TaskbarApp& app, int layer, int slotIdx) {
+  const auto& hits = tb_hits_for_layer(layer);
+  if (slotIdx < 0 || static_cast<size_t>(slotIdx) >= hits.size()) return {};
+  const auto& hit = hits[static_cast<size_t>(slotIdx)];
+  if (hit.widgetId == eh::shell::taskbar::kTbChevronKey) return std::string("More windows");
+  if (hit.widgetId.rfind("__eh_tl_", 0) == 0 && hit.chosenSerial != 0 && app.toplevels) {
+    // Per-window labeled buttons: tooltip shows the full (untrimmed) title.
+    if (const auto* tl = thumbs_toplevel_by_serial(*app.toplevels, hit.chosenSerial)) {
+      if (!tl->title.empty()) return tl->title;
+    }
+  }
   auto desktop = find_desktop_file_for_appid(hit.widgetId);
   if (desktop) {
     auto info = read_desktop_entry_info(*desktop);
@@ -4336,9 +5396,16 @@ static void tb_tooltip_create(TaskbarApp& app, const std::string& text, const Ta
   cfg.exclusiveZone = 0;
   cfg.marginLeft = marginLeft;
   if (app.settings.positionTop)
-    cfg.marginTop = app.settings.height + kTbTooltipGap;
+    cfg.marginTop = kTbTooltipGap;
   else
-    cfg.marginBottom = app.settings.height + kTbTooltipGap;
+    cfg.marginBottom = kTbTooltipGap;
+  std::cerr << "[taskbar-tooltip] posTop=" << app.settings.positionTop
+            << " height=" << app.settings.height << " pw=" << pw << " ph=" << ph
+            << " marginLeft=" << marginLeft << " hit=(" << hit.x << "," << hit.y
+            << " " << hit.w << "x" << hit.h << ")"
+            << " marginB=" << (app.settings.positionTop ? 0 : (app.settings.height + kTbTooltipGap))
+            << " marginT=" << (app.settings.positionTop ? (app.settings.height + kTbTooltipGap) : 0)
+            << "\n";
   cfg.keyboard = ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
 
   wl_surface* surf = nullptr;
@@ -4372,6 +5439,30 @@ static void tb_tooltip_create(TaskbarApp& app, const std::string& text, const Ta
 
 void taskbar_tooltip_tick(TaskbarApp& app) {
   if (app.tooltipHoverSlot < 0) return;
+
+  // Hover window previews own running app slots: they replace the text
+  // tooltip (Windows behavior) and stay fresh while open.
+  if (app.settings.thumbnailsEnabled && app.toplevels) {
+    if (app.popupKind == TaskbarPopupKind::Thumbs && app.popupSurface) {
+      taskbar_thumbs_refresh(app);
+      app.tooltipShownSlot = app.tooltipHoverSlot;
+      return;
+    }
+    if (!app.popupSurface && static_cast<size_t>(app.tooltipHoverSlot) < tb_hits_for_layer(app.hoverLayerIdx).size()) {
+      const auto& hit = tb_hits_for_layer(app.hoverLayerIdx)[static_cast<size_t>(app.tooltipHoverSlot)];
+      if (hit.slotKind == 0 && !thumbs_windows_for_hit(app, hit).empty()) {
+        // Previews will handle this slot: never show the text tooltip for it.
+        app.tooltipShownSlot = app.tooltipHoverSlot;
+        auto elapsed = std::chrono::steady_clock::now() - app.tooltipHoverStart;
+        if (elapsed >= kTbTooltipDelayMs) {
+          const int anchorX = static_cast<int>(std::llround(hit.x + hit.w * 0.5));
+          taskbar_thumbs_open(app, hit, anchorX);
+        }
+        return;
+      }
+    }
+  }
+
   if (!app.settings.tooltipsEnabled) return;
   if (app.tooltipShownSlot == app.tooltipHoverSlot) return;
 
@@ -4379,9 +5470,10 @@ void taskbar_tooltip_tick(TaskbarApp& app) {
   if (elapsed < kTbTooltipDelayMs) return;
 
   const int slotIdx = app.tooltipHoverSlot;
-  if (static_cast<size_t>(slotIdx) >= g_widgetHits.size()) return;
-  const auto& hit = g_widgetHits[static_cast<size_t>(slotIdx)];
-  std::string text = tb_tooltip_text(slotIdx);
+  const auto& tickHits = tb_hits_for_layer(app.hoverLayerIdx);
+  if (static_cast<size_t>(slotIdx) >= tickHits.size()) return;
+  const auto& hit = tickHits[static_cast<size_t>(slotIdx)];
+  std::string text = tb_tooltip_text(app, app.hoverLayerIdx, slotIdx);
   if (text.empty()) return;
 
   tb_tooltip_create(app, text, hit);
@@ -4394,6 +5486,15 @@ void taskbar_cleanup(TaskbarApp& app) {
 
   taskbar_popup_close(app);
   taskbar_tooltip_cancel(app);
+  if (app.labelMeasureCr) {
+    cairo_destroy(app.labelMeasureCr);
+    app.labelMeasureCr = nullptr;
+  }
+  if (app.labelMeasureSurf) {
+    cairo_surface_destroy(app.labelMeasureSurf);
+    app.labelMeasureSurf = nullptr;
+  }
+  app.labelWidthCache.clear();
   debug_log("taskbar", "cleanup: popup+tooltip closed");
 
   eh::shell::dock_slot_hooks::battery_widget_shutdown();

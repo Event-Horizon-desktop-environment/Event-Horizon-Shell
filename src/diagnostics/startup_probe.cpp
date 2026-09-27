@@ -611,6 +611,7 @@ int main(int argc, char** argv) {
     long long ccSilentMs = -1;
     for (const char* name : {"horizon-wallpaper.log", "horizon-desktop.log",
                              "horizon-dock.log", "horizon-taskbar.log",
+                             "horizon-panel.log",
                              "horizon-notifications.log", "horizon-controlcenter.log"}) {
       const std::string path = (stateDir / name).string();
       struct stat st{};

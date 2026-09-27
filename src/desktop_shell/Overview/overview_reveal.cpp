@@ -5,7 +5,6 @@
 #include "desktop_shell/common/time/mono_time.hpp"
 #include "desktop_shell/common/log/debug_log.hpp"
 #include "backends/hyprland/hyprland_backends.h"
-#include "desktop_shell/dock/core/dock_app.h"
 
 #include <cstdio>
 
@@ -83,7 +82,7 @@ bool RevealPass::target_captured() const {
 }
 
 void RevealPass::restore_focus() {
-  if (host_.dock().compositorKind != CompositorKind::Hyprland) return;
+  if (host_.ctx().compositorKind != CompositorKind::Hyprland) return;
   int cx = 0, cy = 0;
   const bool cursorKnown = query_cursor_pos(cx, cy);
   if (!origAddr.empty()) {
@@ -98,7 +97,7 @@ void RevealPass::restore_focus() {
 }
 
 void RevealPass::tick() {
-  if (host_.dock().compositorKind != CompositorKind::Hyprland) return;
+  if (host_.ctx().compositorKind != CompositorKind::Hyprland) return;
   if (!host_.open() || host_.show_apps() || host_.capture().live_enabled()) return;
   if (host_.anim().has_active() || host_.input().button_pressed || host_.input().drag_active) return;
   const uint64_t now = now_mono_ms();

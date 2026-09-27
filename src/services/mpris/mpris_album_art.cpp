@@ -87,6 +87,34 @@ std::string getenv_str(const char* k) {
   return v ? std::string(v) : std::string();
 }
 
+// MPRIS artUrl is a URI: file:// paths arrive percent-encoded
+// (cover%20art.jpg), which the filesystem never matches literally.
+std::string url_percent_decode(std::string_view s) {
+   
+  std::string out;
+  out.reserve(s.size());
+  auto hexval = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < s.size();) {
+    if (s[i] == '%') {
+      const int hi = (i + 1 < s.size()) ? hexval(s[i + 1]) : -1;
+      const int lo = (i + 2 < s.size()) ? hexval(s[i + 2]) : -1;
+      if (hi >= 0 && lo >= 0) {
+        out.push_back(static_cast<char>((hi << 4) | lo));
+        i += 3;
+        continue;
+      }
+    }
+    out.push_back(s[i]);
+    ++i;
+  }
+  return out;
+}
+
 cairo_surface_t* scale_surface_to_max(cairo_surface_t* src, int max_px) {
    
   if (!src || cairo_surface_status(src) != CAIRO_STATUS_SUCCESS) return nullptr;
@@ -298,7 +326,13 @@ cairo_surface_t* load_jpeg_from_bytes(const uint8_t* data, size_t len) {
   return surf;
 }
 #else
-cairo_surface_t* load_jpeg_from_bytes(const uint8_t*, size_t) { return nullptr; }
+cairo_surface_t* load_jpeg_from_bytes(const uint8_t*, size_t) {
+  static std::once_flag once;
+  std::call_once(once, []() {
+    std::fprintf(stderr, "[mpris] JPEG album art skipped: built without libjpeg (meson -Djpeg=true)\n");
+  });
+  return nullptr;
+}
 #endif
 
 cairo_surface_t* decode_image_bytes(const uint8_t* data, size_t len) {
@@ -596,7 +630,11 @@ std::string resolve_mpris_art_url(std::string_view dbus_art_url) {
   while (!path.empty() && (path.back() == ' ' || path.back() == '\t')) path.pop_back();
   if (path.empty()) return {};
 
-  if (starts_with_ci(path, "file://")) path = path.substr(7);
+  if (starts_with_ci(path, "file://")) {
+    path = path.substr(7);
+    if (starts_with_ci(path, "localhost/")) path = path.substr(9);
+    path = url_percent_decode(path);
+  }
 
   if (contains_ci(path, ".org.chromium.Chromium")) {
     if (starts_with_ci(path, "/var/tmp/")) {

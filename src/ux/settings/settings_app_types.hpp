@@ -96,6 +96,11 @@ struct Settings {
   bool dockLiquidGlass = true;
   bool dockColoredGlass = false;
   bool taskbarEnabled = false;
+  bool taskflipGalleryStyle = true;
+  bool taskflipMruOrder = true;
+  bool taskflipShowCaption = true;
+  bool taskflipShowCount = true;
+  bool taskflipShowIcons = true;
   int taskbarWidthMode = 0;
   int taskbarHeight = 48;
   int taskbarRadius = 12;
@@ -112,6 +117,12 @@ struct Settings {
   std::vector<std::string> taskbarRightWidgets{};
   std::vector<std::string> taskbarPinnedApps{};
   bool taskbarGroupApps = true;
+  bool taskbarShowLabels = false;
+  bool taskbarCollapseWhenFull = true;
+  bool taskbarThumbnailsEnabled = true;
+  bool taskbarThumbnailPeekEnabled = true;
+  int taskbarThumbnailThreshold = 10;
+  bool taskbarCompactMedia = true;
   int taskbarSlotPillOpacity = 100;
   bool taskbarAutoHide = false;
   bool taskbarTooltipsEnabled = true;
@@ -131,9 +142,42 @@ struct Settings {
   std::vector<std::string> panelLeftWidgets{};
   std::vector<std::string> panelCenterWidgets{};
   std::vector<std::string> panelRightWidgets{};
+  // Brand-new panel (top/bottom indicator bar) — mirrors the taskbar field set
+  // so the Panel settings tab feels consistent. panelWidthMode: 0=floating,
+  // 1=edge-to-edge, 2=fill.
+  int panelWidthMode = 1;
+  int panelIconSize = 22;
+  int panelIconSpacing = 8;
+  int panelFloatingAmount = 8;
+  int panelEdgeGap = 0;
+  int panelExclusiveZoneGap = 0;
+  double panelScale = 1.0;
+  bool panelPositionTop = true;
+  bool panelAutoHide = false;
+  bool panelTooltipsEnabled = true;
+  bool panelWidgetsEnabled = true;
+  bool panelBorder = false;
+  int panelBorderSize = 1;
+  bool panelReserveSpace = true;
+  bool panelOverlayLayer = false;
+  bool panelHoverHighlight = true;
+  bool panelSmartAutoHide = false;
+  bool panelRevealOnSwitch = true;
+  bool panelScrollVolume = true;
+
+  bool panelCapsuleEnabled = true;
+  int panelCapsuleOpacity = 100;
+  int panelCornerTL = 12;
+  int panelCornerTR = 12;
+  int panelCornerBL = 12;
+  int panelCornerBR = 12;
+  std::vector<std::string> panelClickThroughWidgets{};
+  std::string panelIconTheme{};
+  std::string panelOutputName{};
   std::string dockOutputName{};
   std::string desktopWidgetsOutputName{};
   std::string taskbarOutputName{};
+  std::string notificationsOutputName{};
   std::string plasmaTheme{};
 
   // `[dashboard]` — top-edge dashboard panel. Round-tripped through
@@ -480,6 +524,10 @@ struct App {
   bool panelLayoutDropdownOpen = false;
   bool taskbarWidthModeDropdownOpen = false;
   int taskbarWidthModeDropdownHoverRow = -1;
+  bool taskbarThumbThresholdDropdownOpen = false;
+  int taskbarThumbThresholdDropdownHoverRow = -1;
+  bool panelWidthModeDropdownOpen = false;
+  int panelWidthModeDropdownHoverRow = -1;
   bool wallpaperModeDropdownOpen = false;
   int panelLayoutDropdownHoverRow = -1;
   int wallpaperModeDropdownHoverRow = -1;
@@ -491,6 +539,13 @@ struct App {
   eh::settings::SettingsDropdown matugenModeDd{};
   // Dock tab: shell renderer picker (vulkan / cairo).
   eh::settings::SettingsDropdown rendererDd{};
+  // Display-output pickers (Auto / All / per-output). One per surface so
+  // the UI Layout page is no longer needed.
+  eh::settings::SettingsDropdown dockDisplayDd{};
+  eh::settings::SettingsDropdown panelDisplayDd{};
+  eh::settings::SettingsDropdown taskbarDisplayDd{};
+  eh::settings::SettingsDropdown desktopWidgetsDisplayDd{};
+  eh::settings::SettingsDropdown notifDisplayDd{};
 
   int settingsDockScrollPx = 0;
   int settingsDashboardScrollPx = 0;

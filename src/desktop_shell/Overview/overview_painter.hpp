@@ -11,7 +11,6 @@
 #include <unordered_map>
 #include <vector>
 
-struct DockApp;
 
 namespace eh::shell::overview {
 
@@ -29,7 +28,7 @@ void compute_overview_layout(OverviewLayout& layout, double w, double h, int nWo
 void paint_search_bar(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
                       float hoverLift, float progress, const std::string& query = {});
 
-void paint_workspace_cards(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
+void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                            const OverviewLayout& layout,
                            const std::vector<OverviewWorkspace>& workspaces,
                            double scrollPos, int selectedIndex,
@@ -58,7 +57,7 @@ bool pick_close_at(const OverviewLayout& layout, const std::vector<OverviewWorks
 
 void compute_app_grid_layout(AppGridLayout& grid, double w, double h, double searchY,
                              double uiScale, int nApps);
-void paint_app_grid(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
+void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                     const OverviewLayout& layout,
                     const std::vector<SpotlightHit>& apps,
                     int hoveredIdx, float hoverLift, float progress,
@@ -69,7 +68,7 @@ int pick_app_at(const AppGridLayout& grid, double mx, double my, int nApps,
 void compute_quick_select_layout(QuickSelectLayout& qs, OverviewAxis axis, double w, double h,
                                  double cardW, double cardH, double uiScale, int nWorkspaces);
 
-void paint_quick_select_strip(cairo_t* cr, DockApp& dock, const OverviewColors& colors,
+void paint_quick_select_strip(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                               const QuickSelectLayout& qs, const OverviewLayout& layout,
                               const std::vector<OverviewWorkspace>& workspaces,
                               int selectedIndex, int hoveredWs, int hoveredQs,

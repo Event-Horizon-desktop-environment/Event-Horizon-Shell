@@ -116,8 +116,8 @@ PearLayout cc_compute_pear_layout(double popupW, ControlCenterState& state,
   if (cfg.showNightColor) L.toggles.push_back(PearToggle::NightColor);
   if (cfg.showColorSwitcher) L.toggles.push_back(PearToggle::ColorScheme);
   if (cfg.showCamera) L.toggles.push_back(PearToggle::Camera);
-  if (cfg.showCmd1) L.toggles.push_back(PearToggle::Cmd1);
-  if (cfg.showCmd2) L.toggles.push_back(PearToggle::Cmd2);
+  if (cfg.showCmd1 && !cfg.cmdRun1.empty()) L.toggles.push_back(PearToggle::Cmd1);
+  if (cfg.showCmd2 && !cfg.cmdRun2.empty()) L.toggles.push_back(PearToggle::Cmd2);
   L.togX = L.pad;
   L.togY = L.row2Y + L.row2H + L.gapM;
   L.togH = L.toggles.empty() ? 0.0 : 64.0 * us;

@@ -16,6 +16,7 @@
 #include "desktop_shell/common/mem/periodic_trim.hpp"
 #include "desktop_shell/shared/core/config_watch.hpp"
 #include "services/ipc/client.hpp"
+#include "desktop_shell/notifications/types/notifications_ipc.hpp"
 #include "services/ipc/ipc_server.hpp"
 #include "services/mpris/mpris_player.hpp"
 #include "ux/settings/data/settings_desktop_widgets_data.hpp"
@@ -205,6 +206,9 @@ int run_desktop_standalone() {
         desktop_reapply_config(app, true);
       });
       ipc_ok = ipc.subscribe("config.applied") && ipc.subscribe("worldclock.settings");
+      // Forward notify.push frames (see dock_standalone): without a sender,
+      // notification pushes from this process are silently dropped.
+      eh::notify::install_ipc_sender(ipc);
     }
   }
 

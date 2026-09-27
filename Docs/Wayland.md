@@ -780,7 +780,7 @@ Always available — no XML to vendor. These interfaces are defined in the core 
 | **In EH?** | YES |
 | **Used?** | YES |
 | **Purpose** | dwl-specific IPC protocol: tags, layouts, status |
-| **Used by** | Mango/Triad workspace and window management backend |
+| **Used by** | Mango workspace and window management backend |
 
 ### `hyprland-toplevel-mapping-v1`
 

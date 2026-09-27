@@ -1,12 +1,24 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
-struct DockApp;
+#include "desktop_shell/common/workspace/workspace_strip_types.hpp"
+#include "desktop_shell/unified/compositor_kind.hpp"
+
+struct wl_seat;
 struct zwlr_foreign_toplevel_handle_v1;
+
+namespace eh::wayland {
+class ForeignToplevels;
+}
+namespace eh::icons {
+class IconCache;
+}
 
 namespace eh::shell::overview {
 
@@ -131,5 +143,29 @@ struct PendingActivation {
   int cursorY = 0;
   zwlr_foreign_toplevel_handle_v1* handle = nullptr;
 };
+
+// Shell-provided context for the overview Host. The overview used to run
+// inside the dock process against DockApp; it now runs in horizon-stage (or
+// anywhere else) against this narrow context instead. Owners keep the
+// pointed-to state alive for the Host's lifetime and refresh the scalars on
+// output/config change.
+struct ShellCtx {
+  CompositorKind compositorKind = CompositorKind::Unknown;
+  std::vector<eh::shell::WorkspaceStripEntry>* workspaceStrip = nullptr;
+  timespec* workspaceStripLastPoll = nullptr;
+  eh::wayland::ForeignToplevels* toplevels = nullptr;
+  int* primaryOutputWidthPx = nullptr;
+  int* primaryOutputHeightPx = nullptr;
+  // Live UI scale (dock: dock_ui_scale(settings); stage: global shell scale).
+  std::function<double()> uiScale = [] { return 1.0; };
+  // Bottom screen reserve the overview must leave alone (dock: bar height +
+  // spacing; stage: none — the overview covers the full output).
+  std::function<int()> bottomReserve = [] { return 0; };
+  eh::icons::IconCache* icons = nullptr;
+  wl_seat* seat = nullptr;
+};
+
+// Gap kept above the dock bar by the overview grid (dock-reserve unit).
+inline constexpr double kDockSpacingPx = 25.0;
 
 } // namespace eh::shell::overview

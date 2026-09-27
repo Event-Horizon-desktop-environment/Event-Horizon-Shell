@@ -12,6 +12,7 @@
 #include <fstream>
 #include <dirent.h>
 #include <filesystem>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 #include <unistd.h>
@@ -400,7 +401,7 @@ std::optional<DesktopEntryInfo> read_desktop_entry_info(const std::string& deskt
   return info;
 }
 
-std::optional<std::string> find_desktop_file_for_appid(const std::string& appId) {
+std::optional<std::string> find_desktop_file_for_appid_uncached(const std::string& appId) {
    
   // Fast path for absolute paths (e.g., pinned apps stored as full .desktop paths)
   if (appId.starts_with("/")) {
@@ -521,6 +522,21 @@ std::optional<std::string> find_desktop_file_for_appid(const std::string& appId)
     }
   }
   return std::nullopt;
+}
+
+std::optional<std::string> find_desktop_file_for_appid(const std::string& appId) {
+  static std::unordered_map<std::string, std::optional<std::string>> cache;
+  static std::mutex cacheMutex;
+  {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    if (auto it = cache.find(appId); it != cache.end()) return it->second;
+  }
+  auto result = find_desktop_file_for_appid_uncached(appId);
+  {
+    std::lock_guard<std::mutex> lock(cacheMutex);
+    if (cache.size() < 2048) cache.emplace(appId, result);
+  }
+  return result;
 }
 
 const eh::icons::IconEntry* mixer_icon_from_pinned_apps(eh::icons::IconCache& icons,

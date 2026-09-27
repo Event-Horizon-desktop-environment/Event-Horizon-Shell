@@ -1,6 +1,6 @@
 # Event Horizon Desktop Environment
 
-Event Horizon is a Wayland-native desktop shell written in C++23. It runs as a layer-shell client alongside an existing Wayland compositor (Hyprland, Niri, Sway, Mango, Labwc, or Triad) and provides a complete desktop experience: panels, widgets, notifications, wallpaper, lock screen, and settings.
+Event Horizon is a Wayland-native desktop shell written in C++23. It runs as a layer-shell client alongside an existing Wayland compositor (Hyprland, Niri, Sway, Mango, or Labwc) and provides a complete desktop experience: panels, widgets, notifications, wallpaper, lock screen, and settings.
 
 ## Project Map
 

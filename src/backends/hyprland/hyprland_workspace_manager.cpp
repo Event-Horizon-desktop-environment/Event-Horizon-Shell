@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdio>
 #include <cstring>
 #include <format>
 #include <iostream>
@@ -41,20 +42,24 @@ void HyprlandWorkspaceManager::setOutputResolver(IOutputNameLookup::Resolver r) 
 }
 
 int HyprlandWorkspaceManager::findIdForName(const std::string& id) const {
-  char* end = nullptr;
-  auto parsed = std::strtol(id.c_str(), &end, 10);
-  if (end == id.c_str() || parsed < 0 || parsed > 2147483647) { return -1; }
+  long parsed = -1;
+  if (std::sscanf(id.c_str(), "%ld", &parsed) != 1) { return -1; }
+  if (parsed < 0 || parsed > 2147483647L) { return -1; }
   return static_cast<int>(parsed);
 }
 
 void HyprlandWorkspaceManager::jumpTo(const std::string& id) {
-  auto wsId = findIdForName(id);
+  const int wsId = findIdForName(id);
   if (wsId <= 0) { return; }
-  auto cmd = m_backend.isLuaConfig()
-    ? std::format("dispatch hl.dsp.focus({{workspace = {}}})", wsId)
-    : std::format("dispatch workspace {}", wsId);
-  if (!m_backend.sendCommand(cmd)) {
-    debug_log("hyprland", "workspace jumpTo failed: %s no response", cmd.c_str());
+  std::string cmd;
+  if (m_backend.isLuaConfig()) {
+    cmd = std::format("dispatch hl.dsp.focus({{workspace = {}}})", wsId);
+  } else {
+    cmd = std::format("dispatch workspace {}", wsId);
+  }
+  const bool answered = m_backend.sendCommand(cmd).has_value();
+  if (!answered) {
+    debug_log("hyprland", "workspace focus request went unanswered: %s", cmd.c_str());
   }
 }
 

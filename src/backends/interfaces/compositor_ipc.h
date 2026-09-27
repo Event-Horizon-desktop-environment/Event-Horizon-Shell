@@ -16,10 +16,6 @@ namespace wspace::sway {
 class SwayRuntime;
 }
 
-namespace wspace::triad {
-class TriadRuntime;
-}
-
 class CompositorRuntimeRegistry {
 public:
   CompositorRuntimeRegistry();
@@ -40,13 +36,9 @@ public:
   [[nodiscard]] wspace::sway::SwayRuntime& sway() noexcept;
   [[nodiscard]] const wspace::sway::SwayRuntime& sway() const noexcept;
 
-  [[nodiscard]] wspace::triad::TriadRuntime& triad() noexcept;
-  [[nodiscard]] const wspace::triad::TriadRuntime& triad() const noexcept;
-
 private:
   std::unique_ptr<NiriRuntime> m_niri;
   std::unique_ptr<wspace::hyprland::HyprlandRuntime> m_hyprland;
   std::unique_ptr<wspace::mango::MangoRuntime> m_mango;
   std::unique_ptr<wspace::sway::SwayRuntime> m_sway;
-  std::unique_ptr<wspace::triad::TriadRuntime> m_triad;
 };

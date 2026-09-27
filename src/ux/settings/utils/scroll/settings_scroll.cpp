@@ -101,18 +101,26 @@ static int settings_scroll_max_px_inner(const App& app, int tabIdx) {
   if (tabIdx != 0 && tabIdx != 1 && tabIdx != 11) return 0;
   const int viewBottom = app.height - kSpacingL;
 
-  // Tab 1 (panel): widgets are last, use old widget-only extent.
+  // Tab 1 (panel): Settings card (with display row) can be taller than the
+  // widgets list, so take the max of both extents.
   if (tabIdx == 1) {
     const int anchor = widget_section_y0_for_tab(app, 2, tabIdx);
     const auto* rr = widgets_for_section_for_tab(app, 2, tabIdx);
-    const int extent = anchor + widget_section_block_height(static_cast<int>(rr->size())) + kSpacingXL;
+    const int widgetExtent = anchor + widget_section_block_height(static_cast<int>(rr->size())) + kSpacingXL;
+    constexpr int kPanelVisCardH = 52 + kDockVisRowPitch * 7 + 24;
+    constexpr int kPanelVisTop = kContentTop + kDockChildTabH + 12;
+    const int visExtent = kPanelVisTop + kPanelVisCardH + kSpacingXL;
+    const int extent = std::max(widgetExtent, visExtent);
     return std::max(0, extent - viewBottom);
   }
 
   // Tabs 0 (dock) and 11 (taskbar): widgets first, then toggles, then sliders.
   // Compute total content height including all three cards.
-  constexpr int kDockVisCardH = 52 + kDockVisRowPitch * kDockVisToggleRows + 24;
-  constexpr int kTbVisCardH = 52 + kDockVisRowPitch * 8 + 24;
+  // Visibility cards now include the display-output row (dock/panel) and
+  // the window-button rows (taskbar: display + labels + collapse +
+  // thumbnails + peek + threshold).
+  constexpr int kDockVisCardH = 52 + kDockVisRowPitch * (kDockVisToggleRows + 1) + 24;
+  constexpr int kTbVisCardH = 52 + kDockVisRowPitch * 15 + 24;
   constexpr int kTbAppearCardH = kSpacingXL + kSpacingS +
       2 * kSliderRowH + kSpacingM +
       3 * kSliderRowH + kSpacingM +

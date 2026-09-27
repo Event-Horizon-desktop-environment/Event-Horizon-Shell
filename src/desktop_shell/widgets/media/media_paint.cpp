@@ -22,6 +22,61 @@
 namespace eh::widgets {
 namespace {
 
+struct ArtThumbKey {
+  const void* src = nullptr;
+  int dia = 0;
+  bool operator==(const ArtThumbKey& o) const { return src == o.src && dia == o.dia; }
+};
+struct ArtThumbHash {
+  size_t operator()(const ArtThumbKey& k) const noexcept {
+    size_t h = std::hash<const void*>{}(k.src);
+    h ^= std::hash<int>{}(k.dia + 0x9e3779b9 + (h << 6) + (h >> 2));
+    return h;
+  }
+};
+std::unordered_map<ArtThumbKey, cairo_surface_t*, ArtThumbHash> g_artThumbs;
+std::vector<ArtThumbKey> g_artFifo;
+
+cairo_surface_t* circle_art_thumb(cairo_surface_t* src, int dia) {
+  if (!src || dia <= 0) return nullptr;
+  if (cairo_surface_status(src) != CAIRO_STATUS_SUCCESS) return nullptr;
+  ArtThumbKey k{src, dia};
+  auto it = g_artThumbs.find(k);
+  if (it != g_artThumbs.end()) return it->second;
+  const int sw = cairo_image_surface_get_width(src);
+  const int sh = cairo_image_surface_get_height(src);
+  if (sw <= 0 || sh <= 0) return nullptr;
+  cairo_surface_t* out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, dia, dia);
+  if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
+    if (out) cairo_surface_destroy(out);
+    return nullptr;
+  }
+  cairo_t* cr = cairo_create(out);
+  cairo_arc(cr, dia * 0.5, dia * 0.5, dia * 0.5, 0, 2.0 * M_PI);
+  cairo_clip(cr);
+  const double sc = std::max((double)dia / sw, (double)dia / sh);
+  cairo_scale(cr, sc, sc);
+  cairo_set_source_surface(cr, src, 0, 0);
+  cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
+  cairo_paint(cr);
+  cairo_destroy(cr);
+  if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
+    cairo_surface_destroy(out);
+    return nullptr;
+  }
+  if (g_artThumbs.size() >= 32 && !g_artFifo.empty()) {
+    auto oit = g_artThumbs.find(g_artFifo.front());
+    if (oit != g_artThumbs.end()) {
+      if (oit->second) cairo_surface_destroy(oit->second);
+      g_artThumbs.erase(oit);
+    }
+    g_artFifo.erase(g_artFifo.begin());
+  }
+  g_artThumbs.emplace(k, out);
+  g_artFifo.push_back(k);
+  return out;
+}
+
 constexpr double kBtnSmallD = 16.0;
 constexpr double kBtnPlayD  = 19.0;
 
@@ -139,9 +194,9 @@ double dock_media_slot_width(cairo_t* measure_cr,
                               const eh::config::ShellConfig& sc,
                               std::string_view instance_id,
                               double icon_ref_px, double bar_height,
-                              const eh::mpris::PlayerSnapshot& snap) {
+                              const eh::mpris::PlayerSnapshot& snap, bool compact) {
    
-    const bool show_text = parse_bool_setting(widget_setting(sc, instance_id, "show_text"), true);
+    const bool show_text = !compact && parse_bool_setting(widget_setting(sc, instance_id, "show_text"), true);
     const double max_tw = parse_max_title_scale(sc, instance_id);
     const double s = icon_ref_px / 30.0;
     const double art_dia = icon_ref_px * 0.78;
@@ -225,13 +280,13 @@ bool paint_media_slot(cairo_t* cr,
                         [[maybe_unused]] bool hovered, [[maybe_unused]] bool pressed,
                         int hoverBtn,
                         double pointerLocalX, double pointerLocalY,
-                        bool* progress_tick_wanted) {
+                        bool* progress_tick_wanted, bool compact) {
 
     bool wants_marquee = false;
     if (progress_tick_wanted) *progress_tick_wanted = false;
     if (slot_w <= 1.0) return false;
 
-    const bool show_text = parse_bool_setting(widget_setting(sc, instance_id, "show_text"), true);
+    const bool show_text = !compact && parse_bool_setting(widget_setting(sc, instance_id, "show_text"), true);
     const double max_tw = parse_max_title_scale(sc, instance_id);
     const double s = icon_ref_px / 30.0;
     const double art_dia = icon_ref_px * 0.78;
@@ -284,21 +339,11 @@ bool paint_media_slot(cairo_t* cr,
 
         bool drew_art = false;
         if (p_active && p_art && cairo_surface_status(p_art) == CAIRO_STATUS_SUCCESS) {
-            const int iw = cairo_image_surface_get_width(p_art);
-            const int ih = cairo_image_surface_get_height(p_art);
-            if (iw > 0 && ih > 0) {
-                const double sc2 = std::max(art_dia/iw, art_dia/ih);
-                const double dw = iw*sc2, dh = ih*sc2;
-                cairo_save(cr);
-                cairo_new_path(cr);
-                cairo_arc(cr, art_cx, cy, art_r, 0, 2.0*M_PI);
-                cairo_clip(cr);
-                cairo_translate(cr, art_cx - dw*0.5, cy - dh*0.5);
-                cairo_scale(cr, sc2, sc2);
-                cairo_set_source_surface(cr, p_art, 0, 0);
-                cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
+            const int dia = std::max(1, (int)std::ceil(art_dia));
+            cairo_surface_t* thumb = circle_art_thumb(p_art, dia);
+            if (thumb) {
+                cairo_set_source_surface(cr, thumb, art_cx - dia * 0.5, cy - dia * 0.5);
                 cairo_paint(cr);
-                cairo_restore(cr);
                 drew_art = true;
             }
         }

@@ -1,9 +1,11 @@
 #include "desktop_shell/notifications/host/notification_toast_host.hpp"
 
 #include "desktop_shell/notifications/core/notifications.hpp"
+#include "desktop_shell/notifications/diag/notification_pipeline_stats.hpp"
 #include "desktop_shell/notifications/types/notification_types.hpp"
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/common/ns/namespaces.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/log/shell_diag_log.hpp"
 #include "wl/surface/layer_surface.hpp"
 #include "m3/core/primitives/box.hpp"
@@ -15,6 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <unordered_set>
 
@@ -31,11 +34,20 @@ inline double kPad() { return 18.0 * dock_ui_scale(eh::config::shell_config_snap
 inline double kIconTextGap() { return 22.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
 inline double kIconSz() { return 96.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
 inline double kIconRad() { return 14.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
-constexpr double kProgressH = 3.0;
+inline double kProgressH() { return 3.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
 inline double kCardRad() { return 16.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
 inline double kCloseBtnSz() { return 20.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
 inline double kHeaderGap() { return 6.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
 inline double kSummaryBodyGap() { return 4.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock); }
+
+// Close-button box for a card, in surface space. Single source of truth for
+// paint, hover tracking and hit testing so they can never drift apart.
+inline void close_box_for_card(const ToastCard& c, double* x, double* y, double* sz) {
+  const double s = kCloseBtnSz();
+  *x = c.x + c.w - kPad() - s;
+  *y = c.y + kPad() + 2.0 * dock_ui_scale(eh::config::shell_config_snapshot().dock);
+  *sz = s;
+}
 
 static void toast_layer_configure(void* data, zwlr_layer_surface_v1*, uint32_t serial,
                                   uint32_t width, uint32_t height) {
@@ -402,6 +414,7 @@ void NotificationToastHost::on_notifications_changed() {
 
 void NotificationToastHost::compute_layout() {
    
+  eh::shell::notifications::diag::ScopedLayout layoutTimer;
   const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
   const double minW = 360.0 * us;
   const double cardH = 140.0 * us;
@@ -425,10 +438,15 @@ void NotificationToastHost::compute_layout() {
     };
 
     for (auto& card : cards_) {
-      const auto* n = [&]() -> const Notification* {
-        for (const auto& nn : mgr_.all()) if (nn.id == card.id) return &nn;
-        return nullptr;
-      }();
+      // NB: all() returns a snapshot BY VALUE — copy the match out. Taking
+      // &nn here would dangle the moment the temporary dies (use-after-free).
+      std::optional<Notification> n;
+      for (const auto& nn : mgr_.all()) {
+        if (nn.id == card.id) {
+          n = nn;
+          break;
+        }
+      }
       if (!n || n->summary.empty()) continue;
 
       cairo_t* cr = get_tmp_cr();
@@ -468,6 +486,10 @@ void NotificationToastHost::compute_layout() {
     card.h = cardH;
     if (stackBottom) y -= (cardH + kCardGap());
     else y += (cardH + kCardGap());
+  }
+  if (layoutTimer.elapsedMs() > 50) {
+    debug_log("notifications", "slow layout %lldms cards=%zu",
+              static_cast<long long>(layoutTimer.elapsedMs()), cards_.size());
   }
 }
 
@@ -540,6 +562,7 @@ void NotificationToastHost::paint_impl() {
   if (configuredWidth_ <= 0 || configuredHeight_ <= 0) return;
   if (shmBuf_.busy()) { wantRepaint_ = true; eh::shell_log::notif_verbose("paint_impl: buffer busy, deferring"); return; }
 
+  eh::shell::notifications::diag::ScopedPaint paintTimer;
   const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
   const int w = configuredWidth_;
   const int h = configuredHeight_;
@@ -562,10 +585,14 @@ void NotificationToastHost::paint_impl() {
       eh::config::overlay_surface_alpha_scale(cfgSnap, eh::config::OverlaySurfaceAlphaKind::Notifications));
 
   for (const auto& card : cards_) {
-    const auto* n = [&]() -> const Notification* {
-      for (const auto& nn : mgr_.all()) if (nn.id == card.id) return &nn;
-      return nullptr;
-    }();
+    // NB: see above — copy out of the by-value snapshot, never &nn.
+    std::optional<Notification> n;
+    for (const auto& nn : mgr_.all()) {
+      if (nn.id == card.id) {
+        n = nn;
+        break;
+      }
+    }
     if (!n) continue;
 
     const double cx = card.x;
@@ -600,70 +627,73 @@ void NotificationToastHost::paint_impl() {
     }
     cairo_stroke(cr);
 
-    // Icon area
+    // Icon area. Convert first so a broken image simply shows no art.
+    // The text column stays fixed whether or not art has arrived yet:
+    // late art must fade in without reflowing the title/body (the rewrap
+    // reads as flicker).
     const double iconX = cx + kPad();
     const double iconY = cy + kPad() + 2.0 * us;
-    bool painted_icon = false;
+    cairo_surface_t* img_surf = nullptr;
+    int imgW = 0, imgH = 0;
+    double imgScale = 1.0;
     if (n->imageData && n->imageData->width > 0 && n->imageData->height > 0) {
-      if (cairo_surface_t* img_surf = notification_image_to_cairo_surface(*n->imageData)) {
-        const int iw = cairo_image_surface_get_width(img_surf);
-        const int ih = cairo_image_surface_get_height(img_surf);
-        const double sc = std::max(kIconSz() / static_cast<double>(iw), kIconSz() / static_cast<double>(ih));
-
-        cairo_save(cr);
-        draw_rounded_rect(cr, iconX, iconY, kIconSz(), kIconSz(), kIconRad());
-        cairo_clip(cr);
-        cairo_translate(cr, iconX + (kIconSz() - iw * sc) * 0.5, iconY + (kIconSz() - ih * sc) * 0.5);
-        cairo_scale(cr, sc, sc);
-        cairo_set_source_surface(cr, img_surf, 0, 0);
-        cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
-        cairo_paint(cr);
-        cairo_restore(cr);
-        cairo_surface_destroy(img_surf);
-        painted_icon = true;
+      img_surf = notification_image_to_cairo_surface(*n->imageData);
+      if (img_surf) {
+        imgW = cairo_image_surface_get_width(img_surf);
+        imgH = cairo_image_surface_get_height(img_surf);
+        if (imgW > 0 && imgH > 0) {
+          imgScale = std::max(kIconSz() / static_cast<double>(imgW),
+                              kIconSz() / static_cast<double>(imgH));
+        } else {
+          cairo_surface_destroy(img_surf);
+          img_surf = nullptr;
+        }
       }
     }
-    if (!painted_icon) {
+    const bool hasImage = (img_surf != nullptr);
+    if (hasImage) {
+      cairo_save(cr);
       draw_rounded_rect(cr, iconX, iconY, kIconSz(), kIconSz(), kIconRad());
-      cairo_set_source_rgba(cr, chrome.outlineR, chrome.outlineG, chrome.outlineB, 0.35);
-      cairo_fill(cr);
+      cairo_clip(cr);
+      cairo_translate(cr, iconX + (kIconSz() - imgW * imgScale) * 0.5,
+                      iconY + (kIconSz() - imgH * imgScale) * 0.5);
+      cairo_scale(cr, imgScale, imgScale);
+      cairo_set_source_surface(cr, img_surf, 0, 0);
+      cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
+      cairo_paint(cr);
+      cairo_restore(cr);
+      cairo_surface_destroy(img_surf);
     }
 
     // Header row: close button
     const double textX = iconX + kIconSz() + kIconTextGap();
-    const double closeX = cx + cw - kPad() - kCloseBtnSz();
-    const double closeY = cy + kPad() + 2.0 * us;
+    double closeX = 0.0, closeY = 0.0, closeBs = 0.0;
+    close_box_for_card(card, &closeX, &closeY, &closeBs);
     const double headerRightEdge = closeX - kHeaderGap();
-    const double pbarY = cy + ch - kProgressH - 8.0 * us;
+    const double pbarY = cy + ch - kProgressH() - 8.0 * us;
 
-    // Close glyph (Material Symbols "close")
+    // Close button: vector X (crisp at any scale, no icon-font
+    // dependency) with a hover wash so the target is discoverable.
     {
-      auto* layout = pango_cairo_create_layout(cr);
-      auto* desc = pango_font_description_from_string("Material Symbols Rounded");
-      pango_font_description_set_size(desc, 14 * PANGO_SCALE * us);
-      pango_font_description_set_weight(desc, PANGO_WEIGHT_NORMAL);
-      pango_layout_set_font_description(layout, desc);
-      {
-        PangoAttribute* fea = pango_attr_font_features_new("liga");
-        if (fea) {
-          fea->start_index = 0;
-          fea->end_index = G_MAXUINT;
-          PangoAttrList* attrs = pango_attr_list_new();
-          pango_attr_list_insert(attrs, fea);
-          pango_layout_set_attributes(layout, attrs);
-          pango_attr_list_unref(attrs);
-        }
+      const bool hovered = (hoverCloseId_ != 0 && hoverCloseId_ == card.id);
+      cairo_save(cr);
+      if (hovered) {
+        cairo_arc(cr, closeX + closeBs * 0.5, closeY + closeBs * 0.5, closeBs * 0.5, 0.0,
+                  2.0 * M_PI);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.10);
+        cairo_fill(cr);
       }
-      pango_layout_set_text(layout, "close", -1);
-      int gw = 0, gh = 0;
-      pango_layout_get_pixel_size(layout, &gw, &gh);
-      cairo_set_source_rgba(cr, chrome.textR, chrome.textG, chrome.textB, 0.55);
-      cairo_move_to(cr, closeX + (kCloseBtnSz() - gw) * 0.5, closeY + (kCloseBtnSz() - gh) * 0.5);
-      pango_cairo_show_layout(cr, layout);
-      pango_font_description_free(desc);
-      g_object_unref(layout);
+      const double inset = closeBs * 0.30;
+      cairo_set_source_rgba(cr, chrome.textR, chrome.textG, chrome.textB, hovered ? 0.90 : 0.55);
+      cairo_set_line_width(cr, std::max(1.0, 1.6 * us));
+      cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+      cairo_move_to(cr, closeX + inset, closeY + inset);
+      cairo_line_to(cr, closeX + closeBs - inset, closeY + closeBs - inset);
+      cairo_move_to(cr, closeX + closeBs - inset, closeY + inset);
+      cairo_line_to(cr, closeX + inset, closeY + closeBs - inset);
+      cairo_stroke(cr);
+      cairo_restore(cr);
     }
-
     // Pre-measure body to compute available vertical space for title
     double bodyDescent = 0;
     double bodyH = 0;
@@ -671,7 +701,7 @@ void NotificationToastHost::paint_impl() {
       auto* tmp = pango_cairo_create_layout(cr);
       auto* dsc = pango_font_description_from_string("Sans");
       pango_font_description_set_size(dsc, 13 * PANGO_SCALE * us);
-      pango_font_description_set_weight(dsc, PANGO_WEIGHT_BOLD);
+      pango_font_description_set_weight(dsc, PANGO_WEIGHT_NORMAL);
       pango_layout_set_font_description(tmp, dsc);
       pango_layout_set_text(tmp, n->body.c_str(), static_cast<int>(n->body.size()));
       pango_layout_set_width(tmp, static_cast<int>((headerRightEdge - textX) * PANGO_SCALE));
@@ -756,12 +786,12 @@ void NotificationToastHost::paint_impl() {
       g_object_unref(layout);
     }
 
-    // Subtitle (Sans 11pt, max 2 lines, slightly looser leading).
+    // Body (Sans 13pt Regular, dimmer than the title, max 2 lines).
     {
       auto* layout = pango_cairo_create_layout(cr);
       auto* desc = pango_font_description_from_string("Sans");
       pango_font_description_set_size(desc, 13 * PANGO_SCALE * us);
-      pango_font_description_set_weight(desc, PANGO_WEIGHT_BOLD);
+      pango_font_description_set_weight(desc, PANGO_WEIGHT_NORMAL);
       pango_layout_set_font_description(layout, desc);
       pango_layout_set_text(layout, n->body.c_str(), static_cast<int>(n->body.size()));
       pango_layout_set_width(layout, static_cast<int>((headerRightEdge - textX) * PANGO_SCALE));
@@ -777,7 +807,7 @@ void NotificationToastHost::paint_impl() {
         pango_attr_list_unref(attrs);
       }
 
-      cairo_set_source_rgba(cr, chrome.textR, chrome.textG, chrome.textB, 0.92);
+      cairo_set_source_rgba(cr, chrome.textR, chrome.textG, chrome.textB, 0.78);
       cairo_move_to(cr, textX, (pbarY - 12.0 * us) - bodyDescent);
       pango_cairo_show_layout(cr, layout);
 
@@ -789,7 +819,7 @@ void NotificationToastHost::paint_impl() {
     const double pbarX = cx + kPad();
     const double pbarW = cw - kPad() * 2.0;
     cairo_set_source_rgba(cr, chrome.drawerDimR, chrome.drawerDimG, chrome.drawerDimB, 0.50);
-    cairo_rectangle(cr, pbarX, pbarY, pbarW, kProgressH);
+    cairo_rectangle(cr, pbarX, pbarY, pbarW, kProgressH());
     cairo_fill(cr);
 
     // Progress bar fill
@@ -800,7 +830,7 @@ void NotificationToastHost::paint_impl() {
           *n->expiryTime - Clock::now()).count();
       const double fraction = total > 0 ? std::clamp(static_cast<double>(remaining) / static_cast<double>(total), 0.0, 1.0) : 0.0;
       cairo_set_source_rgba(cr, chrome.accentR, chrome.accentG, chrome.accentB, 0.55);
-      cairo_rectangle(cr, pbarX, pbarY, pbarW * fraction, kProgressH);
+      cairo_rectangle(cr, pbarX, pbarY, pbarW * fraction, kProgressH());
       cairo_fill(cr);
     }
   }
@@ -810,6 +840,11 @@ void NotificationToastHost::paint_impl() {
   wl_surface_attach(surface_, shmBuf_.wl(), 0, 0);
   wl_surface_damage_buffer(surface_, 0, 0, w, h);
   shmBuf_.mark_busy();
+
+  if (paintTimer.elapsedMs() > 50) {
+    debug_log("notifications", "slow paint %lldms cards=%zu",
+              static_cast<long long>(paintTimer.elapsedMs()), cards_.size());
+  }
 
   // Request frame callback for smooth real-time progress bar animation.
   for (const auto& nn : mgr_.all()) {
@@ -837,6 +872,21 @@ void NotificationToastHost::pointer_motion(double sx, double sy) {
    
   pointerX_ = sx;
   pointerY_ = sy;
+  // Hover-track the close X so paint can highlight it. Only repaints on
+  // transitions; motion itself stays cheap.
+  std::uint32_t hover = 0;
+  for (const auto& c : cards_) {
+    double bx = 0.0, by = 0.0, bs = 0.0;
+    close_box_for_card(c, &bx, &by, &bs);
+    if (sx >= bx && sx < bx + bs && sy >= by && sy < by + bs) {
+      hover = c.id;
+      break;
+    }
+  }
+  if (hover != hoverCloseId_) {
+    hoverCloseId_ = hover;
+    on_notifications_changed();
+  }
 }
 
 void NotificationToastHost::pointer_button_press() {

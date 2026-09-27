@@ -1,8 +1,11 @@
 #include "ux/settings/data/monitors/settings_monitors.hpp"
+#include "ux/settings/settings_tab_monitors/monitors_log.hpp"
 #include "ux/settings/utils/monitors/settings_monitors_drm_probe.hpp"
 
 #include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
+
+#include <chrono>
 
 #include <algorithm>
 #include <array>
@@ -1244,7 +1247,20 @@ void merge_caps_niri_output(std::string_view obj, OutputCaps* caps) {
 }  // namespace
 
 void MonitorsTabState::refresh_from_system() {
-   
+  const auto t0 = std::chrono::steady_clock::now();
+  struct RefreshExitLog {
+    MonitorsTabState* self;
+    std::chrono::steady_clock::time_point t0;
+    ~RefreshExitLog() {
+      const long long us =
+          std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0)
+              .count();
+      eh::settings::monitors_log::MonitorsLog::instance().writef(
+          "data refresh kind=%d nOut=%zu nCaps=%zu conf=%s status=%s total=%lldus",
+          static_cast<int>(self->kind), self->outputs.size(), self->caps.size(),
+          self->conf_path.c_str(), self->status.c_str(), us);
+    }
+  } exitLog{this, t0};
   kind = detect_compositor_kind();
   debug_log("monitors", "refresh_from_system: compositor=%d outputs=%zu", static_cast<int>(kind), outputs.size());
   caps.clear();
@@ -1409,15 +1425,38 @@ void MonitorsTabState::capture_baseline() {
 }
 
 void MonitorsTabState::revert_edits() {
-   
+  const auto t0 = std::chrono::steady_clock::now();
   outputs = baseline_outputs;
   preamble = baseline_preamble;
   dirty = false;
   status.clear();
+  const long long us =
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+  eh::settings::monitors_log::MonitorsLog::instance().writef("data revert nOut=%zu total=%lldus",
+                                                             outputs.size(), us);
 }
 
 bool MonitorsTabState::save_and_reload(std::string& err_out) {
-   
+  const auto t0 = std::chrono::steady_clock::now();
+  struct SaveExitLog {
+    MonitorsTabState* self;
+    std::string* err;
+    std::chrono::steady_clock::time_point t0;
+    bool* okOut;
+    bool ok = false;
+    ~SaveExitLog() {
+      const long long us =
+          std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0)
+              .count();
+      eh::settings::monitors_log::MonitorsLog::instance().writef(
+          "data save kind=%d nOut=%zu conf=%s ok=%d err=%s total=%lldus", static_cast<int>(self->kind),
+          self->outputs.size(), self->conf_path.c_str(), ok ? 1 : 0, err->c_str(), us);
+      if (okOut) *okOut = ok;
+    }
+  };
+  bool loggedOk = false;
+  SaveExitLog exitLog{this, &err_out, t0, &loggedOk};
+  (void)loggedOk;
   err_out.clear();
   if (kind != CompositorKind::Hyprland && kind != CompositorKind::Niri && kind != CompositorKind::Mango) {
     err_out = "Unsupported compositor";
@@ -1461,6 +1500,7 @@ bool MonitorsTabState::save_and_reload(std::string& err_out) {
     preamble = pre;
     capture_baseline();
     status.clear();
+    exitLog.ok = true;
     return true;
   }
 
@@ -1478,6 +1518,7 @@ bool MonitorsTabState::save_and_reload(std::string& err_out) {
     dirty = false;
     capture_baseline();
     status.clear();
+    exitLog.ok = true;
     return true;
   }
 
@@ -1502,6 +1543,7 @@ bool MonitorsTabState::save_and_reload(std::string& err_out) {
   dirty = false;
   capture_baseline();
   status.clear();
+  exitLog.ok = true;
   return true;
 }
 

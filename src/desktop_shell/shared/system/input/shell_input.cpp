@@ -16,7 +16,6 @@
 #include "desktop_shell/shared/popup/dispatch/popup_dispatch.hpp"
 #include "desktop_shell/shared/popup/dispatch/popup_items.hpp"
 #include "desktop_shell/controlcenter/input/control_center_dispatch.hpp"
-#include "desktop_shell/dashboard/dashboard_dispatch.hpp"
 #include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
 #include "desktop_shell/spotlight/search/spotlight_query.hpp"
 #include "desktop_shell/spotlight/search/spotlight_keyboard.hpp"
@@ -72,17 +71,6 @@ void shell_pointer_enter(void* data, wl_pointer*  , uint32_t  , wl_surface* surf
     std::cerr << "[shell-input] enter surf=" << static_cast<const void*>(surface)
               << " is_dock_layer=" << (dock_layer_from_surface(app, surface) != nullptr ? 1 : 0) << '\n';
   }
-  // Dashboard owns two surfaces: the trigger strip (pure toggle on enter)
-  // and the panel. Route both straight to it so the dock auto-hide /
-  // hover-lift paths below never see either surface.
-  if (surface == app.dash.trigSurface) {
-    eh::shell::dashboard::dashboard_trigger_enter(app);
-    return;
-  }
-  if (surface == app.dash.panelSurface) {
-    eh::shell::dashboard::dashboard_pointer_enter(app);
-    return;
-  }
   if (DockOutputLayer* dockL = dock_layer_from_surface(app, surface)) {
     for (size_t i = 0; i < app.dockLayers.size(); ++i) {
       if (app.dockLayers[i].get() == dockL) {
@@ -126,16 +114,7 @@ void shell_pointer_leave(void* data, wl_pointer*  , uint32_t  , wl_surface* surf
   } else if (surface == eh::settings::embed_default_app_picker_surface()) {
     eh::settings::embed_dispatch_default_app_picker_pointer_leave();
   }
-  const bool onDashTrig = (surface == app.dash.trigSurface);
-  const bool onDashLeave = (surface == app.dash.panelSurface);
   if (surface && app.pointerSurface == surface) app.pointerSurface = nullptr;
-
-  if (onDashTrig) return;  // strip toggle happens on enter; leaves never act
-  if (onDashLeave) {
-    // Mid-drag leaves are parked (pendingLeave) and cleared on release.
-    eh::shell::dashboard::dashboard_pointer_leave(app);
-    return;
-  }
 
   if (surface && dock_layer_from_surface(app, surface)) {
     app.dockHoverSlot = -1;
@@ -165,12 +144,6 @@ void shell_pointer_motion(void* data, wl_pointer*  , uint32_t  , wl_fixed_t sx, 
   auto& app = *static_cast<DockApp*>(data);
   app.pointerX = wl_fixed_to_double(sx);
   app.pointerY = wl_fixed_to_double(sy);
-
-  if (app.pointerSurface == app.dash.panelSurface) {
-    eh::shell::dashboard::dashboard_pointer_motion(app);
-    return;
-  }
-  if (app.pointerSurface == app.dash.trigSurface) return;  // 8px strip: nothing hoverable
 
   if (eh::shell::popup::popup_handle_motion(app)) return;
 
@@ -228,8 +201,6 @@ void shell_pointer_button(void* data, wl_pointer*  , uint32_t serial, uint32_t  
   auto& app = *static_cast<DockApp*>(data);
   const bool onDockSurface = dock_pointer_on_any_dock_layer(app);
   const bool onPopupSurface = dock_popup_pointer_on_any_popup_surface(app);
-  const bool onDashSurface = (app.pointerSurface != nullptr && app.pointerSurface == app.dash.panelSurface);
-  const bool onTrigSurface = (app.pointerSurface != nullptr && app.pointerSurface == app.dash.trigSurface);
   if (app.pointerSurface == eh::settings::embed_settings_surface() ||
       app.pointerSurface == eh::settings::embed_widget_picker_surface() ||
       app.pointerSurface == eh::settings::embed_default_app_picker_surface()) {
@@ -239,14 +210,12 @@ void shell_pointer_button(void* data, wl_pointer*  , uint32_t serial, uint32_t  
   const bool left = (button == 0x110  );
 
   const bool right = (button == 0x111  ) || (button == 0x112  ) || (button == 0x113  );
+  const bool middle = (button == 0x112  );
   if (!left && !right) return;
   if (state == WL_POINTER_BUTTON_STATE_RELEASED) {
     app.popupDismissedThisPress = DockApp::PopupKind::None;
     if (left && eh::shell::control_center::handle_button_release(app)) {
       // CC drag ended, fall through to handle other release events
-    }
-    if (left && eh::shell::dashboard::dashboard_button_release(app)) {
-      // Dashboard slider drag ended, fall through
     }
     if (left && app.dockPressedSlot >= 0) {
       app.dockPressedSlot = -1;
@@ -342,7 +311,7 @@ void shell_pointer_button(void* data, wl_pointer*  , uint32_t serial, uint32_t  
     app.popupDismissedThisPress = dismissedKind;
   }
 
-  if (app.pointerSurface != nullptr && !onDockSurface && !onPopupSurface && !onDashSurface && !onTrigSurface) {
+  if (app.pointerSurface != nullptr && !onDockSurface && !onPopupSurface) {
     if (shell_input_trace_enabled()) {
       std::cerr << "[shell-input] press DROPPED: wl_seat focus surface is not dock/popup (see enter lines)\n";
     }
@@ -353,11 +322,6 @@ void shell_pointer_button(void* data, wl_pointer*  , uint32_t serial, uint32_t  
     std::cout << "[input] click: button=" << (left ? "left" : "right") << " x=" << app.pointerX << " y=" << app.pointerY << "\n";
   if (!app.seat) return;
 
-  if (onDashSurface) {
-    if (left) eh::shell::dashboard::dashboard_pointer_press(app, serial);
-    return;
-  }
-
   if (app.popupOpen && dock_popup_pointer_on_any_popup_surface(app)) {
     if (eh::shell::dock::app_drawer::app_drawer_handle_click(app, left, right)) return;
     if (eh::shell::dock::spotlight::spotlight_handle_click(app)) return;
@@ -366,7 +330,7 @@ void shell_pointer_button(void* data, wl_pointer*  , uint32_t serial, uint32_t  
     if (eh::shell::popup::popup_handle_items_click(app)) return;
   }
 
-  eh::shell::dock::dock_handle_slot_press(app, serial, left, right, onDockSurface);
+  eh::shell::dock::dock_handle_slot_press(app, serial, left, right, middle, onDockSurface);
 }
 
 void shell_pointer_axis(void* data, wl_pointer*  , uint32_t  , uint32_t axis, wl_fixed_t value) {
@@ -381,7 +345,6 @@ void shell_pointer_axis(void* data, wl_pointer*  , uint32_t  , uint32_t axis, wl
     eh::settings::embed_dispatch_pointer_axis_vertical(-deltaPx);
     return;
   }
-  if (eh::shell::dashboard::dashboard_axis(app, deltaPx)) return;
   if (eh::shell::control_center::handle_axis(app, deltaPx)) return;
   if (eh::shell::dock::app_drawer::app_drawer_handle_axis(app, deltaPx)) return;
 }
@@ -435,16 +398,10 @@ void shell_keyboard_keymap(void* data, wl_keyboard*, uint32_t format, int32_t fd
   app.xkbState = app.xkbKeymap ? xkb_state_new(app.xkbKeymap) : nullptr;
 }
 
-void shell_keyboard_enter(void* data, wl_keyboard*, uint32_t, wl_surface* surface, wl_array*) {
-  auto& app = *static_cast<DockApp*>(data);
-  // Escape-to-close only applies while the dashboard itself holds keyboard
-  // focus (the layer surface requests focus on demand).
-  app.dash.kbdFocus = (surface != nullptr && surface == app.dash.panelSurface);
+void shell_keyboard_enter(void*, wl_keyboard*, uint32_t, wl_surface*, wl_array*) {
 }
 
-void shell_keyboard_leave(void* data, wl_keyboard*, uint32_t, wl_surface*) {
-  auto& app = *static_cast<DockApp*>(data);
-  app.dash.kbdFocus = false;
+void shell_keyboard_leave(void*, wl_keyboard*, uint32_t, wl_surface*) {
 }
 
 void shell_keyboard_key(void* data, wl_keyboard*, uint32_t  , uint32_t  , uint32_t keycode,
@@ -463,7 +420,6 @@ void shell_keyboard_key(void* data, wl_keyboard*, uint32_t  , uint32_t  , uint32
   const xkb_keysym_t sym = xkb_state_key_get_one_sym(app.xkbState, keycode + 8);
 
   if (!app.popupOpen) {
-    if (sym == XKB_KEY_Escape && app.dash.kbdFocus) eh::shell::dashboard::dashboard_close(app);
     return;
   }
 

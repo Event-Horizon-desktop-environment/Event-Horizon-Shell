@@ -111,6 +111,7 @@ inline constexpr double kPearRowIconCx = 28.0;
 inline constexpr double kPearRowIconCy = 28.0;
 inline constexpr double kPearRowIconR = 14.0;
 
+
 inline double pear_toggle_x(const PearLayout& L, size_t idx) {
   return L.togX + static_cast<double>(idx) * (L.togW + L.gapS);
 }

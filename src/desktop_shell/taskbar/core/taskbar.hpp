@@ -2,6 +2,7 @@
 
 #include "desktop_shell/taskbar/layout/taskbar_types.hpp"
 #include "desktop_shell/taskbar/core/taskbar_settings.hpp"
+#include "desktop_shell/taskbar/paint/taskbar_paint.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -29,6 +30,7 @@
 #include <cstdint>
 #include <functional>
 #include <atomic>
+#include <array>
 #include <thread>
 #include <memory>
 #include <mutex>
@@ -119,7 +121,11 @@ struct TaskbarApp {
   size_t pointerTaskbarLayerIdx = 0;
   int hoverSlot = -1;
   int pressedSlot = -1;
+  // Output layer those slot indices belong to (output=all mode).
+  int hoverLayerIdx = -1;
+  int pressedLayerIdx = -1;
   double hoverLiftPx = 0.0;
+  int mediaHoverZone = -2;
 
   // Layers
   std::vector<std::unique_ptr<TaskbarOutputLayer>> layers{};
@@ -149,6 +155,9 @@ struct TaskbarApp {
   double pinDragFirstLeft = 0.0;   // saved at init — uniform geometry
   double pinDragStride = 0.0;      // saved at init — iconW + gap
   double pinDragIconW = 0.0;       // saved at init — uniform icon width
+  // Per-pin hit rects (x, w) in paint order at drag init. Used for
+  // variable-width insertion math when labels widen pinned slots.
+  std::vector<std::pair<double, double>> pinDragRects{};
   bool pinDragGeometryValid = false; // saved at init — explicit flag (firstLeft can legitimately be 0.0 in panel layout)
   std::vector<std::string> pinDragPinsSnapshot{};
   std::vector<std::string> pinDragPaintOrder{};
@@ -173,6 +182,26 @@ struct TaskbarApp {
   // Icon cache
   eh::icons::IconCache icons{};
   TaskbarScaledIconCache scaledIcons{};
+  std::vector<eh::shell::taskbar::TaskbarPaintSlot> cachedLeft{};
+  std::vector<eh::shell::taskbar::TaskbarPaintSlot> cachedCenter{};
+  std::vector<eh::shell::taskbar::TaskbarPaintSlot> cachedRight{};
+  std::vector<eh::shell::taskbar::TaskbarPaintSlot> cachedAll{};
+  bool slotsValid = false;
+  std::vector<std::string> slotFpLeftW{};
+  std::vector<std::string> slotFpCenterW{};
+  std::vector<std::string> slotFpRightW{};
+  std::vector<std::string> slotFpPinned{};
+  std::vector<std::string> slotFpRunningKeys{};
+  std::vector<std::uint64_t> slotFpRunningSerials{};
+  std::vector<char> slotFpRunningActive{};
+  std::vector<std::string> slotFpTrayIds{};
+  bool slotFpPinDragging = false;
+  std::string slotFpPinDragKey{};
+  bool slotFpShowLabels = false;  // reserved: slot composition no longer varies with labels
+  std::uint64_t slotFpConfigGen = 0;
+  std::string cachedFloatingPinLookup{};
+  bool cachedFloatingPinRunning = false;
+  bool cachedFloatingPinActivated = false;
 
   // Animation
   eh::shell::AnimationManager anim{};
@@ -228,6 +257,7 @@ struct TaskbarApp {
 
   TaskbarPopupKind popupKind = TaskbarPopupKind::None;
   std::vector<TaskbarPopupItem> popupItems{};
+  int popupHoverItem = -1;
   std::string popupService{};
   std::string popupPath{};
   std::string popupMenuPath{};
@@ -258,6 +288,27 @@ struct TaskbarApp {
   int tooltipCfgH = 0;
   bool tooltipConfigured = false;
 
+  // Per-frame effective label flag, resolved in taskbar_draw() (collapse-
+  // when-full may switch labels off for an overflowing bar). Paint and
+  // measure read this, never settings.showLabels directly.
+  bool effShowLabels = false;
+  // Shrink-to-fit label budget for this frame (0 = full width). Set by the
+  // paint pass when the labeled strip overflows; measure uses full width.
+  double effLabelMaxW = 0.0;
+  // Overflow chevron state per output layer, filled by the paint pass when
+  // labeled buttons don't fit even at minimum width. The chevron opens these.
+  std::vector<std::vector<std::pair<uint64_t, std::string>>> layerOverflow{};
+  // Persistent label-width cache (title|fontsize -> px). Titles are measured
+  // with one reused scratch context instead of per-call surfaces.
+  mutable std::unordered_map<std::string, double> labelWidthCache{};
+  cairo_surface_t* labelMeasureSurf = nullptr;
+  cairo_t* labelMeasureCr = nullptr;
+  // Color Hot-track cache: icon key -> dominant RGB + valid flag.
+  mutable std::unordered_map<std::string, std::array<float, 4>> hotTrackCache{};
+  // Hot-track cost counters (consumed by the taskbar-perf summary).
+  uint64_t hotTrackComputes = 0;
+  double hotTrackComputeMs = 0.0;
+
   // App context menu state (uses serials instead of raw handles to avoid
   // dangling-pointer issues when sharing the dock's ForeignToplevels)
   std::string popupAppKey{};
@@ -265,6 +316,16 @@ struct TaskbarApp {
   std::vector<std::pair<uint64_t, std::string>> popupAppWindows{};
   std::vector<DesktopAction> popupAppDesktopActions{};
   std::string popupAppDesktopExec{};
+
+  // Win7-style hover window previews (thumbnail cards popup).
+  std::string thumbGroupKey{};
+  std::string thumbAppName{};
+  std::string thumbIconId{};
+  std::vector<std::pair<uint64_t, std::string>> thumbWindows{};
+  int thumbHoverRow = -1;
+  bool thumbCloseHover = false;
+  bool thumbListMode = false;
+  int thumbAnchorX = 0;
 
   // Calendar state
   std::tm calSelectedDate{};
@@ -287,7 +348,7 @@ struct TaskbarApp {
   uint64_t frameCallbackRequestedMs = 0;
   uint64_t frameDoneCount = 0;
   uint64_t frameWatchdogCount = 0;
-  double sectionMs[3] = {0.0, 0.0, 0.0};
+  double sectionMs[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
   // Fast-start (EH_TASKBAR_FAST_START).
   std::shared_ptr<eh::wayland::VulkanDisplayContext> taskbarVk;
@@ -297,6 +358,22 @@ struct TaskbarApp {
   bool taskbarFastStartDidPlaceholder = false;
   bool deferTaskbarRedraw = false;
 
+  // Per-layer paint diagnostics (blame-free geometry blame log).
+  struct TaskbarLayerDiag {
+    int boxW = 0;
+    int boxH = 0;
+    size_t nSlots = 0;
+    double totalW = 0.0;
+    double availW = 0.0;
+    bool usePanel = false;
+    bool useLr = false;
+    double hScale = 1.0;
+    bool labels = false;
+    double effMaxW = 0.0;
+    size_t overflowN = 0;
+    size_t hitsN = 0;
+  };
+  std::vector<TaskbarLayerDiag> layerDiag{};
   // Popup dimensions (set by taskbar_popup_create, read by template paint)
   int popupW = 0;
   int popupH = 0;
@@ -316,6 +393,16 @@ void taskbar_add_layer(TaskbarApp& app, wl_output* output);
 void taskbar_draw(TaskbarApp& app);
 void taskbar_schedule_frame(TaskbarApp& app);
 void taskbar_popup_draw(TaskbarApp& app);
+
+// Win7-style hover window previews: state reset + popup paint. Defined in
+// taskbar.cpp; the popup-local geometry lives in taskbar_types.hpp.
+void taskbar_thumbs_clear(TaskbarApp& app);
+void taskbar_thumbs_paint(TaskbarApp& app, cairo_t* cr, int w, int h);
+// Close the preview popup if open (used when pin drag starts).
+void taskbar_thumbs_dismiss(TaskbarApp& app);
+// Per-output hit geometry (output=all gives each monitor its own hits).
+const std::vector<TaskbarWidgetHit>& taskbar_layer_hits(const TaskbarApp& app, int layer);
+int taskbar_pointer_layer(const TaskbarApp& app);
 void taskbar_handle_tray(TaskbarApp& app);
 void taskbar_maybe_reload_settings(TaskbarApp& app, const eh::config::ShellConfig& sc);
 void taskbar_cleanup(TaskbarApp& app);
@@ -337,6 +424,13 @@ void taskbar_start_launch_bounce(TaskbarApp& app, const std::string& app_key_raw
 using TaskbarNightlightToggleFn = std::function<void()>;
 void taskbar_set_nightlight_toggle_fn(TaskbarNightlightToggleFn fn);
 void taskbar_request_nightlight_toggle();
+
+// Overview toggle hook (middle-click on the workspaces widget): the split-out
+// `horizon-taskbar` child publishes `overview.toggle` on the bus so the
+// horizon-stage child flips the overview; a bare in-process run just no-ops.
+using TaskbarOverviewToggleFn = std::function<void()>;
+void taskbar_set_overview_toggle_fn(TaskbarOverviewToggleFn fn);
+void taskbar_request_overview_toggle();
 
 
 

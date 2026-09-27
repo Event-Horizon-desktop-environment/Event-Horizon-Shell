@@ -1,6 +1,7 @@
 #include "services/mpris/mpris_player.hpp"
 
 #include "configuration/shell_config.hpp"
+#include "desktop_shell/notifications/diag/notification_pipeline_stats.hpp"
 #include "desktop_shell/notifications/types/notifications_notify.hpp"
 #include "desktop_shell/common/log/shell_diag_log.hpp"
 
@@ -440,11 +441,38 @@ void DockMpris::maybe_emit_now_playing_notify_assume_locked() {
   const std::string summary = title.empty() ? artist : title;
   const std::string body = (title.empty() || artist.empty()) ? std::string(" ") : artist;
 
-  eh::notify::push_mpris(key, summary, body);
+  if (!eh::notify::push_mpris(key, summary, body)) {
+    eh::shell::notifications::diag::pipeline_stats().notePushFailed("mpris");
+    eh::shell_log::mpris_dbus("now-playing notify: mpris push FAILED key=\"", key,
+                              "\" (no IPC sender — toast never left this process)");
+    last_track_notify_key_.clear();  // don't poison: retry on the next poll
+    return;
+  }
+  eh::shell::notifications::diag::pipeline_stats().notePushMpris();
   if (s.art) {
     if (auto art = cairo_surface_to_notification_image(s.art.get())) {
-      eh::notify::push_mpris_art(key, *art);
+      if (!eh::notify::push_mpris_art(key, *art)) {
+        eh::shell::notifications::diag::pipeline_stats().notePushFailed("mpris-art");
+        eh::shell_log::mpris_dbus("now-playing notify art: art push FAILED key=\"", key, "\"");
+      } else {
+        eh::shell::notifications::diag::pipeline_stats().notePushArt(
+            eh::notify::art_payload_size(*art));
+        eh::shell_log::mpris_dbus("now-playing notify art: pushed ", art->width, "x", art->height,
+                                  " key=\"", key, "\"");
+      }
+    } else {
+      eh::shell::notifications::diag::pipeline_stats().noteEmitNoArt("convert-failed");
+      eh::shell_log::mpris_dbus("now-playing notify art: surface→image conversion failed key=\"", key,
+                                "\"");
     }
+  } else {
+    const std::string reason = s.art_url_resolved.empty()
+                                   ? "no-url"
+                                   : (art_future_.valid() ? "loading" : "load-failed");
+    eh::shell::notifications::diag::pipeline_stats().noteEmitNoArt(reason);
+    eh::shell_log::mpris_dbus("now-playing notify art: none yet key=\"", key, "\" url=\"",
+                              s.art_url_resolved, "\" loading=", art_future_.valid(),
+                              " last_attempt=\"", art_last_attempt_url_, "\"");
   }
 }
 
@@ -822,19 +850,37 @@ int DockMpris::compute_signature(const PlayerSnapshot& s) {
 
 void DockMpris::update_now_playing_art_assume_locked() {
    
-  if (last_track_notify_key_.empty()) return;
+  if (last_track_notify_key_.empty()) {
+    eh::shell_log::mpris_dbus("update_now_playing_art: no active notify key, skipping");
+    return;
+  }
   const PlayerSnapshot& s = snap_;
   std::string title = s.title;
   std::string artist = s.artist;
   trim_in_place(title);
   trim_in_place(artist);
-  if (title.empty() && artist.empty()) return;
-  if (!s.art) return;
+  if (title.empty() && artist.empty()) {
+    eh::shell_log::mpris_dbus("update_now_playing_art: empty title/artist, skipping");
+    return;
+  }
+  if (!s.art) {
+    eh::shell_log::mpris_dbus("update_now_playing_art: no art surface key=\"", last_track_notify_key_,
+                              "\" url=\"", s.art_url_resolved, "\" loading=", art_future_.valid(),
+                              " last_attempt=\"", art_last_attempt_url_, "\"");
+    return;
+  }
   std::optional<eh::shell::notifications::NotificationImageData> album_art =
       cairo_surface_to_notification_image(s.art.get());
   eh::shell_log::mpris_dbus("update_now_playing_art: key=\"", last_track_notify_key_, "\" art=", album_art.has_value());
   if (album_art) {
-    eh::notify::push_mpris_art(last_track_notify_key_, *album_art);
+    if (!eh::notify::push_mpris_art(last_track_notify_key_, *album_art)) {
+      eh::shell::notifications::diag::pipeline_stats().notePushFailed("mpris-art");
+      eh::shell_log::mpris_dbus("update_now_playing_art: art push FAILED key=\"",
+                                last_track_notify_key_, "\"");
+    } else {
+      eh::shell::notifications::diag::pipeline_stats().notePushArt(
+          eh::notify::art_payload_size(*album_art));
+    }
   }
 }
 
@@ -862,10 +908,21 @@ bool DockMpris::poll_art_completions() {
       snap_.art_loaded_from_url = pr.first;
       art_last_attempt_url_.clear();
       update_now_playing_art_assume_locked();
-      eh::shell_log::mpris_dbus("poll_art_completions: loaded art ", pr.first, " — updated notification key=", last_track_notify_key_);
+      const std::int64_t loadMs =
+          eh::shell::notifications::diag::pipeline_stats().noteArtLoadDone(true, pr.first);
+      eh::shell_log::mpris_dbus("poll_art_completions: loaded art ", pr.first, " — updated notification key=", last_track_notify_key_, " ms=", loadMs, " [", eh::shell::notifications::diag::pipeline_stats().senderSummary(), "]");
       return true;
     }
+    const std::int64_t loadMs =
+        eh::shell::notifications::diag::pipeline_stats().noteArtLoadDone(false, pr.first);
+    eh::shell_log::mpris_dbus("poll_art_completions: art load produced no surface url=\"", pr.first,
+                              "\" ms=", loadMs,
+                              " (fetch or decode failed; will not retry until the player or URL changes)");
     art_last_attempt_url_ = pr.first;
+  } else {
+    eh::shell::notifications::diag::pipeline_stats().noteArtLoadStale(pr.first);
+    eh::shell_log::mpris_dbus("poll_art_completions: ignoring stale art url=\"", pr.first,
+                              "\" current=\"", snap_.art_url_resolved, "\"");
   }
   return false;
 }
@@ -885,6 +942,8 @@ void DockMpris::kick_art_load(const std::string& resolved) {
     cairo_surface_t* raw = load_album_art_surface(resolved, 512);
     return std::make_pair(resolved, adopt_album_art_surface(raw));
   });
+  eh::shell::notifications::diag::pipeline_stats().noteArtLoadKick(resolved);
+  eh::shell_log::mpris_dbus("kick_art_load: loading art url=\"", resolved, "\"");
 }
 
 bool DockMpris::poll_refresh() {

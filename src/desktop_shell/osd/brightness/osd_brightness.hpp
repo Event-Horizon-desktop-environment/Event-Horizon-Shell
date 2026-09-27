@@ -1,9 +1,9 @@
 #pragma once
 
-struct DockApp;
+namespace eh::shell::stage { struct StageApp; }
 
 namespace eh::shell::osd {
 
-void osd_brightness_poll(DockApp& app);
+void osd_brightness_poll(eh::shell::stage::StageApp& app);
 
 }

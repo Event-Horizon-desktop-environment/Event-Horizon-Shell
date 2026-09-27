@@ -8,6 +8,8 @@
 #include "desktop_shell/desktop/spawn/desktop_spawn.hpp"
 #include "desktop_shell/dock/spawn/dock_spawn.hpp"
 #include "desktop_shell/taskbar/spawn/taskbar_spawn.hpp"
+#include "desktop_shell/panel/spawn/panel_spawn.hpp"
+#include "desktop_shell/stage/spawn/stage_spawn.hpp"
 #include "desktop_shell/shared/toplevel/toplevel_tracker.hpp"
 #include "desktop_shell/shared/core/config_watch.hpp"
 
@@ -317,6 +319,45 @@ std::vector<FdHandler> UnifiedShellSession::build_handlers() {
             if (pid > 1) taskbar_child_pid_ = pid;
           }
         }
+        if (panel_child_pid_ > 1) {
+          if (waitpid(panel_child_pid_, &status, WNOHANG) == panel_child_pid_) {
+            std::cerr << "[panel] child exited (status=" << status << ")\n";
+            panel_child_pid_ = -1;
+            if (!running_) continue;
+            if (!eh::config::shell_config_snapshot().panel.enabled) {
+              std::cerr << "[panel] disabled; leaving the panel child down\n";
+              continue;
+            }
+            const uint64_t now = eh::shell::now_mono_ms();
+            if (now - panelLastRestartMs_ < kChildRespawnCooldownMs) {
+              panelRespawnAtMs_ = panelLastRestartMs_ + kChildRespawnCooldownMs;
+              debug_log("panel", "child died; respawn deferred to cooldown");
+              continue;
+            }
+            panelRespawnAtMs_ = 0;
+  stageRespawnAtMs_ = 0;
+            panelLastRestartMs_ = now;
+            const int pid = eh::shell::panel::panel_spawn_native_child();
+            if (pid > 1) panel_child_pid_ = pid;
+          }
+        }
+        if (stage_child_pid_ > 1) {
+          if (waitpid(stage_child_pid_, &status, WNOHANG) == stage_child_pid_) {
+            std::cerr << "[stage] child exited (status=" << status << ")\n";
+            stage_child_pid_ = -1;
+            if (!running_) continue;
+            const uint64_t now = eh::shell::now_mono_ms();
+            if (now - stageLastRestartMs_ < kChildRespawnCooldownMs) {
+              stageRespawnAtMs_ = stageLastRestartMs_ + kChildRespawnCooldownMs;
+              debug_log("stage", "child died; respawn deferred to cooldown");
+              continue;
+            }
+            stageRespawnAtMs_ = 0;
+            stageLastRestartMs_ = now;
+            const int pid = eh::shell::stage::stage_spawn_native_child();
+            if (pid > 1) stage_child_pid_ = pid;
+          }
+        }
       }
     });
   }
@@ -404,6 +445,25 @@ void UnifiedShellSession::retry_deferred_child_respawns() {
       debug_log("taskbar", "deferred respawn after cooldown pid=%d", pid);
     }
   }
+  if (panelRespawnAtMs_ && now >= panelRespawnAtMs_) {
+    panelRespawnAtMs_ = 0;
+    if (!eh::config::shell_config_snapshot().panel.enabled) return;
+    panelLastRestartMs_ = now;
+    const int pid = eh::shell::panel::panel_spawn_native_child();
+    if (pid > 1) {
+      panel_child_pid_ = pid;
+      debug_log("panel", "deferred respawn after cooldown pid=%d", pid);
+    }
+  }
+  if (stageRespawnAtMs_ && now >= stageRespawnAtMs_) {
+    stageRespawnAtMs_ = 0;
+    stageLastRestartMs_ = now;
+    const int pid = eh::shell::stage::stage_spawn_native_child();
+    if (pid > 1) {
+      stage_child_pid_ = pid;
+      debug_log("stage", "deferred respawn after cooldown pid=%d", pid);
+    }
+  }
 }
 
 void UnifiedShellSession::sync_dock_child_with_enabled_setting() {
@@ -435,6 +495,38 @@ void UnifiedShellSession::sync_dock_child_with_enabled_setting() {
   if (pid > 1) {
     dock_child_pid_ = pid;
     std::cerr << "[dock] show_dock enabled; started dock child pid=" << pid << "\n";
+  }
+}
+
+void UnifiedShellSession::sync_panel_child_with_enabled_setting() {
+  if (!running_ || !ipc_service_ || !ipc_service_->running()) return;
+  const bool want = eh::config::shell_config_snapshot().panel.enabled;
+
+  if (!want) {
+    if (panelEnabledApplied_) {
+      panelEnabledApplied_ = false;
+      if (panel_child_pid_ > 1) {
+        std::cerr << "[panel] disabled; stopping panel child pid=" << panel_child_pid_ << "\n";
+        (void)kill(panel_child_pid_, SIGTERM);
+      }
+    }
+    return;
+  }
+
+  if (panel_child_pid_ > 1) {
+    panelEnabledApplied_ = true;
+    return;
+  }
+  if (panelRespawnAtMs_) return;
+  const uint64_t now = eh::shell::now_mono_ms();
+  if (now - panelLastRestartMs_ < kChildRespawnCooldownMs) return;
+
+  panelEnabledApplied_ = true;
+  panelLastRestartMs_ = now;
+  const int pid = eh::shell::panel::panel_spawn_native_child();
+  if (pid > 1) {
+    panel_child_pid_ = pid;
+    std::cerr << "[panel] enabled; started panel child pid=" << pid << "\n";
   }
 }
 
@@ -511,6 +603,7 @@ void UnifiedShellSession::on_idle_flush(bool did_display_event) {
   }
   retry_deferred_child_respawns();
   sync_dock_child_with_enabled_setting();
+  sync_panel_child_with_enabled_setting();
   {
     eh::app::wl_loop_diag::StallScope _stall("unified", "weather_drive_curl_multi");
     eh::widgets::control_center_weather_drive_curl_multi();
@@ -726,10 +819,10 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   boot_mark("sync_widget_registry_done");
 
   MANGOWM_INFO("startup: init global keyboard handler");
-  // The Super key is the start-menu toggle and is owned by the split-out
-  // horizon-dock child, which fires its own evdev menu handler. This process
-  // only keeps Super+S (settings), so only the settings fn lands here;
-  // pressing Super alone is handled entirely by the dock child.
+  // Super toggles the overview (GNOME parity) and is owned by the split-out
+  // horizon-stage child, which fires its own evdev handler so the key keeps
+  // working with the dock turned off. This process only keeps Super+S
+  // (settings), so only the settings fn lands here.
   global_keyboard_ = std::make_unique<eh::service::GlobalKeyboardHandler>();
   global_keyboard_->init(nullptr, [this]() {
     if (eh::settings::settings_singleton_running()) {
@@ -738,7 +831,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
     }
     (void)eh::settings::spawn_settings();
   });
-  EH_ST_TRACE(std::cerr << "run_event_horizon_shell: Super handled by dock child; Super+S launches settings");
+  EH_ST_TRACE(std::cerr << "run_event_horizon_shell: Super handled by stage child; Super+S launches settings");
 
   MANGOWM_INFO("startup: init IPC service");
   // IPC service (Unix socket command server).
@@ -991,6 +1084,32 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   }
   boot_mark("taskbar_child_spawned");
 
+  // Spawn the split-out `horizon-panel` child: the top/bottom indicator bar +
+  // popups get their own WaylandConnection with toplevel tracking of their own
+  // (mirroring horizon-dock / horizon-taskbar), plus a timer fd, settings
+  // inotify, and MPRIS listener, and subscribe to `config.applied` +
+  // `command.request`. The SIGCHLD handler respawns it on crash; like the dock
+  // child it only runs while [panel] enabled=true — the
+  // sync_panel_child_with_enabled_setting() idle hook stops/starts it live.
+  panelEnabledApplied_ = eh::config::shell_config_snapshot().panel.enabled;
+  if (panelEnabledApplied_ && ipc_service_ && ipc_service_->running()) {
+    const int pPid = eh::shell::panel::panel_spawn_native_child();
+    if (pPid > 1) panel_child_pid_ = pPid;
+  } else if (!panelEnabledApplied_) {
+    std::cerr << "[panel] disabled at startup; not spawning the panel child\n";
+  }
+  boot_mark("panel_child_spawned");
+
+  // Spawn the split-out `horizon-stage` child: the overview (dashboard and
+  // OSD follow in later phases) with its own connections, toplevel tracking,
+  // Super-key routing, and loop fds. Always running — overview surfaces are
+  // on-demand only — so no enabled gate; the SIGCHLD handler respawns it.
+  if (ipc_service_ && ipc_service_->running()) {
+    const int sPid = eh::shell::stage::stage_spawn_native_child();
+    if (sPid > 1) stage_child_pid_ = sPid;
+  }
+  boot_mark("stage_child_spawned");
+
   MANGOWM_INFO("startup: start network service");
   // Pre-start the network service so cached state is ready when the UI first queries it.
   eh::net::NetworkManagerService::instance().start();
@@ -1151,6 +1270,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   desktopRespawnAtMs_ = 0;
   dockRespawnAtMs_ = 0;
   taskbarRespawnAtMs_ = 0;
+  panelRespawnAtMs_ = 0;
   if (desktop_child_pid_ > 1) {
     eh::shell::desktop::desktop_kill_native_child(desktop_child_pid_);
     desktop_child_pid_ = -1;
@@ -1162,6 +1282,14 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   if (taskbar_child_pid_ > 1) {
     eh::shell::taskbar::taskbar_kill_native_child(taskbar_child_pid_);
     taskbar_child_pid_ = -1;
+  }
+  if (panel_child_pid_ > 1) {
+    eh::shell::panel::panel_kill_native_child(panel_child_pid_);
+    panel_child_pid_ = -1;
+  }
+  if (stage_child_pid_ > 1) {
+    eh::shell::stage::stage_kill_native_child(stage_child_pid_);
+    stage_child_pid_ = -1;
   }
   if (settings_inotify_fd_ >= 0) {
     close(settings_inotify_fd_);
@@ -1191,19 +1319,23 @@ void UnifiedShellSession::sync_widget_registry() {
   // from the snapshot rather than an in-process app).
   // Clear any existing entries first.
   widget_registry_.remove_component("taskbar");
+  widget_registry_.remove_component("panel");
 
-  // Walk the widget lists and register activatable types.
+  // Walk the widget lists and register activatable types. The dead
+  // `launchpad.toggle` path was ripped out: the taskbar owns its own app
+  // drawer (taskbar.menu.toggle), and the panel has none, so panel launcher
+  // tokens register nothing.
   auto register_widgets = [this](const std::vector<std::string>& list,
                                   const std::string& component) {
+    if (component != "taskbar") return;
     for (const auto& token : list) {
       const std::string type = eh::config::widget_implementation_type(token);
 
-      // Activatable widget types map to actions forwarded to the dock child,
-      // which owns the start-menu surfaces.
+      // Activatable widget types map to the taskbar's own app drawer.
       if (type == "app_drawer" || type == "smenu") {
         widget_registry_.add(type,
             [this]() {
-              if (ipc_service_) ipc_service_->publish("command.request", "launchpad.toggle");
+              if (ipc_service_) ipc_service_->publish("command.request", "taskbar.menu.toggle");
             },
             component);
       }
@@ -1214,6 +1346,10 @@ void UnifiedShellSession::sync_widget_registry() {
   register_widgets(t.leftWidgets, "taskbar");
   register_widgets(t.centerWidgets, "taskbar");
   register_widgets(t.rightWidgets, "taskbar");
+  const auto& p = eh::config::shell_config_snapshot().panel;
+  register_widgets(p.leftWidgets, "panel");
+  register_widgets(p.centerWidgets, "panel");
+  register_widgets(p.rightWidgets, "panel");
 }
 
 }

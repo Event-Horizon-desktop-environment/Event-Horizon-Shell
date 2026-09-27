@@ -7,13 +7,16 @@
 #include "m3/core/primitives/box.hpp"
 #include "ux/settings/common/settings_common.hpp"
 #include "ux/settings/settings_tab_notifications/settings_tab_notifications.hpp"
+#include "ux/settings/utils/display/settings_display_dropdown.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 #include "ux/settings/utils/events/settings_event_handlers.hpp"
 #include "desktop_shell/notifications/types/notifications_notify.hpp"
 
 // Layout constants.
 static constexpr int kNotifPosCardTop = kContentTop;
-static constexpr int kNotifPosCardH = 52;
+static constexpr int kNotifPosRowH = 52;
+static constexpr int kNotifDisplayRowH = 52;
+static constexpr int kNotifPosCardH = kNotifPosRowH + kNotifDisplayRowH;
 
 static constexpr int kNotifBehavCardTop = kNotifPosCardTop + kNotifPosCardH + kCardGap;
 static constexpr int kNotifBehavBodyTop = kNotifBehavCardTop + 52;
@@ -180,7 +183,7 @@ void paint_notifications_tab(App& app, cairo_t* cr, int contentX, int contentW, 
     cardW = cW;
   }
 
-  // Card 0: Position
+  // Card 0: Position + Display
   draw_notif_card(app, cr, static_cast<double>(cardX), static_cast<double>(kNotifPosCardTop),
                   static_cast<double>(cardW), static_cast<double>(kNotifPosCardH), glassOv);
   {
@@ -194,9 +197,21 @@ void paint_notifications_tab(App& app, cairo_t* cr, int contentX, int contentW, 
     }
     settings_label(cr, static_cast<double>(contentX + kCardPad), kNotifPosCardTop + 30, "Position", "");
     const int posBx = cardX + cardW - kCardPad - kSettingsComboW;
-    const int posBy = kNotifPosCardTop + (kNotifPosCardH - kSettingsComboH) / 2;
+    const int posBy = kNotifPosCardTop + (kNotifPosRowH - kSettingsComboH) / 2;
     settings_paint_combo_closed(app, cr, posBx, posBy, kSettingsComboW, kSettingsComboH, glassOv,
                                 kToastPositions[posIdx], app.notifPosDropdownOpen);
+  }
+  // Display row (output picker): same shared Auto/All/per-display dropdown
+  // the dock uses. Toasts are a single surface, so "all" shows on primary.
+  {
+    const int dispBand = notif_display_band_top();
+    settings_show_text(cr, static_cast<double>(cardX + kCardPad), static_cast<double>(dispBand + 28),
+                       "Display", 13.f, 500, textR, textG, textB, 0.90f);
+    settings_show_text(cr, static_cast<double>(cardX + kCardPad), static_cast<double>(dispBand + 44),
+                       "Auto = primary monitor.", 11.f, 400, textR, textG, textB, 0.60f);
+    eh::settings::display::sync_dropdown(app, app.notifDisplayDd, app.settings.notificationsOutputName,
+                                         contentX, contentW, dispBand);
+    app.notifDisplayDd.paint_trigger(app, cr, glassOv, settings_scroll_px(app));
   }
 
   // Card 1: Server
@@ -344,6 +359,17 @@ bool settings_notifications_consume_pointer_down(App& app, int contentX, int con
   extern void draw(App& app);
   extern void save_settings(const struct Settings& s);
 
+  // Display-output dropdown (shared helper): row select / trigger toggle /
+  // outside-close. Runs before close-others so an open popup takes
+  // precedence over every other control on this tab.
+  if (app.notifDisplayDd.open()) {
+    if (eh::settings::display::handle_pointer_down(app, app.notifDisplayDd,
+                                                   app.settings.notificationsOutputName,
+                                                   contentX, contentW, notif_display_band_top())) {
+      return true;
+    }
+  }
+
   settings_close_non_default_app_dropdowns(app);
 
   if (point_in_rect(app.pointerX, app.pointerY, swXBus, swYBus, swWn, swHn)) {
@@ -391,6 +417,19 @@ bool settings_notifications_consume_pointer_down(App& app, int contentX, int con
     }
   }
 
+  // Display dropdown trigger (open).
+  {
+    eh::settings::display::sync_dropdown(app, app.notifDisplayDd, app.settings.notificationsOutputName,
+                                         contentX, contentW, notif_display_band_top());
+    const int scr = settings_scroll_px_int(app);
+    if (app.notifDisplayDd.hit_trigger(static_cast<int>(app.pointerX),
+                                       static_cast<int>(app.pointerY), scr)) {
+      app.notifDisplayDd.open_popup();
+      draw(app);
+      return true;
+    }
+  }
+
   // Position dropdown
   {
     static constexpr const char* kToastPositions[] = {
@@ -398,7 +437,7 @@ bool settings_notifications_consume_pointer_down(App& app, int contentX, int con
     };
     constexpr int kNumToastPositions = 6;
     const int posBx = cardXi + cardWi - kCardPad - kSettingsComboW;
-    const int posBy = kNotifPosCardTop + (kNotifPosCardH - kSettingsComboH) / 2;
+    const int posBy = kNotifPosCardTop + (kNotifPosRowH - kSettingsComboH) / 2;
     if (point_in_rect(app.pointerX, app.pointerY, posBx, posBy, kSettingsComboW, kSettingsComboH)) {
       settings_close_non_default_app_dropdowns(app);
       app.notifPosDropdownOpen = !app.notifPosDropdownOpen;
@@ -431,4 +470,23 @@ bool settings_notifications_consume_pointer_down(App& app, int contentX, int con
   }
 
   return false;
+}
+
+// Display-output dropdown (shared Auto/All/per-display helper, same as dock).
+int notif_display_band_top() { return kNotifPosCardTop + kNotifPosRowH; }
+
+void notif_display_dd_sync(App& app, int contentX, int contentW) {
+  eh::settings::display::sync_dropdown(app, app.notifDisplayDd,
+                                       app.settings.notificationsOutputName, contentX,
+                                       contentW, notif_display_band_top());
+}
+
+bool notif_display_dd_commit_pointer_up(App& app, float px, float py,
+                                        int contentX, int contentW) {
+  if (!app.notifDisplayDd.open()) return false;
+  // Selection commit lives in the shared helper (saves on row pick); a miss
+  // keeps the popup open for the opening click's release.
+  return eh::settings::display::commit_pointer_up(
+      app, app.notifDisplayDd, app.settings.notificationsOutputName, contentX, contentW,
+      notif_display_band_top(), px, py);
 }

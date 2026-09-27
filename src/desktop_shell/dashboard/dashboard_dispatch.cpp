@@ -5,7 +5,7 @@
 #include "desktop_shell/dashboard/dashboard_hit.hpp"
 #include "desktop_shell/dashboard/dashboard_layout.hpp"
 #include "desktop_shell/dashboard/dashboard_surface.hpp"
-#include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/stage/core/stage_app.hpp"
 #include "desktop_shell/dock/core/dock_bar.h"
 #include "desktop_shell/common/time/mono_time.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
@@ -34,7 +34,7 @@ bool dash_trace_enabled() {
   return k;
 }
 
-void dash_log(const char* what, const DockApp& app) {
+void dash_log(const char* what, const eh::shell::stage::StageApp& app) {
   if (!dash_trace_enabled()) return;
   const auto& d = app.dash;
   std::cerr << "[dash] " << what << " xy=" << app.pointerX << "," << app.pointerY << " open=" << d.open
@@ -46,7 +46,7 @@ bool hits_equal(const DashboardHit& a, const DashboardHit& b) {
          a.streamId == b.streamId;
 }
 
-void apply_drag(DockApp& app, double t) {
+void apply_drag(eh::shell::stage::StageApp& app, double t) {
   auto& d = app.dash;
   switch (d.dragKind) {
     case DashDragKind::Volume:
@@ -70,7 +70,7 @@ void apply_drag(DockApp& app, double t) {
   }
 }
 
-void drag_move(DockApp& app) {
+void drag_move(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   const double t = std::clamp((app.pointerX - d.dragTrackX) / std::max(1.0, d.dragTrackW), 0.0, 1.0);
   d.dragVisualT = t;
@@ -84,7 +84,7 @@ void drag_move(DockApp& app) {
   dashboard_draw(app);
 }
 
-void start_drag(DockApp& app, const DashboardHit& h) {
+void start_drag(eh::shell::stage::StageApp& app, const DashboardHit& h) {
   auto& d = app.dash;
   d.dragging = true;
   d.dragKind = h.kind == DashCardKind::Volume      ? DashDragKind::Volume
@@ -102,7 +102,7 @@ void start_drag(DockApp& app, const DashboardHit& h) {
   drag_move(app);
 }
 
-void toggle_network(DockApp& app) {
+void toggle_network(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.netExpanded) (void)hooks::control_center_wifi_scan(true);
   d.netExpanded = !d.netExpanded;
@@ -110,7 +110,7 @@ void toggle_network(DockApp& app) {
   dashboard_changed(app);
 }
 
-void toggle_bluetooth(DockApp& app) {
+void toggle_bluetooth(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.btExpanded) {
     hooks::bluetooth_ensure_service();
@@ -121,7 +121,7 @@ void toggle_bluetooth(DockApp& app) {
   dashboard_changed(app);
 }
 
-void wifi_row_click(DockApp& app, int idx) {
+void wifi_row_click(eh::shell::stage::StageApp& app, int idx) {
   auto& d = app.dash;
   // Same sorted source the layout/paint/hit rows come from: the row index
   // must resolve to the visible network.
@@ -142,7 +142,7 @@ void wifi_row_click(DockApp& app, int idx) {
   dashboard_changed(app);
 }
 
-void bt_row_click(DockApp& app, int idx) {
+void bt_row_click(eh::shell::stage::StageApp& app, int idx) {
   const auto devs = dashboard_sorted_bt_devices();
   if (idx < 0 || idx >= static_cast<int>(devs.size())) return;
   const auto& dv = devs[static_cast<size_t>(idx)];
@@ -154,7 +154,7 @@ void bt_row_click(DockApp& app, int idx) {
 
 }  // namespace
 
-void dashboard_pointer_enter(DockApp& app) {
+void dashboard_pointer_enter(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.cfg.enabled || !d.panelSurface) return;
   d.hover = {};
@@ -165,7 +165,7 @@ void dashboard_pointer_enter(DockApp& app) {
   dashboard_open(app);
 }
 
-void dashboard_pointer_leave(DockApp& app) {
+void dashboard_pointer_leave(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (d.dragging) {
     d.pendingLeave = true;
@@ -181,7 +181,7 @@ void dashboard_pointer_leave(DockApp& app) {
   }
 }
 
-void dashboard_pointer_motion(DockApp& app) {
+void dashboard_pointer_motion(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.cfg.enabled || !d.panelSurface) return;
 
@@ -207,7 +207,7 @@ void dashboard_pointer_motion(DockApp& app) {
   }
 }
 
-void dashboard_pointer_press(DockApp& app, std::uint32_t serial) {
+void dashboard_pointer_press(eh::shell::stage::StageApp& app, std::uint32_t serial) {
   (void)serial;
   auto& d = app.dash;
   dash_log("press", app);
@@ -261,7 +261,7 @@ void dashboard_pointer_press(DockApp& app, std::uint32_t serial) {
   }
 }
 
-bool dashboard_button_release(DockApp& app) {
+bool dashboard_button_release(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   bool handled = false;
 
@@ -286,7 +286,7 @@ bool dashboard_button_release(DockApp& app) {
   return handled;
 }
 
-bool dashboard_axis(DockApp& app, double deltaPx) {
+bool dashboard_axis(eh::shell::stage::StageApp& app, double deltaPx) {
   auto& d = app.dash;
   if (!d.panelSurface || app.pointerSurface != d.panelSurface) return false;
   if (d.revealT < 0.99f) return false;
@@ -320,7 +320,7 @@ bool dashboard_axis(DockApp& app, double deltaPx) {
   return true;
 }
 
-void dashboard_trigger_enter(DockApp& app) {
+void dashboard_trigger_enter(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   if (!d.cfg.enabled || !d.trigSurface) return;
   d.hover = {};
@@ -329,7 +329,7 @@ void dashboard_trigger_enter(DockApp& app) {
   else dashboard_open(app);
 }
 
-void dashboard_open(DockApp& app) {
+void dashboard_open(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   dash_log("open", app);
   if (!d.cfg.enabled) return;
@@ -359,10 +359,10 @@ void dashboard_open(DockApp& app) {
         dashboard_draw(app);
       });
   d.dirty = true;
-  dock_schedule_frame(app);
+  eh::shell::stage::stage_dashboard_kick_frames(app);
 }
 
-void dashboard_close(DockApp& app) {
+void dashboard_close(eh::shell::stage::StageApp& app) {
   auto& d = app.dash;
   dash_log("close", app);
   if (!d.panelSurface) return;
@@ -394,7 +394,7 @@ void dashboard_close(DockApp& app) {
         if (!app.dash.open) dashboard_destroy_panel(app);
       });
   d.dirty = true;
-  dock_schedule_frame(app);
+  eh::shell::stage::stage_dashboard_kick_frames(app);
 }
 
 }  // namespace eh::shell::dashboard

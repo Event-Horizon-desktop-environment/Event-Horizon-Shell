@@ -14,3 +14,7 @@ void taskbar_m3_handle_pointer_leave(App& app);
 bool taskbar_m3_has_active_slider(const App& app);
 bool taskbar_m3_is_appearance_child_tab();
 bool taskbar_m3_is_widgets_child_tab();
+
+// Display-output dropdown (taskbar tab, Settings child).
+void taskbar_display_dd_sync(App& app, int contentX, int contentW);
+bool taskbar_display_dd_commit_pointer_up(App& app, float px, float py, int contentX, int contentW);

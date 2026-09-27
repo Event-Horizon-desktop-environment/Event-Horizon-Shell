@@ -81,6 +81,7 @@ void widget_picker_caret_frame_done(void* data, wl_callback* cb, uint32_t) {
 static const char* widget_display_desc(const std::string& id) {
   if (id == "pinned_apps") return "Shows pinned apps (and running indicators)";
   if (id == "running_apps") return "Shows running applications with focus indication";
+  if (id == "win7_tasks") return "Win7-style unified buttons: launch + switch, labels, stacking (taskbar only)";
   if (eh::config::widget_token_is_system_tray(id)) return "System notification area icons";
   if (id == "settings_button") return "Quick access to this settings window";
   if (id == "distro_spotlight")

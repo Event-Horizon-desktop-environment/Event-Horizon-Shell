@@ -15,8 +15,6 @@
 #include <string>
 #include <vector>
 
-struct DockApp;
-
 namespace eh::shell::dashboard {
 
 enum class DashCardKind : std::uint8_t {

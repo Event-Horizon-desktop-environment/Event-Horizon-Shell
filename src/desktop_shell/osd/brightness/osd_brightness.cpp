@@ -1,6 +1,6 @@
 #include "desktop_shell/osd/brightness/osd_brightness.hpp"
 
-#include "desktop_shell/dock/core/dock_app.h"
+#include "desktop_shell/stage/core/stage_app.hpp"
 #include "desktop_shell/osd/host/osd_host.hpp"
 
 #include <chrono>
@@ -47,9 +47,9 @@ const char* brightness_glyph(float norm) {
 
 }
 
-void osd_brightness_poll(DockApp& app) {
+void osd_brightness_poll(eh::shell::stage::StageApp& app) {
    
-  if (!app.osdHost) return;
+  if (!app.osd) return;
 
   static std::optional<std::pair<std::filesystem::path, std::filesystem::path>> paths = discover_backlight();
   if (!paths) return;
@@ -78,7 +78,7 @@ void osd_brightness_poll(DockApp& app) {
   c.icon_ligature = brightness_glyph(norm);
   c.value_text = std::to_string(pct) + "%";
   c.progress = norm;
-  app.osdHost->show(c);
+  app.osd->show(c);
 }
 
 }

@@ -268,9 +268,8 @@ void pear_center_paint(ccl::ControlCenterState& state, cairo_t* cr, int popupW,
                     "Night Color", nightOn, hov);
         break;
       case ccl::PearToggle::ColorScheme:
-        // Icon-only pill: no Light/Dark text, the glyph shows the target.
         card_button(tx, L.togY, L.togW, L.togH, isDark ? "light_mode" : "dark_mode",
-                    "", false, hov);
+                    "Scheme", false, hov);
         break;
       case ccl::PearToggle::Camera:
         card_button(tx, L.togY, L.togW, L.togH, "photo_camera", "Camera", false, hov);
@@ -350,10 +349,13 @@ void pear_center_paint(ccl::ControlCenterState& state, cairo_t* cr, int popupW,
   };
 
   if (L.showVolume) {
-    const auto ao = eh::shell::dock_slot_hooks::control_center_audio_output_state();
-    const char* g = (ao.muted || ao.volume_pct <= 0) ? "volume_off" : (ao.volume_pct < 34 ? "volume_down" : "volume_up");
+    const auto ao = eh::shell::dock_slot_hooks::control_center_audio_output_state(&state);
+    const int aoPct = (ao.volume_fill_t_override >= 0.0 && ao.volume_fill_t_override <= 1.0)
+        ? static_cast<int>(std::lround(ao.volume_fill_t_override * 100.0))
+        : ao.volume_pct;
+    const char* g = (ao.muted || aoPct <= 0) ? "volume_off" : (aoPct < 34 ? "volume_down" : "volume_up");
     slider_row(L.volY, g, "Volume", ao.device_name, state.outputDevicesExpanded ? 1 : 0,
-               ao.volume_pct, ao.muted, cfg.showPercentage,
+               aoPct, ao.muted, cfg.showPercentage,
                CcHT::VolumeCard, CcHT::OutputAudioMute);
   }
   // Output device switcher.
@@ -386,10 +388,13 @@ void pear_center_paint(ccl::ControlCenterState& state, cairo_t* cr, int popupW,
     }
   }
   if (L.showInput) {
-    const auto ai = eh::shell::dock_slot_hooks::control_center_audio_input_state();
-    const char* g = (ai.muted || ai.volume_pct <= 0) ? "mic_off" : "mic";
+    const auto ai = eh::shell::dock_slot_hooks::control_center_audio_input_state(&state);
+    const int aiPct = (ai.volume_fill_t_override >= 0.0 && ai.volume_fill_t_override <= 1.0)
+        ? static_cast<int>(std::lround(ai.volume_fill_t_override * 100.0))
+        : ai.volume_pct;
+    const char* g = (ai.muted || aiPct <= 0) ? "mic_off" : "mic";
     slider_row(L.inY, g, "Input", ai.device_name, state.inputDevicesExpanded ? 1 : 0,
-               ai.volume_pct, ai.muted, cfg.showPercentage,
+               aiPct, ai.muted, cfg.showPercentage,
                CcHT::InputAudioSlider, CcHT::InputAudioMute);
   }
   // Input device switcher.

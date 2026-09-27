@@ -13,6 +13,7 @@ const char* dock_widget_material_ligature(const std::string& id) {
    
   if (id == "pinned_apps") return "push_pin";
   if (id == "running_apps") return "apps";
+  if (id == "win7_tasks") return "tab";
   if (eh::config::widget_token_is_system_tray(id)) return "notifications";
   if (id == "settings_button") return "settings";
   if (id == "distro_spotlight") return "search";

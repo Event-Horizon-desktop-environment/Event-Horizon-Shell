@@ -17,7 +17,6 @@ class ExtWorkspaceManager;
 class HyprlandWorkspaceManager;
 class MangoWorkspaceManager;
 class SwayWorkspaceManager;
-class TriadWorkspaceManager;
 
 class WaylandWorkspaces {
 public:
@@ -71,7 +70,6 @@ private:
   IWorkspaceManager* m_mangoIpcBackend = nullptr;
   IWorkspaceManager* m_hyprlandBackend = nullptr;
   IWorkspaceManager* m_swayBackend = nullptr;
-  IWorkspaceManager* m_triadBackend = nullptr;
   ISocketConnector* m_mangoIpcConnector = nullptr;
   ISocketConnector* m_hyprlandConnector = nullptr;
   ISocketConnector* m_swayConnector = nullptr;

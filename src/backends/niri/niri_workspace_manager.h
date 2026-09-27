@@ -64,6 +64,12 @@ private:
   bool handleOverviewChanged(nlohmann::json const& payload);
   bool handleWindowOpened(nlohmann::json const& payload);
   bool handleWindowLayout(nlohmann::json const& payload);
+  bool applyLayoutItem(nlohmann::json const& item);
+  static WsState const* claimMatching(std::vector<WsState const*> const& cand,
+                                      std::unordered_map<std::uint64_t, bool>& used,
+                                      DeskRegion const& row,
+                                      std::optional<std::uint64_t> const& byId,
+                                      std::optional<std::size_t> const& byIdx);
   bool handleWindowClosed(nlohmann::json const& payload);
   static std::optional<WsState> parseWorkspace(nlohmann::json const& json);
   static std::optional<std::pair<std::uint64_t, WinState>> parseWindow(nlohmann::json const& json);

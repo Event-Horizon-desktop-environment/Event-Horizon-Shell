@@ -41,13 +41,7 @@ cd Event-Horizon-Shell
 - `EventHorizon --eh-settings` — standalone settings app
 - `EventHorizon --eh-screenshot [file.png]` — screenshot to PNG
 
-## Bonus: Event Horizon manages your Hyprland config
+## Credits
 
-On Hyprland the shell ships its own full **Hyprland settings editor** (the
-Hyprland tab in settings): window rules, binds, monitor config, animations,
-blur, gaps, and more are read, edited, and written back to
-`~/.config/hypr/hyprland(.conf|lua)` directly — no hand-editing needed.
-<<<<<<< Updated upstream
-=======
-
->>>>>>> Stashed changes
+- [material-color-utilities](https://github.com/material-foundation/material-color-utilities)
+  (Apache-2.0) — vendored under `third_party/` for the Horizon Colors engine.

@@ -111,8 +111,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
 
   auto is_pinned = [&](const std::string& k) { return dock_pin_identity_list_contains_toplevel_key(app, k); };
 
-  const eh::config::ShellConfig& scBarPaint = eh::config::shell_config_snapshot();
-
   std::vector<Slot> pinnedSlots;
   std::vector<Slot> runningSlots;
   std::vector<Slot> traySlots;
@@ -183,7 +181,6 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
   }
 
   auto append_widget = [&](std::vector<Slot>& out, const std::string& wid) {
-    if (!eh::config::widget_instance_enabled(scBarPaint, wid)) return;
     if (dock_strip_widget_blocked(app.settings, wid)) return;
     if (wid == "pinned_apps") {
       for (const auto& s : pinnedSlots) out.push_back(s);

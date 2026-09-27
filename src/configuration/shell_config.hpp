@@ -3,6 +3,7 @@
 #include "configuration/shell_renderer_backend.hpp"
 #include "desktop_shell/dock/core/dock_settings.hpp"
 #include "desktop_shell/taskbar/core/taskbar_settings.hpp"
+#include "desktop_shell/panel/core/panel_settings.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -270,6 +271,11 @@ struct ShellNotificationsSettings {
   bool dbusEnabled = true;
   bool doNotDisturb = false;
 
+  // Display the layer-shell toasts on. ""/Auto = primary output, "all" =
+  // primary output (toasts are a single surface and cannot span displays),
+  // otherwise a Wayland output name. Unknown names fall back to Auto.
+  std::string outputName{};
+
   std::int32_t defaultTimeoutMs = 6000;
   ShellNotificationsToastSettings toast{};
 };
@@ -293,6 +299,14 @@ struct TimeSettings {
   int dateFormat = 0;          // 0=weekday+day, 1=full date, 2=ISO, 3=custom
   std::string customFormat;    // custom strftime format (overrides all when non-empty)
   std::string timezone;        // empty = system default
+};
+
+struct TaskflipSettings {
+  bool galleryStyle = true;
+  bool mruOrder = true;
+  bool showCaption = true;
+  bool showCount = true;
+  bool showIcons = true;
 };
 
 struct KeyboardSettings {
@@ -445,6 +459,8 @@ struct ShellConfig {
 
   eh::shell::taskbar::TaskbarSettings taskbar{};
 
+  eh::shell::panel::PanelSettings panel{};
+
   bool desktopEnabled = true;
   std::string desktopOutputName{};  // empty=all, or specific output name
   std::string desktopWidgetsOutputName{};
@@ -454,6 +470,7 @@ struct ShellConfig {
   DefaultAppsSettings defaultApps{};
 
   TimeSettings time{};
+  TaskflipSettings taskflip{};
   IdleSettings idle{};
   KeyboardSettings keyboard{};
   PowerSettings power{};
@@ -495,6 +512,7 @@ void merge_widget_overrides_from_state_file(ShellConfig& merged);
 [[nodiscard]] std::string state_autostart_toml_path();
 [[nodiscard]] std::string state_dock_toml_path();
 [[nodiscard]] std::string state_taskbar_toml_path();
+[[nodiscard]] std::string state_panel_toml_path();
 [[nodiscard]] std::string state_appearance_toml_path();
 [[nodiscard]] std::string state_wallpaper_toml_path();
 [[nodiscard]] std::string state_notifications_toml_path();
@@ -536,6 +554,7 @@ void shell_config_restore_matugen_palette(const ShellAppearance& ap);
 
 [[nodiscard]] const ShellConfig& shell_config_snapshot();
 [[nodiscard]] const ShellConfig& shell_config_snapshot_skip_matugen();
+[[nodiscard]] std::uint64_t shell_config_generation();
 void shell_config_trigger_async_matugen();
 
 using ShellConfigDragPreviewPatchFn = void (*)(ShellConfig& sc, void* user);

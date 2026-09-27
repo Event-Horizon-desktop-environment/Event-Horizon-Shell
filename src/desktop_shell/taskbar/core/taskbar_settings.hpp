@@ -26,6 +26,12 @@ struct TaskbarSettings {
   std::vector<std::string> rightWidgets{};
   std::vector<std::string> pinnedApps{};
   bool groupApps = true;
+  bool showLabels = false;
+  bool collapseWhenFull = true;
+  bool thumbnailsEnabled = true;
+  bool thumbnailPeekEnabled = true;
+  int thumbnailThreshold = 10;
+  bool compactMedia = true;
   int slotPillOpacity = 100;
   bool positionTop = false;
   bool autoHide = false;

@@ -4,14 +4,12 @@
 #include "backends/mango/mango_backends.h"
 #include "backends/niri/niri_backends.h"
 #include "backends/sway/sway_backends.h"
-#include "backends/triad/triad_backends.h"
 
 CompositorRuntimeRegistry::CompositorRuntimeRegistry()
     : m_niri(std::make_unique<NiriRuntime>())
     , m_hyprland(std::make_unique<wspace::hyprland::HyprlandRuntime>())
     , m_mango(std::make_unique<wspace::mango::MangoRuntime>())
-    , m_sway(std::make_unique<wspace::sway::SwayRuntime>())
-    , m_triad(std::make_unique<wspace::triad::TriadRuntime>()) {
+    , m_sway(std::make_unique<wspace::sway::SwayRuntime>()) {
   MANGOWM_DEBUG("CompositorRuntimeRegistry ctor this=%p", (void*)this);
 }
 
@@ -34,7 +32,3 @@ const wspace::mango::MangoRuntime& CompositorRuntimeRegistry::mango() const noex
 wspace::sway::SwayRuntime& CompositorRuntimeRegistry::sway() noexcept { return *m_sway; }
 
 const wspace::sway::SwayRuntime& CompositorRuntimeRegistry::sway() const noexcept { return *m_sway; }
-
-wspace::triad::TriadRuntime& CompositorRuntimeRegistry::triad() noexcept { return *m_triad; }
-
-const wspace::triad::TriadRuntime& CompositorRuntimeRegistry::triad() const noexcept { return *m_triad; }

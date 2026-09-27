@@ -489,10 +489,6 @@ shell_cpp_sources = [
   'src/backends/hyprland/hyprland_kbd_impl.cpp',
   'src/backends/hyprland/hyprland_win_id.cpp',
   'src/backends/hyprland/hyprland_window_tracker.cpp',
-  'src/backends/triad/triad_run_ctx.cpp',
-  'src/backends/triad/triad_workspace_manager.cpp',
-  'src/backends/triad/triad_out_backend.cpp',
-  'src/backends/triad/triad_kbd_backend.cpp',
   'src/wl/capture/screencopy_png.cpp',
   'src/wl/capture/toplevel_stream.cpp',
   'src/wl/core/seat.cpp',
@@ -543,6 +539,15 @@ shell_cpp_sources = [
   'src/desktop_shell/dock/spawn/dock_spawn.cpp',
   'src/desktop_shell/taskbar/standalone/taskbar_standalone.cpp',
   'src/desktop_shell/taskbar/spawn/taskbar_spawn.cpp',
+  'src/desktop_shell/panel/core/panel.cpp',
+  'src/desktop_shell/panel/layout/panel_geometry.cpp',
+  'src/desktop_shell/panel/paint/panel_paint.cpp',
+  'src/desktop_shell/panel/input/panel_input.cpp',
+  'src/desktop_shell/panel/standalone/panel_standalone.cpp',
+  'src/desktop_shell/panel/spawn/panel_spawn.cpp',
+  'src/desktop_shell/stage/core/stage_app.cpp',
+  'src/desktop_shell/stage/standalone/stage_standalone.cpp',
+  'src/desktop_shell/stage/spawn/stage_spawn.cpp',
   'src/desktop_shell/shared/toplevel/toplevel_tracker.cpp',
 
   'src/desktop_shell/controlcenter/input/control_center_hit.cpp',
@@ -659,6 +664,12 @@ shell_cpp_sources = [
 
   'src/desktop_shell/Overview/overview_host.cpp',
   'src/desktop_shell/Overview/overview_painter.cpp',
+  'src/desktop_shell/switcher/taskflip_model.cpp',
+  'src/desktop_shell/switcher/taskflip_gallery.cpp',
+  'src/desktop_shell/switcher/taskflip_rail.cpp',
+  'src/desktop_shell/switcher/taskflip_host.cpp',
+  'src/desktop_shell/switcher/taskflip_ipc.cpp',
+  'src/ux/settings/settings_tab_taskflip/settings_tab_taskflip.cpp',
   'src/desktop_shell/Overview/overview_input.cpp',
   'src/desktop_shell/Overview/overview_capture.cpp',
   'src/desktop_shell/Overview/overview_actions.cpp',
@@ -710,6 +721,7 @@ shell_cpp_sources = [
   'src/ux/settings/settings_tab_dock/settings_tab_dock.cpp',
   'src/ux/settings/settings_tab_dock_appearance/settings_tab_dock_appearance.cpp',
   'src/ux/settings/settings_tab_taskbar/settings_tab_taskbar.cpp',
+  'src/ux/settings/settings_tab_panel/settings_tab_panel.cpp',
   'src/ux/settings/settings_tab_notifications/settings_tab_notifications.cpp',
   'src/ux/settings/settings_tab_appearance/settings_tab_appearance.cpp',
   'src/ux/settings/settings_tab_icons/settings_tab_icons.cpp',
@@ -723,7 +735,6 @@ shell_cpp_sources = [
   'src/ux/settings/settings_tab_network/dialogs/wifi_password_prompt.cpp',
   'src/ux/settings/settings_tab_network/dialogs/keyring_password_prompt.cpp',
   'src/ux/settings/settings_tab_network/dialogs/vpn_add_dialog.cpp',
-  'src/ux/settings/settings_tab_ui_layout/settings_tab_layout.cpp',
   'src/ux/settings/settings_tab_mango/settings_tab_mango.cpp',
   'src/ux/settings/settings_tab_hyprland/settings_tab_hyprland.cpp',
   'src/ux/settings/settings_tab_hyprland/widgets/hyprland_anim_popup.cpp',
@@ -1078,6 +1089,37 @@ executable(
 executable(
   'horizon-taskbar',
   sources: 'src/desktop_shell/taskbar/standalone_main.cpp',
+  dependencies: eh_shell_core_dep,
+  cpp_args: shell_cpp_args + jemalloc_cpp_args,
+  cpp_pch: 'src/bootstrap/pch.hpp',
+  install: true,
+  install_rpath: '$ORIGIN/../' + get_option('libdir'),
+  install_mode: 'rwxr-xr-x',
+)
+
+# Split-out panel child: the top/bottom indicator bar + popups run in their
+# own process on their own WaylandConnection (own toplevel tracking,
+# mirroring horizon-dock / horizon-taskbar), timer fds, settings inotify,
+# and MPRIS listener. Spawned by the supervisor via posix_spawn.
+executable(
+  'horizon-panel',
+  sources: 'src/desktop_shell/panel/standalone_main.cpp',
+  dependencies: eh_shell_core_dep,
+  cpp_args: shell_cpp_args + jemalloc_cpp_args,
+  cpp_pch: 'src/bootstrap/pch.hpp',
+  install: true,
+  install_rpath: '$ORIGIN/../' + get_option('libdir'),
+  install_mode: 'rwxr-xr-x',
+)
+
+# Split-out stage child: the overview (dashboard and OSD follow in later
+# phases) runs in its own process on its own WaylandConnection plus the
+# overview's second connection, with its own toplevel tracking, Super-key
+# routing, and timer/inotify/IPC handling on its own loop. Always running —
+# overview surfaces are on-demand only. Spawned by the supervisor.
+executable(
+  'horizon-stage',
+  sources: 'src/desktop_shell/stage/standalone_main.cpp',
   dependencies: eh_shell_core_dep,
   cpp_args: shell_cpp_args + jemalloc_cpp_args,
   cpp_pch: 'src/bootstrap/pch.hpp',

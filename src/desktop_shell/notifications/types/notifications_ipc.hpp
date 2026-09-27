@@ -203,16 +203,16 @@ inline std::string encode_mpris(const std::string& key, const std::string& summa
   return out;
 }
 
-inline void push_internal(const std::string& app, const std::string& summary,
+inline bool push_internal(const std::string& app, const std::string& summary,
                           const std::string& body, int urgency) {
-  (void)push_raw(encode_internal(app, summary, body, urgency));
+  return push_raw(encode_internal(app, summary, body, urgency));
 }
 
-inline void push_mpris(const std::string& key, const std::string& summary, const std::string& body) {
-  (void)push_raw(encode_mpris(key, summary, body));
+inline bool push_mpris(const std::string& key, const std::string& summary, const std::string& body) {
+  return push_raw(encode_mpris(key, summary, body));
 }
 
-inline void push_mpris_art(const std::string& key,
+inline bool push_mpris_art(const std::string& key,
                            const eh::shell::notifications::NotificationImageData& img) {
   const auto blob = serialize_image_blob(downscale_art(img));
   std::string payload;
@@ -222,7 +222,19 @@ inline void push_mpris_art(const std::string& key,
   payload += key;
   payload += kFieldSep;
   payload.append(reinterpret_cast<const char*>(blob.data()), blob.size());
-  (void)push_raw(payload);
+  return push_raw(payload);
+}
+
+// Installs a notify.push sender that forwards through a split-out child's
+// own IPC client. Every process that can emit (dock/stage/panel/taskbar run
+// their own DockMpris) needs one: with no sender installed push_*() silently
+// returns false and toasts never leave the process. The client object must
+// outlive the sender (all standalones keep theirs for the whole run).
+template <typename IpcClient>
+void install_ipc_sender(IpcClient& ipc) {
+  setNotifySender([&ipc](const std::string& payload, const std::vector<int>& fds) {
+    return ipc.publish(kPushTopic, payload, fds);
+  });
 }
 
 }  // namespace eh::notify

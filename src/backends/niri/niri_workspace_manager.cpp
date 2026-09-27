@@ -36,31 +36,32 @@ bool writeFully(int fd, std::string_view data) {
 
 std::optional<std::uint64_t> jsonU64(nlohmann::json const& j) {
   if (j.is_number_unsigned()) { return j.get<std::uint64_t>(); }
-  if (j.is_number_integer()) {
-    auto v = j.get<std::int64_t>();
-    if (v >= 0) { return static_cast<std::uint64_t>(v); }
-  }
-  return std::nullopt;
+  if (!j.is_number_integer()) { return std::nullopt; }
+  const auto v = j.get<std::int64_t>();
+  if (v < 0) { return std::nullopt; }
+  return static_cast<std::uint64_t>(v);
 }
 
 std::optional<std::int32_t> jsonI32(nlohmann::json const& j) {
+  constexpr auto lo = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::min());
+  constexpr auto hi = static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+  std::int64_t v = 0;
   if (j.is_number_integer()) {
-    auto v = j.get<std::int64_t>();
-    if (v < std::numeric_limits<std::int32_t>::min() || v > std::numeric_limits<std::int32_t>::max()) {
-      return std::nullopt;
-    }
-    return static_cast<std::int32_t>(v);
+    v = j.get<std::int64_t>();
+  } else if (j.is_number_unsigned()) {
+    const auto u = j.get<std::uint64_t>();
+    if (u > static_cast<std::uint64_t>(hi)) { return std::nullopt; }
+    return static_cast<std::int32_t>(u);
+  } else {
+    return std::nullopt;
   }
-  if (j.is_number_unsigned()) {
-    auto v = j.get<std::uint64_t>();
-    if (v > static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())) { return std::nullopt; }
-    return static_cast<std::int32_t>(v);
-  }
-  return std::nullopt;
+  if (v < lo || v > hi) { return std::nullopt; }
+  return static_cast<std::int32_t>(v);
 }
 
 std::optional<std::uint64_t> optU64(nlohmann::json const& j, const char* k) {
-  auto it = j.find(k);
+  if (!j.is_object()) { return std::nullopt; }
+  const auto it = j.find(k);
   if (it == j.end() || it->is_null()) { return std::nullopt; }
   return jsonU64(*it);
 }
@@ -73,9 +74,10 @@ std::string optStr(nlohmann::json const& j, const char* k) {
 
 nlohmann::json const* asArray(nlohmann::json const& p, const char* k) {
   if (p.is_array()) { return &p; }
-  auto it = p.find(k);
-  if (p.is_object() && it != p.end() && it->is_array()) { return &(*it); }
-  return nullptr;
+  if (!p.is_object()) { return nullptr; }
+  const auto it = p.find(k);
+  if (it == p.end() || !it->is_array()) { return nullptr; }
+  return &(*it);
 }
 
 nlohmann::json const* asObject(nlohmann::json const& p, const char* k) {
@@ -89,29 +91,47 @@ nlohmann::json const* asObject(nlohmann::json const& p, const char* k) {
 
 std::optional<bool> optBool(nlohmann::json const& p, const char* k) {
   if (!p.is_object()) { return std::nullopt; }
-  auto it = p.find(k);
+  const auto it = p.find(k);
   if (it == p.end()) { return std::nullopt; }
   if (it->is_boolean()) { return it->get<bool>(); }
-  if (it->is_string()) {
-    auto v = it->get<std::string>();
-    if (v == "open" || v == "opened" || v == "true") { return true; }
-    if (v == "closed" || v == "false") { return false; }
+  if (!it->is_string()) { return std::nullopt; }
+  static constexpr std::string_view kTrueWords[] = {"open", "opened", "true"};
+  static constexpr std::string_view kFalseWords[] = {"closed", "false"};
+  const std::string v = it->get<std::string>();
+  for (std::string_view word : kTrueWords) {
+    if (v == word) { return true; }
+  }
+  for (std::string_view word : kFalseWords) {
+    if (v == word) { return false; }
   }
   return std::nullopt;
 }
 
 std::string titleOneLine(std::string_view text) {
-  if (text.empty()) { return {}; }
   std::string out;
   out.reserve(text.size());
-  bool pending = false;
-  for (unsigned char ch : text) {
-    if (ch == '\n' || ch == '\r' || ch == '\t' || ch == '\v' || ch == '\f' || std::isspace(ch) != 0) {
-      pending = !out.empty();
-      continue;
+  auto isGap = [](char ch) {
+    switch (ch) {
+      case ' ':
+      case '\n':
+      case '\r':
+      case '\t':
+      case '\v':
+      case '\f':
+        return true;
+      default:
+        return std::isspace(static_cast<unsigned char>(ch)) != 0;
     }
-    if (pending) { out.push_back(' '); pending = false; }
-    out.push_back(static_cast<char>(ch));
+  };
+  std::size_t i = 0;
+  const std::size_t n = text.size();
+  while (i < n) {
+    while (i < n && isGap(text[i])) { ++i; }
+    const std::size_t word = i;
+    while (i < n && !isGap(text[i])) { ++i; }
+    if (i == word) { break; }
+    if (!out.empty()) { out += ' '; }
+    out.append(text.substr(word, i - word));
   }
   return out;
 }
@@ -149,56 +169,70 @@ void NiriWorkspaceManager::onEvent(short revents) {
   if ((revents & POLLIN) != 0) { readFd(); }
 }
 
+NiriWorkspaceManager::WsState const*
+NiriWorkspaceManager::claimMatching(std::vector<WsState const*> const& cand,
+                                    std::unordered_map<std::uint64_t, bool>& used,
+                                    DeskRegion const& row, std::optional<std::uint64_t> const& byId,
+                                    std::optional<std::size_t> const& byIdx) {
+  auto takeIf = [&](WsState const* c, bool want) -> WsState const* {
+    if (!want || used.contains(c->id)) { return nullptr; }
+    used.emplace(c->id, true);
+    return c;
+  };
+  if (byId.has_value()) {
+    for (WsState const* c : cand) {
+      if (WsState const* hit = takeIf(c, c->id == *byId)) { return hit; }
+    }
+  }
+  if (!row.name.empty()) {
+    for (WsState const* c : cand) {
+      if (WsState const* hit = takeIf(c, c->name == row.name)) { return hit; }
+    }
+  }
+  if (byIdx.has_value()) {
+    for (WsState const* c : cand) {
+      if (WsState const* hit = takeIf(c, static_cast<std::size_t>(c->idx) == *byIdx)) { return hit; }
+    }
+  }
+  return nullptr;
+}
+
 void NiriWorkspaceManager::sync(std::vector<DeskRegion>& ws, const std::string& outName) const {
   if (!m_backend.canConnect() || ws.empty() || m_workspaces.empty()) { return; }
 
-  auto cand = sortedWorkspaceCandidates(outName);
+  const auto cand = sortedWorkspaceCandidates(outName);
   std::vector<WsState const*> matches(ws.size(), nullptr);
   std::unordered_map<std::uint64_t, bool> used;
 
   for (std::size_t i = 0; i < ws.size(); ++i) {
-    auto pid = parseUnsigned(ws[i].id);
-    auto pidx = parseLeadingNumber(ws[i].id);
-    if (!pidx.has_value()) { pidx = parseLeadingNumber(ws[i].name); }
-
-    auto pick = [&](auto pred) -> WsState const* {
-      for (auto* c : cand) {
-        if (used.contains(c->id) || !pred(*c)) { continue; }
-        used.emplace(c->id, true);
-        return c;
-      }
-      return nullptr;
-    };
-
-    if (pid.has_value()) { matches[i] = pick([&](WsState const& c) { return c.id == *pid; }); }
-    if (matches[i] == nullptr && !ws[i].name.empty()) {
-      matches[i] = pick([&](WsState const& c) { return c.name == ws[i].name; });
-    }
-    if (matches[i] == nullptr && pidx.has_value()) {
-      matches[i] = pick([&](WsState const& c) { return static_cast<std::size_t>(c.idx) == *pidx; });
-    }
+    const auto idNum = parseUnsigned(ws[i].id);
+    auto idxNum = parseLeadingNumber(ws[i].id);
+    if (!idxNum.has_value()) { idxNum = parseLeadingNumber(ws[i].name); }
+    matches[i] = claimMatching(cand, used, ws[i], idNum, idxNum);
   }
 
   if (!outName.empty()) {
-    std::size_t next = 0;
+    std::size_t cursor = 0;
     for (std::size_t i = 0; i < matches.size(); ++i) {
       if (matches[i] != nullptr) { continue; }
-      while (next < cand.size() && used.contains(cand[next]->id)) { ++next; }
-      if (next >= cand.size()) { break; }
-      matches[i] = cand[next];
-      used.emplace(cand[next]->id, true);
-      ++next;
+      while (cursor < cand.size() && used.contains(cand[cursor]->id)) { ++cursor; }
+      if (cursor >= cand.size()) { break; }
+      matches[i] = cand[cursor];
+      used.emplace(cand[cursor]->id, true);
+      ++cursor;
     }
   }
 
   for (std::size_t i = 0; i < ws.size(); ++i) {
-    if (matches[i] != nullptr) {
-      if (matches[i]->idx > 0) { ws[i].index = matches[i]->idx; }
-      ws[i].occupied = m_occupancy.contains(matches[i]->id) && m_occupancy.at(matches[i]->id) > 0;
-    } else {
+    if (matches[i] == nullptr) {
       ws[i].index = 0;
       ws[i].occupied = false;
+      continue;
     }
+    if (matches[i]->idx > 0) { ws[i].index = matches[i]->idx; }
+    const bool live =
+        m_occupancy.contains(matches[i]->id) && m_occupancy.at(matches[i]->id) > 0;
+    ws[i].occupied = live;
   }
 }
 
@@ -463,33 +497,32 @@ bool NiriWorkspaceManager::handleWindowOpened(nlohmann::json const& p) {
   return membersChanged;
 }
 
+bool NiriWorkspaceManager::applyLayoutItem(nlohmann::json const& item) {
+  if (!item.is_array() || item.size() < 2) { return false; }
+  const auto id = jsonU64(item[0]);
+  if (!id.has_value()) { return false; }
+  const auto it = m_windows.find(*id);
+  if (it == m_windows.end()) { return false; }
+  const auto& layout = item[1];
+  if (!layout.contains("pos_in_scrolling_layout")) { return false; }
+  const auto& pos = layout["pos_in_scrolling_layout"];
+  if (!pos.is_array() || pos.size() < 2) { return false; }
+  const auto xo = jsonI32(pos[0]);
+  const auto yo = jsonI32(pos[1]);
+  if (!xo.has_value() || !yo.has_value()) { return false; }
+  WinState& st = it->second;
+  if (st.x == *xo && st.y == *yo) { return false; }
+  st.x = *xo;
+  st.y = *yo;
+  return true;
+}
+
 bool NiriWorkspaceManager::handleWindowLayout(nlohmann::json const& p) {
-  auto* changes = asArray(p, "changes");
+  const auto* changes = asArray(p, "changes");
   if (changes == nullptr) { return false; }
-
   bool changed = false;
-  for (auto const& item : *changes) {
-    if (!item.is_array() || item.size() < 2) { continue; }
-    auto idOpt = jsonU64(item[0]);
-    if (!idOpt.has_value()) { continue; }
-    std::uint64_t id = *idOpt;
-    auto const& layout = item[1];
-
-    auto it = m_windows.find(id);
-    if (it == m_windows.end()) { continue; }
-
-    if (layout.contains("pos_in_scrolling_layout")) {
-      auto const& pos = layout["pos_in_scrolling_layout"];
-      if (pos.is_array() && pos.size() >= 2) {
-        auto xo = jsonI32(pos[0]);
-        auto yo = jsonI32(pos[1]);
-        if (!xo.has_value() || !yo.has_value()) { continue; }
-        if (it->second.x != *xo || it->second.y != *yo) {
-          it->second.x = *xo; it->second.y = *yo;
-          changed = true;
-        }
-      }
-    }
+  for (const auto& item : *changes) {
+    if (applyLayoutItem(item)) { changed = true; }
   }
   return changed;
 }

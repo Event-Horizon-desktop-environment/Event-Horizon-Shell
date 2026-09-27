@@ -7,9 +7,7 @@
 #include "desktop_shell/common/ns/namespaces.hpp"
 #include "configuration/shell_config.hpp"
 #include "backends/hyprland/hyprland_backends.h"
-#include "desktop_shell/dock/core/dock_app.h"
-#include "desktop_shell/dock/core/dock_bar.h"
-#include "desktop_shell/dock/core/dock_settings.hpp"
+#include "wl/toplevel/foreign_toplevels.hpp"
 #include "desktop_shell/shared/popup/chrome/chrome.hpp"
 #include "desktop_shell/shared/popup/session/session.hpp"
 #include "desktop_shell/widgets/app_drawer/list/desktop_list.hpp"
@@ -51,7 +49,6 @@ constexpr double kScrollEaseRatePerSec = 32.0;
 constexpr double kScrollSettleEpsilonPx = 0.25;
 constexpr double kDragAutoScrollPitchPerSec = 1.6;
 
-constexpr double kDockSpacingPx = 25.0;
 constexpr double kTaskbarSpacingPx = 12.0;
 constexpr double kOverflowMargin = 0.05;
 constexpr uint64_t kDataRefreshIntervalMs = 2000;
@@ -237,8 +234,8 @@ void Host::layer_configure(void* data, zwlr_layer_surface_v1* surface, uint32_t 
     if (w > 0) self.w_ = static_cast<int>(w);
     if (h > 0) self.h_ = static_cast<int>(h);
     if (self.w_ <= 0 || self.h_ <= 0) {
-      if (self.dock_.primaryOutputWidthPx > 0) self.w_ = self.dock_.primaryOutputWidthPx;
-      if (self.dock_.primaryOutputHeightPx > 0) self.h_ = self.dock_.primaryOutputHeightPx;
+      if ((*self.ctx_.primaryOutputWidthPx) > 0) self.w_ = (*self.ctx_.primaryOutputWidthPx);
+      if ((*self.ctx_.primaryOutputHeightPx) > 0) self.h_ = (*self.ctx_.primaryOutputHeightPx);
     }
     if (self.w_ != oldW || self.h_ != oldH) self.backdrop_dirty_ = true;
     self.recompute_layout();
@@ -259,8 +256,8 @@ void Host::layer_configure(void* data, zwlr_layer_surface_v1* surface, uint32_t 
       if (w > 0) e->w = static_cast<int>(w);
       if (h > 0) e->h = static_cast<int>(h);
       if (e->w <= 0 || e->h <= 0) {
-        if (self.dock_.primaryOutputWidthPx > 0) e->w = self.dock_.primaryOutputWidthPx;
-        if (self.dock_.primaryOutputHeightPx > 0) e->h = self.dock_.primaryOutputHeightPx;
+        if ((*self.ctx_.primaryOutputWidthPx) > 0) e->w = (*self.ctx_.primaryOutputWidthPx);
+        if ((*self.ctx_.primaryOutputHeightPx) > 0) e->h = (*self.ctx_.primaryOutputHeightPx);
       }
       if (self.wl_) wl_display_flush(self.wl_->display());
       return;
@@ -384,8 +381,8 @@ void Host::keyboard_modifiers(void* data, wl_keyboard*, uint32_t, uint32_t mods_
 void Host::keyboard_repeat_info(void*, wl_keyboard*, int32_t, int32_t) {
 }
 
-Host::Host(DockApp& dock, std::unique_ptr<eh::wayland::WaylandConnection> wl)
-    : dock_(dock), wl_(std::move(wl)) {
+Host::Host(ShellCtx& ctx, std::unique_ptr<eh::wayland::WaylandConnection> wl)
+    : ctx_(ctx), wl_(std::move(wl)) {
   input_ = std::make_unique<Input>(*this);
   capture_ = std::make_unique<Capture>(*this);
   actions_ = std::make_unique<Actions>(*this);
@@ -488,7 +485,7 @@ void Host::refresh_workspace_data() {
 
   workspaces_.clear();
   bool ok = false;
-  if (dock_.compositorKind == CompositorKind::Hyprland) ok = refresh_from_hyprland();
+  if (ctx_.compositorKind == CompositorKind::Hyprland) ok = refresh_from_hyprland();
   if (!ok) {
     debug_log("overview", "refresh_workspace_data: hyprland refresh FAILED, using dock fallback");
     refresh_from_dock();
@@ -808,19 +805,19 @@ bool Host::refresh_from_hyprland() {
 }
 
 void Host::refresh_from_dock() {
-  eh::widgets::workspace_strip_poll(dock_.workspaceStrip, dock_.workspaceStripLastPoll,
-                                    dock_.compositorKind);
+  eh::widgets::workspace_strip_poll(*ctx_.workspaceStrip, *ctx_.workspaceStripLastPoll,
+                                    ctx_.compositorKind);
 
   int activeIdx = 0;
-  for (size_t i = 0; i < dock_.workspaceStrip.size(); ++i) {
-    if (dock_.workspaceStrip[i].active) {
+  for (size_t i = 0; i < ctx_.workspaceStrip->size(); ++i) {
+    if ((*ctx_.workspaceStrip)[i].active) {
       activeIdx = static_cast<int>(i);
       break;
     }
   }
 
-  for (size_t i = 0; i < dock_.workspaceStrip.size(); ++i) {
-    const auto& e = dock_.workspaceStrip[i];
+  for (size_t i = 0; i < ctx_.workspaceStrip->size(); ++i) {
+    const auto& e = (*ctx_.workspaceStrip)[i];
     if (e.id <= 0) continue;
     OverviewWorkspace w;
     w.id = e.id;
@@ -828,7 +825,7 @@ void Host::refresh_from_dock() {
     w.active = e.active;
     w.occupied = e.occupied;
     if (static_cast<int>(i) == activeIdx) {
-      for (const auto& tl : dock_.toplevels.list()) {
+      for (const auto& tl : ctx_.toplevels->list()) {
         if (tl.closed) continue;
         OverviewWindow win;
         win.handle = tl.handle;
@@ -877,11 +874,11 @@ void Host::snap_scroll() {
 
 void Host::recompute_layout() {
   if (w_ <= 0 || h_ <= 0) {
-    if (dock_.primaryOutputWidthPx > 0) w_ = dock_.primaryOutputWidthPx;
-    if (dock_.primaryOutputHeightPx > 0) h_ = dock_.primaryOutputHeightPx;
+    if ((*ctx_.primaryOutputWidthPx) > 0) w_ = (*ctx_.primaryOutputWidthPx);
+    if ((*ctx_.primaryOutputHeightPx) > 0) h_ = (*ctx_.primaryOutputHeightPx);
   }
   if (w_ <= 0 || h_ <= 0) return;
-  const double us = dock_ui_scale(dock_.settings);
+  const double us = ctx_.uiScale();
 
   const auto& ov = eh::config::shell_config_snapshot().appearance;
   axis_ = (ov.overviewAxis == 0) ? OverviewAxis::Vertical : OverviewAxis::Horizontal;
@@ -976,7 +973,7 @@ void Host::paint_backdrop() {
   const double dh = static_cast<double>(h_);
 
   {
-    const double dockH = static_cast<double>(dock_.dockHeight) + kDockSpacingPx;
+    const double dockH = static_cast<double>(ctx_.bottomReserve());
     const double dockY = dh - dockH;
     cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
     cairo_rectangle(cr, 0, dockY, dw, dockH);
@@ -1011,7 +1008,7 @@ void Host::paint_backdrop() {
     wl_region* rgn = wl_compositor_create_region(wl_->compositor());
     if (rgn) {
       wl_region_add(rgn, 0, 0, w_, h_);
-      const int dockIH = dock_.dockHeight + static_cast<int>(kDockSpacingPx);
+      const int dockIH = ctx_.bottomReserve();
       const int dockIY = h_ - dockIH;
       wl_region_subtract(rgn, 0, dockIY, w_, dockIH);
       const auto& tb2 = eh::config::shell_config_snapshot().taskbar;
@@ -1146,13 +1143,13 @@ void Host::paint_content() {
 
     {
       overview::StageGuard pg(overview::Stage::PaintAppGrid);
-    paint_app_grid(cr, dock_, colors_, layout_, apps_, input_->hovered_app,
+    paint_app_grid(cr, ctx_, colors_, layout_, apps_, input_->hovered_app,
                    input_->app_hover_lift, progress_, app_scroll_pos_);
     }
   } else {
     {
       overview::StageGuard pg(overview::Stage::PaintWorkspaceCards);
-    paint_workspace_cards(cr, dock_, colors_, layout_, workspaces_,
+    paint_workspace_cards(cr, ctx_, colors_, layout_, workspaces_,
                           scroll_pos_, selected_index_,
                           input_->hovered_ws, input_->hovered_win, input_->close_hovered,
                           ws_hover_lifts_, win_hover_lifts_,
@@ -1167,7 +1164,7 @@ void Host::paint_content() {
 
     {
       overview::StageGuard pg(overview::Stage::PaintStrip);
-    paint_quick_select_strip(cr, dock_, colors_, layout_.qs, layout_, workspaces_,
+    paint_quick_select_strip(cr, ctx_, colors_, layout_.qs, layout_, workspaces_,
                              selected_index_, input_->hovered_ws, input_->hovered_qs, progress_);
     }
 
@@ -1199,7 +1196,7 @@ void Host::paint_content() {
       wl_region* rgn = wl_compositor_create_region(wl_->compositor());
       if (rgn) {
         wl_region_add(rgn, 0, 0, w_, h_);
-        const int dockIH = dock_.dockHeight + static_cast<int>(kDockSpacingPx);
+        const int dockIH = ctx_.bottomReserve();
         const int dockIY = h_ - dockIH;
         wl_region_subtract(rgn, 0, dockIY, w_, dockIH);
         const auto& tb = eh::config::shell_config_snapshot().taskbar;
@@ -1273,13 +1270,13 @@ void Host::paint_extra_content(OverviewOutput& e, bool use_vk) {
 
     std::vector<float> tmpWsLifts(workspaces_.size(), 0.f);
     std::vector<float> tmpWinLifts;
-    paint_workspace_cards(cr, dock_, colors_, layout_, workspaces_,
+    paint_workspace_cards(cr, ctx_, colors_, layout_, workspaces_,
                           scroll_pos_, selected_index_,
                           -1, -1, false,
                           tmpWsLifts, tmpWinLifts,
                           -1, -1, 0.0, 0.0, -1, progress_,
                           false);
-    paint_quick_select_strip(cr, dock_, colors_, layout_.qs, layout_, workspaces_,
+    paint_quick_select_strip(cr, ctx_, colors_, layout_.qs, layout_, workspaces_,
                              selected_index_, -1, -1, 0.0f);
 
     cairo_restore(cr);
@@ -1353,13 +1350,13 @@ void Host::prewarm_caches() {
   win_hover_lifts_.assign(actions_->nav_windows().size(), 0.f);
   search_hover_lift_ = 0.f;
 
-  paint_workspace_cards(cr, dock_, colors_, layout_, workspaces_,
+  paint_workspace_cards(cr, ctx_, colors_, layout_, workspaces_,
                         scroll_pos_, selected_index_,
                         -1, -1, false,
                         ws_hover_lifts_, win_hover_lifts_,
                         -1, -1, 0.0, 0.0, -1, 0.0f);
 
-  paint_quick_select_strip(cr, dock_, colors_, layout_.qs, layout_, workspaces_,
+  paint_quick_select_strip(cr, ctx_, colors_, layout_.qs, layout_, workspaces_,
                            selected_index_, -1, -1, 0.0f);
 
   cairo_destroy(cr);

@@ -29,8 +29,6 @@
 #include "desktop_shell/power_confirm/power_confirm.hpp"
 #include "desktop_shell/shared/popup/dispatch/popup_dispatch.hpp"
 #include "desktop_shell/dock/input/dock_position.hpp"
-#include "desktop_shell/dashboard/dashboard_layout.hpp"
-#include "desktop_shell/dashboard/dashboard_surface.hpp"
 
 #include <cairo/cairo.h>
 #if EH_HAVE_RSVG
@@ -132,8 +130,6 @@
 #include "desktop_shell/dock/paint/dock_anim.hpp"
 #include "desktop_shell/widgets/start_menu/start_menu_zone.hpp"
 #include "desktop_shell/shared/core/app_launch.hpp"
-#include "desktop_shell/osd/audio/osd_audio.hpp"
-#include "desktop_shell/osd/brightness/osd_brightness.hpp"
 #include "services/tray/icon/tray_stream_icon.hpp"
 #include "desktop_shell/dock/widgets/dock_widget_tokens.hpp"
 
@@ -330,7 +326,7 @@ static void dock_apply_poll_timer_interval(DockApp& app) {
     (void)timerfd_settime(app.pollTimerFd, 0, &its, nullptr);
     return;
   }
-  if (!dock_first_media_widget_id(app.settings).empty() || eh::shell::dashboard::dashboard_has_card(app, "media") ||
+  if (!dock_first_media_widget_id(app.settings).empty() ||
       !dock_first_control_center_widget_id(app.settings).empty()) {
     its.it_interval.tv_sec = 0;
     its.it_interval.tv_nsec = 400 * 1000 * 1000;
@@ -1222,9 +1218,6 @@ void dock_maybe_reload_settings(DockApp& app, const char* source) {
 
   if (std::strcmp(source, "startup") != 0) eh::config::shell_config_invalidate_light();
   const eh::config::ShellConfig loaded = eh::config::shell_config_snapshot_skip_matugen();
-  // Dashboard config is independent of [dock]; apply it on every reload path
-  // (this runs before the dock-settings equality early-return below).
-  eh::shell::dashboard::dashboard_on_config_changed(app, loaded.dashboard);
   DockSettings next = loaded.dock;
   const eh::config::ShellRendererBackend prevRenderer = app.dockRendererBackend;
   if (dock_settings_equal(next, app.settings) && loaded.renderer == app.dockRendererBackend) {
@@ -1979,7 +1972,6 @@ static void frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms)
   app.externalFrameRequest = false;
 
   dock_draw(app);
-  eh::shell::dashboard::dashboard_frame_draw(app);
   // Smooth media-popup marquee: repaint the open player every vsync while
   // its title/artist scrolls (the flag is refreshed by each paint).
   if (app.popupOpen && app.popupKind == DockApp::PopupKind::MediaPlayer &&
@@ -1998,8 +1990,7 @@ static void frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms)
     }
   }
 
-  if (app.shellAnim.has_active() || app.mediaMarqueeWantsFrame || app.wsStripAnim.active || app.pendingRedraw ||
-      app.dash.needsDraw) {
+  if (app.shellAnim.has_active() || app.mediaMarqueeWantsFrame || app.wsStripAnim.active || app.pendingRedraw) {
     bool doSchedule = true;
     if (app.mediaMarqueeWantsFrame && !app.shellAnim.has_active() && !app.wsStripAnim.active) {
       static uint64_t lastMarqueeMs = 0;
@@ -2558,7 +2549,6 @@ bool dock_init_on_display(DockApp& app, wl_display* display) {
 // Called by the weather async engine when a forecast update completes.
 static void dock_cc_weather_redraw(void* ctx) {
   auto& app = *static_cast<DockApp*>(ctx);
-  eh::shell::dashboard::dashboard_weather_redraw(app);
   if (app.popupOpen && app.popupKind == DockApp::PopupKind::ControlCenter && app.popupSurface) {
     std::cerr << "[dock-popup] weather_redraw hook → popup_draw_surface\n";
     popup_draw_surface(app);
@@ -2590,18 +2580,9 @@ void dock_init_deferred_startup(DockApp& app) {
   if (eh_dock_bench()) {
     std::cerr << "[dock-bench] deferred after mpris cumulative=" << shell_bench_ms_since(bench_t0) << "ms\n";
   }
-  if (!eh::shell::osd::osd_env_disabled()) {
-    app.osdHost = std::make_unique<eh::shell::osd::OsdHost>();
-    app.osdHost->init(app);
-    eh::shell::osd::osd_audio_bind(app);
-    eh::shell::osd::osd_audio_apply_saved_defaults(app);
-    eh::shell::osd::osd_audio_poll_pending(app);
-  }
   eh::shell::dock_slot_hooks::control_center_weather_startup_dock(&app, dock_cc_weather_redraw);
   eh::shell::dock_slot_hooks::battery_widget_init();
   eh::shell::dock_slot_hooks::bluetooth_widget_init();
-  eh::shell::dock::dock_boot_step("deferred: dashboard ensure (top panel)");
-  eh::shell::dashboard::dashboard_ensure_trigger(app);
   eh::shell::dock::dock_boot_step("deferred: warm startup caches");
   dock_warm_startup_caches(app);
   eh::shell::dock::dock_boot_step("deferred startup complete");
@@ -2720,8 +2701,6 @@ static void dock_frame_watchdog(DockApp& app) {
 void dock_handle_timer(DockApp& app) {
   MANGOWM_FN();
   if (app.pollTimerFd < 0) return;
-  eh::shell::osd::osd_brightness_poll(app);
-  eh::shell::osd::osd_audio_poll_pending(app);
   dock_try_start_deferred_tray(app);
   uint64_t expirations = 0;
   (void)read(app.pollTimerFd, &expirations, sizeof(expirations));
@@ -2763,7 +2742,7 @@ void dock_handle_timer(DockApp& app) {
     }
   }
   if (app.mpris &&
-      (!dock_first_media_widget_id(app.settings).empty() || eh::shell::dashboard::dashboard_has_card(app, "media"))) {
+      (!dock_first_media_widget_id(app.settings).empty())) {
     bool mpris_changed = false;
     try {
       mpris_changed = app.mpris->poll_refresh();
@@ -2801,7 +2780,6 @@ void dock_handle_timer(DockApp& app) {
     }
   }
   dock_tooltip_tick(app);
-  eh::shell::dashboard::dashboard_timer_tick(app);
 
   if (drewDock) dock_draw(app);
   bool drewPopup = drew;
@@ -2902,10 +2880,6 @@ void dock_cleanup(DockApp& app, bool disconnect_display) {
   // calls are timeout-bounded) before anything is torn down.
   if (app.trayStartThread.joinable()) app.trayStartThread.join();
 
-  // Tear down the dashboard layer surface while the display is still known
-  // to be healthy (the error branch below nulls app.display first).
-  eh::shell::dashboard::dashboard_shutdown(app);
-
   // If display is in a fatal error state, any Wayland proxy operation will
   // segfault. Skip all Wayland destroy calls — the OS will free resources.
   if (app.display && wl_display_get_error(app.display)) {
@@ -2915,7 +2889,6 @@ void dock_cleanup(DockApp& app, bool disconnect_display) {
     app.extToplevelList = nullptr;
     app.display = nullptr;
     // Still clean up non-Wayland resources (threads, timers, etc.).
-    eh::shell::osd::osd_audio_shutdown();
     dock_tooltip_cleanup(app);
     app.trayWatcherDeferPending = false;
     dock_tray_shutdown(app);
@@ -2945,11 +2918,6 @@ void dock_cleanup(DockApp& app, bool disconnect_display) {
     return;
   }
 
-  eh::shell::osd::osd_audio_shutdown();
-  if (app.osdHost) {
-    app.osdHost->shutdown();
-    app.osdHost.reset();
-  }
   dock_tooltip_cleanup(app);
   app.trayWatcherDeferPending = false;
   dock_tray_shutdown(app);

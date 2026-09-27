@@ -16,6 +16,7 @@
 #include "desktop_shell/common/fs/shell_paths.hpp"
 #include "desktop_shell/common/log/shell_diag_log.hpp"
 #include "desktop_shell/dock/core/dock_bar.h"
+#include "services/tray/dbus/tray_context_menu.hpp"
 
 #include <iostream>
 
@@ -23,7 +24,8 @@ using eh::shell::paths::normalize_desktop_app_id;
 
 namespace eh::shell::dock {
 
-void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right, bool onDockSurface) {
+void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right, bool middle,
+                              bool onDockSurface) {
   const DockPickResult pr = dock_pick_at(app, app.pointerX, app.pointerY);
   if (app.popupOpen && onDockSurface && !dock_popup_pointer_on_any_popup_surface(app) && left) {
     bool keep = false;
@@ -121,6 +123,13 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
   }
 
   if (hit.kind == PickSlot::Kind::Workspaces) {
+    // Middle-click opens the overview (GNOME parity); left-click switches.
+    if (middle && app.overviewToggleHook) {
+      app.overviewToggleHook();
+      dock_draw(app);
+      wl_display_flush(app.display);
+      return;
+    }
     const int pick = dock_pick_workspace_index(app, pr, pr.idx, app.pointerX);
     if (pick >= 0 && static_cast<size_t>(pick) < app.workspaceStrip.size()) {
       const auto& entry = app.workspaceStrip[static_cast<size_t>(pick)];
@@ -144,6 +153,7 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
         auto proxy = sdbus::createProxy(*app.trayBus, sdbus::ServiceName{ti->service}, sdbus::ObjectPath{ti->path});
         proxy->callMethod("Activate")
           .onInterface("org.kde.StatusNotifierItem")
+          .withTimeout(eh::shell::dock::tray_menu::kTrayMenuCallTimeout)
           .withArguments(static_cast<int32_t>(app.pointerX), static_cast<int32_t>(app.pointerY));
       } catch (const std::exception& e) {
         eh::shell_log::dbus_tray("activate failed: ", e.what());

@@ -3,12 +3,15 @@
 
 #include "bootstrap/thread/thread_dispatch.hpp"
 #include "configuration/shell_config.hpp"
+#include "desktop_shell/common/monitor/output_assign.hpp"
 #include "desktop_shell/notifications/core/notifications.hpp"
 #include "desktop_shell/notifications/host/notification_toast_host.hpp"
 #include "desktop_shell/notifications/types/notifications_notify.hpp"
 #include "services/ipc/client.hpp"
 #include "services/ipc/ipc_server.hpp"
+#include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/mem/periodic_trim.hpp"
+#include "desktop_shell/notifications/diag/notification_pipeline_stats.hpp"
 #include "services/notifications/notification_dbus_service.hpp"
 #include "services/process/parent_death_guard.hpp"
 #include "wl/core/connection.hpp"
@@ -81,22 +84,47 @@ std::vector<std::string> split_text_fields(const std::string& payload, char sep)
 // tokenized. Only `internal` / `mpris` are safe to tokenize (text fields).
 void handle_notify_push(NotificationManager& mgr, const std::string& payload,
                         std::unordered_map<std::string, MprisEntry>& mpris_entries) {
+  namespace diag = eh::shell::notifications::diag;
   constexpr std::size_t kKindArtLen = sizeof(eh::notify::kKindMprisArt) - 1;
   if (payload.size() >= kKindArtLen &&
       payload.compare(0, kKindArtLen, eh::notify::kKindMprisArt) == 0) {
     const std::size_t sep1 = payload.find(eh::notify::kFieldSep, kKindArtLen);
-    if (sep1 == std::string::npos) return;
+    if (sep1 == std::string::npos) {
+      diag::pipeline_stats().noteDropMalformed();
+      debug_log("notifications", "mpris-art: malformed payload (no key separator)");
+      return;
+    }
     const std::size_t sep2 = payload.find(eh::notify::kFieldSep, sep1 + 1);
-    if (sep2 == std::string::npos) return;
+    if (sep2 == std::string::npos) {
+      diag::pipeline_stats().noteDropMalformed();
+      debug_log("notifications", "mpris-art: malformed payload (no blob separator)");
+      return;
+    }
     const std::string key = payload.substr(sep1 + 1, sep2 - sep1 - 1);
     const std::string_view blob(payload.data() + sep2 + 1, payload.size() - sep2 - 1);
+    diag::pipeline_stats().noteArtRx(blob.size());
     auto img = eh::notify::deserialize_image_blob(blob);
-    if (!img) return;
+    if (!img) {
+      diag::pipeline_stats().noteDropBlob(blob.size(), key);
+      debug_log("notifications", "mpris-art: blob decode failed key=%s bytes=%zu", key.c_str(),
+                blob.size());
+      return;
+    }
     const auto it = mpris_entries.find(key);
-    if (it == mpris_entries.end() || it->second.id == 0) return;  // art before the notification
+    if (it == mpris_entries.end() || it->second.id == 0) {
+      diag::pipeline_stats().noteDropNoEntry(key, img->width, img->height);
+      debug_log("notifications", "mpris-art: no notification for key=%s (art before entry), dropping %dx%d",
+                key.c_str(), img->width, img->height);
+      return;  // art before the notification
+    }
+    const int artW = img->width;
+    const int artH = img->height;
+    diag::pipeline_stats().noteArtAttached();
     it->second.id = mgr.addOrReplace(it->second.id, "Media", it->second.summary, it->second.body,
                                      Urgency::Normal, kDefaultNotificationTimeoutMs,
                                      NotificationOrigin::Internal, {}, std::nullopt, std::move(*img));
+    debug_log("notifications", "mpris-art: attached id=%u (%dx%d)", it->second.id, artW,
+              artH);
     return;
   }
 
@@ -110,9 +138,11 @@ void handle_notify_push(NotificationManager& mgr, const std::string& payload,
     if (const auto it = mpris_entries.find(key); it != mpris_entries.end()) e = it->second;
     e.summary = parts[2];
     e.body = parts[3];
+    diag::pipeline_stats().noteMprisRx();
     e.id = mgr.addOrReplace(e.id, "Media", e.summary, e.body, Urgency::Normal,
                             kDefaultNotificationTimeoutMs, NotificationOrigin::Internal);
     mpris_entries[key] = std::move(e);
+    debug_log("notifications", "mpris: key=%s id=%u", key.c_str(), mpris_entries[key].id);
     return;
   }
 
@@ -133,27 +163,42 @@ void handle_notify_push(NotificationManager& mgr, const std::string& payload,
   }
 }
 
-// (Re)apply the toast host to the config + the connection's first output. The
+// (Re)apply the toast host to the config + the configured output. The
 // child owns the layer-shell surface, so this is the port of the supervisor's
-// old sync_notification_toast_host.
+// old sync_notification_toast_host. Re-binds (shutdown + initialize) when the
+// resolved output changes so the Settings display picker takes effect live.
 void sync_toast_host(eh::wayland::WaylandConnection& conn, NotificationToastHost& toast,
-                     const eh::config::ShellNotificationsSettings& ncfg, bool& toast_active) {
+                     const eh::config::ShellNotificationsSettings& ncfg, bool& toast_active,
+                     wl_output*& bound_output) {
   if (!ncfg.toast.layerShellEnabled || !conn.compositor() || !conn.shm() || !conn.layer_shell()) {
     toast.shutdown();
     toast_active = false;
+    bound_output = nullptr;
     return;
   }
+  // ""/Auto/"all" (toasts are a single surface, so "all" degrades to the
+  // primary output) and unknown names all fall back to the first output.
+  const std::string assign = eh::shell::trim_output_assign(ncfg.outputName);
   wl_output* output = nullptr;
+  if (!eh::shell::output_assign_is_auto(assign) && !eh::shell::output_assign_is_all_displays(assign)) {
+    output = conn.output_by_name(assign);
+  }
   const auto outs = conn.outputs();
-  if (!outs.empty()) output = outs.front();
+  if (!output && !outs.empty()) output = outs.front();
   if (!output) {
     toast.shutdown();
     toast_active = false;
+    bound_output = nullptr;
     return;
   }
-  if (!toast_active) {
+  if (bound_output && std::find(outs.begin(), outs.end(), bound_output) == outs.end()) {
+    bound_output = nullptr;  // previously bound output went away (hot-unplug)
+  }
+  if (!toast_active || bound_output != output) {
+    toast.shutdown();
     toast.initialize(conn.compositor(), conn.shm(), conn.layer_shell(), conn.seat(), output);
     toast_active = true;
+    bound_output = output;
   }
   toast.apply_config(ncfg.toast);
 }
@@ -179,7 +224,8 @@ int run_notifications_standalone() {
   mgr.setDoNotDisturb(ncfg.doNotDisturb);
 
   bool toast_active = false;
-  sync_toast_host(conn, toast_host, ncfg, toast_active);
+  wl_output* toast_output = nullptr;
+  sync_toast_host(conn, toast_host, ncfg, toast_active, toast_output);
 
   const int timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
   if (timer_fd < 0) {
@@ -237,7 +283,7 @@ int run_notifications_standalone() {
           const auto& sc = eh::config::shell_config_snapshot();
           mgr.setServerDefaultTimeoutMs(sc.notifications.defaultTimeoutMs);
           mgr.setDoNotDisturb(sc.notifications.doNotDisturb);
-          sync_toast_host(conn, toast_host, sc.notifications, toast_active);
+          sync_toast_host(conn, toast_host, sc.notifications, toast_active, toast_output);
         }
       });
       ipc_ok = ipc.subscribe("config.applied") && ipc.subscribe(eh::notify::kPushTopic);
@@ -334,6 +380,26 @@ int run_notifications_standalone() {
     static eh::shell::shared::PeriodicTrim trim;
     trim.tick();
     DeferredCall::drain();
+    // Benchmark report: pipeline counters + fresh failures, at most every
+    // 60s and only when something changed. Cross-check sender timings in
+    // ~/EH-logs/mpris.log (wall-clock timestamps line up with these).
+    {
+      static std::int64_t nextReportMs = 0;
+      static std::uint64_t lastSerial = 0;
+      static std::uint64_t lastFailureSerial = 0;
+      const std::int64_t nowMs = eh::shell::notifications::diag::steady_ms_now();
+      if (nextReportMs == 0) nextReportMs = nowMs + 15000;
+      auto& stats = eh::shell::notifications::diag::pipeline_stats();
+      if (nowMs >= nextReportMs) {
+        nextReportMs = nowMs + 60000;
+        if (stats.serial() != lastSerial) {
+          lastSerial = stats.serial();
+          debug_log("notifications", "bench: %s", stats.receiverSummary().c_str());
+          const std::string fresh = stats.failuresSince(lastFailureSerial);
+          if (!fresh.empty()) debug_log("notifications", "bench failures:\n%s", fresh.c_str());
+        }
+      }
+    }
   }
 
   toast_host.shutdown();

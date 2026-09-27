@@ -400,11 +400,14 @@ void popup_close(DockApp& app) {
 }
 
 static std::vector<DockApp::PopupMenuItem> dbusmenu_fetch_top_level(DockApp& app, const DockApp::TrayItem& ti, const std::string& menuPath) {
-   
+  namespace tray_menu = eh::shell::dock::tray_menu;
   std::vector<DockApp::PopupMenuItem> out;
   if (!app.trayBus || menuPath.empty()) return out;
   try {
     auto menu = sdbus::createProxy(*app.trayBus, sdbus::ServiceName{ti.service}, sdbus::ObjectPath{menuPath});
+
+    // Lazy menus (notably Steam's) only populate after AboutToShow.
+    tray_menu::tray_menu_about_to_show(*menu);
 
     using Props = std::map<std::string, sdbus::Variant>;
     using Layout = sdbus::Struct<int32_t, Props, std::vector<sdbus::Variant>>;
@@ -413,6 +416,7 @@ static std::vector<DockApp::PopupMenuItem> dbusmenu_fetch_top_level(DockApp& app
 
     menu->callMethod("GetLayout")
       .onInterface("com.canonical.dbusmenu")
+      .withTimeout(tray_menu::kTrayMenuCallTimeout)
       .withArguments(int32_t{0}, int32_t{1}, std::vector<std::string>{"label", "enabled", "visible", "type"})
       .storeResultsTo(revision, root);
 
@@ -470,19 +474,28 @@ static std::vector<DockApp::PopupMenuItem> dbusmenu_fetch_top_level(DockApp& app
 }
 
 void popup_open_for_tray(DockApp& app, const DockApp::TrayItem& ti, int anchorX, int anchorY, uint32_t serial) {
-   
+  namespace tray_menu = eh::shell::dock::tray_menu;
   popup_close(app);
   if (app.display) (void)wl_display_roundtrip(app.display);
   app.popupKind = DockApp::PopupKind::Tray;
 
-  const std::string menuPath = ti.proxy ? eh::shell::dock::tray_menu::dock_get_menu_object_path(*ti.proxy) : std::string{};
+  // Bounded interactive read: the connection-wide timeout would stall input
+  // handling for seconds on slow items (e.g. Steam). Falls back to the
+  // item's own ContextMenu when the DBusMenu can't be read.
+  const int ptrX = static_cast<int>(app.pointerX);
+  const int ptrY = static_cast<int>(app.pointerY);
+  const std::string menuPath =
+      app.trayBus ? tray_menu::tray_menu_path_interactive(*app.trayBus, ti.service, ti.path)
+                  : std::string{};
   if (menuPath.empty()) {
     std::cout << "[tray] menu: item has no DBusMenu 'Menu' property\n";
+    if (app.trayBus) tray_menu::tray_context_menu_fallback(*app.trayBus, ti.service, ti.path, ptrX, ptrY);
     return;
   }
 
   auto items = dbusmenu_fetch_top_level(app, ti, menuPath);
   if (items.empty()) {
+    if (app.trayBus) tray_menu::tray_context_menu_fallback(*app.trayBus, ti.service, ti.path, ptrX, ptrY);
     return;
   }
 

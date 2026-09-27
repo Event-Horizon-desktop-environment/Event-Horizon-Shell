@@ -15,17 +15,16 @@ Located in `src/desktop_shell/unified/`. Compositor detection, output management
   1. Checks `HYPRLAND_INSTANCE_SIGNATURE` → Hyprland
   2. Checks `NIRI_SOCKET` → Niri
   3. Checks `SWAYSOCK` → Sway
-  4. Checks `TRIAD_SOCKET` → Triad
-  5. Checks `LABWC_PID` → Labwc
-  6. Falls back to checking `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`
+  4. Checks `LABWC_PID` → Labwc
+  5. Falls back to checking `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`, `DESKTOP_SESSION`
 - `compositor_kind_cstr(CompositorKind)` - returns human-readable name
 - `compositor_env_hint()` - returns combined desktop env hint string for debugging
 
 ### `compositor_kind.hpp`
 
-**Enum:** `CompositorKind` with values `Unknown, Niri, Hyprland, Sway, Mango, Labwc, Triad`.
+**Enum:** `CompositorKind` with values `Unknown, Niri, Hyprland, Sway, Mango, Labwc`.
 
-Free functions: `detect_compositor_kind()`, `compositor_kind_cstr()`, `compositor_env_hint()`, `is_niri()`, `is_hyprland()`, `is_sway()`, `is_mango()`, `is_labwc()`, `is_triad()`.
+Free functions: `detect_compositor_kind()`, `compositor_kind_cstr()`, `compositor_env_hint()`, `is_niri()`, `is_hyprland()`, `is_sway()`, `is_mango()`, `is_labwc()`.
 
 ### `unified_layer_outputs.cpp`
 

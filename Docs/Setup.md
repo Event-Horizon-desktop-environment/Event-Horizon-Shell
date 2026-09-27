@@ -1,7 +1,7 @@
 # Setup
 
 Complete, copy-paste install and configuration guide for Event Horizon.
-Works with: **Hyprland**, **Niri**, **Mango (mangowm)**, Sway, Labwc, Triad.
+Works with: **Hyprland**, **Niri**, **Mango (mangowm)**, Sway, and Labwc.
 
 ---
 

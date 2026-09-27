@@ -19,3 +19,7 @@ bool dock_m3_is_widgets_child_tab();
 // used by popup painting and the centralized event handlers.
 void dock_renderer_dd_sync(App& app, int contentX, int contentW);
 bool dock_renderer_dd_commit_pointer_up(App& app, float px, float py);
+
+// Display-output dropdown (dock tab, Settings child).
+void dock_display_dd_sync(App& app, int contentX, int contentW);
+bool dock_display_dd_commit_pointer_up(App& app, float px, float py, int contentX, int contentW);

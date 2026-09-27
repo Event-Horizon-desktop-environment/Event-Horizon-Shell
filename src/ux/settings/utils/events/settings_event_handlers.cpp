@@ -51,6 +51,7 @@
 #include "ux/settings/settings_tab_wallpaper/settings_tab_wallpaper.hpp"
 #include "ux/settings/settings_tab_launcher/settings_tab_launcher.hpp"
 #include "ux/settings/settings_tab_monitors/settings_tab_monitors.hpp"
+#include "ux/settings/settings_tab_monitors/monitors_log.hpp"
 #include "ux/settings/settings_tab_sound/settings_tab_sound.hpp"
 #include "ux/settings/settings_tab_default_apps/settings_tab_default_apps.hpp"
 #include "ux/settings/data/default_apps/settings_default_apps.hpp"
@@ -74,7 +75,7 @@
 #include "ux/settings/settings_tab_dock/settings_tab_dock.hpp"
 #include "ux/settings/settings_tab_dock_appearance/settings_tab_dock_appearance.hpp"
 #include "ux/settings/settings_tab_taskbar/settings_tab_taskbar.hpp"
-#include "ux/settings/settings_tab_ui_layout/settings_tab_layout.hpp"
+#include "ux/settings/settings_tab_panel/settings_tab_panel.hpp"
 #include "ux/settings/settings_serialize.hpp"
 
 extern void draw(App& app);
@@ -98,13 +99,13 @@ struct SidebarItemDef {
   const int* subTabIds = nullptr;
 };
 
-static const char* const kPanelsAndUISubs[] = {"Dock", "Taskbar", "Launcher", "Desktop", "Desktop Widgets"};
-static const char* const kPanelsAndUISubGlyphs[] = {"dock_to_bottom", "dock_to_bottom", "apps", "desktop_windows", "widgets"};
-static const char* const kDisplaySubs[] = {"Monitors", "Appearance", "Themes", "Color Themes", "Icons", "UI Layout", "Nightlight"};
-static const char* const kDisplaySubGlyphs[] = {"monitor", "palette", "palette", "colorize", "photo_library", "view_quilt", "dark_mode"};
+static const char* const kPanelsAndUISubs[] = {"Dock", "Panel", "Taskbar", "Launcher", "Desktop", "Desktop Widgets"};
+static const char* const kPanelsAndUISubGlyphs[] = {"dock_to_bottom", "dock_to_top", "dock_to_bottom", "apps", "desktop_windows", "widgets"};
+static const char* const kDisplaySubs[] = {"Monitors", "Appearance", "Themes", "Color Themes", "Icons", "Nightlight"};
+static const char* const kDisplaySubGlyphs[] = {"monitor", "palette", "palette", "colorize", "photo_library", "dark_mode"};
 
-static const int kPanelsAndUITabIds[] = {0, 11, 9, 29, 27};
-static const int kDisplayTabIds[] = {7, 2, 45, 50, 44, 3, 19};
+static const int kPanelsAndUITabIds[] = {0, 1, 11, 9, 29, 27};
+static const int kDisplayTabIds[] = {7, 2, 45, 50, 44, 19};
 static const char* const kSystemSubs[] = {"Notifications", "Sound", "Default Apps", "Time", "Keyboard & Language", "Bluetooth", "Power", "Accounts", "Startup"};
 static const char* const kSystemSubGlyphs[] = {"notifications", "volume_up", "app_registration", "schedule", "keyboard", "bluetooth", "power_settings_new", "account_circle", "play_arrow"};
 static const int kSystemTabIds[] = {5, 8, 10, 30, 31, 47, 32, 46, 48};
@@ -124,8 +125,8 @@ static const int kMangoTabIds[] = {20, 21, 22, 23, 24, 25, 26};
 
 
 static const SidebarItemDef kSidebarDefs[] = {
-    {12, "Panels & UI", "dashboard", kPanelsAndUISubs, kPanelsAndUISubGlyphs, 5, true, kPanelsAndUITabIds},
-    {13, "Display", "display_settings", kDisplaySubs, kDisplaySubGlyphs, 7, true, kDisplayTabIds},
+    {12, "Panels & UI", "dashboard", kPanelsAndUISubs, kPanelsAndUISubGlyphs, 6, true, kPanelsAndUITabIds},
+    {13, "Display", "display_settings", kDisplaySubs, kDisplaySubGlyphs, 6, true, kDisplayTabIds},
     {16, "MangoWM", "view_module", kMangoSubs, kMangoSubGlyphs, 7, true, kMangoTabIds},
     {33, "Hyprland", "view_module", nullptr, nullptr, 0, false, nullptr},
     {14, "System", "tune", kSystemSubs, kSystemSubGlyphs, 9, true, kSystemTabIds},
@@ -341,6 +342,22 @@ void settings_sound_vol_pw_drag_commit_final(App& app) {
   app.soundVolDragPwNodeId = 0;
   app.soundVolPwLastApplyMonoMs = 0;
 }
+
+// Monitors-tab drag repaint throttle: pointer motion can arrive at 180Hz+
+// while a full monitors paint costs ~3ms, so a synchronous draw() per motion
+// burns >50% CPU on repaints during slider/canvas drags. The drag value is
+// still applied per motion (cheap); only the repaint is coalesced to ~60Hz.
+// Release always paints (see pointer-up), so the final value is never lost.
+inline bool monitors_drag_draw_throttled(App& app) {
+  constexpr std::uint64_t kMinIntervalMs = 16;
+  static std::uint64_t s_lastMonDragDrawMs = 0;
+  const std::uint64_t now = eh::shell::now_mono_ms();
+  if (s_lastMonDragDrawMs != 0 && now - s_lastMonDragDrawMs < kMinIntervalMs) return false;
+  s_lastMonDragDrawMs = now;
+  eh::settings::monitors_log::mon_cause_set("drag");
+  draw(app);
+  return true;
+}
 } // namespace
 
 // Dropdown helpers.
@@ -348,11 +365,19 @@ void settings_close_non_default_app_dropdowns(App& app) {
   app.wallpaperModeDropdownOpen = false;
   app.matugenSchemeDd.close();
   app.matugenModeDd.close();
+  app.rendererDd.close();
+  app.dockDisplayDd.close();
+  app.panelDisplayDd.close();
+  app.taskbarDisplayDd.close();
+  app.desktopWidgetsDisplayDd.close();
+  app.notifDisplayDd.close();
   app.wallpaperModeDropdownHoverRow = -1;
   app.qtColorSchemeDropdownOpen = false;
   app.qtColorSchemeDropdownHoverRow = -1;
   app.monitorsActiveDd = -1;
   app.monitorsDdHoverRow = -1;
+  if (app.monitorsHyprExtraSlider >= 0)
+    eh::settings::monitors_log::slider_drag_end("dismiss");
   app.monitorsHyprExtraSlider = -1;
   app.soundActiveDd = -1;
   app.soundDdHoverRow = -1;
@@ -385,6 +410,10 @@ void settings_close_mode_dropdowns(App& app) {
   app.timeFormatDropdownHoverRow = -1;
   app.taskbarWidthModeDropdownOpen = false;
   app.taskbarWidthModeDropdownHoverRow = -1;
+  app.taskbarThumbThresholdDropdownOpen = false;
+  app.taskbarThumbThresholdDropdownHoverRow = -1;
+  app.panelWidthModeDropdownOpen = false;
+  app.panelWidthModeDropdownHoverRow = -1;
 }
 
 // Event handlers.
@@ -412,6 +441,8 @@ void on_pointer_leave(App& app) {
   app.wsSliderDrag = -1;
   app.launcherSliderDrag = -1;
   app.notifSliderDrag = -1;
+  if (app.monitorsScaleSliderDragIdx >= 0 || app.monitorsHyprExtraSlider >= 0)
+    eh::settings::monitors_log::slider_drag_end("leave");
   app.monitorsScaleSliderDragIdx = -1;
   app.monitorsHyprExtraSlider = -1;
   app.desktopWidgetSliderDrag = -1;
@@ -491,6 +522,13 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
   if (app.activeTab == 11 && taskbar_m3_has_active_slider(app)) {
     const double ly = app.pointerY + settings_scroll_px(app);
     taskbar_m3_handle_pointer_move(app, static_cast<float>(app.pointerX), static_cast<float>(ly));
+    settings_slider_motion_commit(app);
+    return;
+  }
+
+  if (app.activeTab == 1 && panel_m3_has_active_slider(app)) {
+    const double ly = app.pointerY + settings_scroll_px(app);
+    panel_m3_handle_pointer_move(app, static_cast<float>(app.pointerX), static_cast<float>(ly));
     settings_slider_motion_commit(app);
     return;
   }
@@ -684,18 +722,19 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
         eh::settings_monitors_tab::format_position_xy(nx, ny, &app.monitorsTab.outputs[ix].position);
         app.monitorsTab.dirty = true;
       }
-      draw(app);
+      monitors_drag_draw_throttled(app);
       return;
     }
     if (app.monitorsCanvasPanArmed) {
       app.monitorsCanvasPanX = app.pointerX - app.monitorsCanvasPanGrabX;
       app.monitorsCanvasPanY = pyLogical - app.monitorsCanvasPanGrabY;
-      draw(app);
+      monitors_drag_draw_throttled(app);
       return;
     }
     if (app.monitorsScaleSliderDragIdx >= 0) {
       monitors_apply_form_scale_drag(app, app.pointerX, monLay, tcx, tcw);
-      draw(app);
+      eh::settings::monitors_log::slider_drag_motion();
+      monitors_drag_draw_throttled(app);
       return;
     }
     if (app.monitorsHyprExtraSlider >= 0) {
@@ -747,9 +786,10 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
           monitors_form_slider_track_geom_content(hsec->content_y0, hsec->x, hsec->w, sliderRow, &htrX, &htrY, &htrW);
           monitors_apply_hypr_extra_drag(app, &hrow, app.monitorsHyprExtraSlider, app.pointerX, htrX, htrW);
           app.monitorsTab.dirty = true;
+          eh::settings::monitors_log::slider_drag_motion();
         }
       }
-      draw(app);
+      monitors_drag_draw_throttled(app);
       return;
     }
   }
@@ -929,6 +969,21 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       app.settingsKeyboardDdHoverRow = -1;
       needDdDraw = true;
     }
+    if (app.activeTab == 1 && app.panelWidthModeDropdownOpen) {
+      const int cbx = tcx + 8 + tcw - 16 - kCardPad - kSettingsComboW;
+      const int kVisCardTop = kContentTop + kDockChildTabH + 12;
+      const int cby = kVisCardTop + 52 + kDockVisRowPitch + (kDockVisRowPitch - kSettingsComboH) / 2;
+      const int ly = cby + kSettingsComboH + 2;
+      const double pyL = app.pointerY + settings_scroll_px(app);
+      const int nr = settings_mode_dd_pointer_row(app.pointerX, pyL, cbx, ly, kSettingsComboW, kSettingsDdRowH, 3);
+      if (nr != app.panelWidthModeDropdownHoverRow) {
+        app.panelWidthModeDropdownHoverRow = nr;
+        needDdDraw = true;
+      }
+    } else if (app.panelWidthModeDropdownHoverRow != -1) {
+      app.panelWidthModeDropdownHoverRow = -1;
+      needDdDraw = true;
+    }
     if (app.activeTab == 11 && app.taskbarWidthModeDropdownOpen) {
       const int cbx = tcx + 8 + tcw - 16 - kCardPad - kSettingsComboW;
       const int kVisCardTop = kContentTop + kDockChildTabH + 12;
@@ -944,6 +999,21 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       app.taskbarWidthModeDropdownHoverRow = -1;
       needDdDraw = true;
     }
+    if (app.activeTab == 11 && app.taskbarThumbThresholdDropdownOpen) {
+      const int cbx = tcx + 8 + tcw - 16 - kCardPad - kSettingsComboW;
+      const int kVisCardTop = kContentTop + kDockChildTabH + 12;
+      const int cby = kVisCardTop + 52 + 13 * kDockVisRowPitch + (kDockVisRowPitch - kSettingsComboH) / 2;
+      const int ly = cby + kSettingsComboH + 2;
+      const double pyL = app.pointerY + settings_scroll_px(app);
+      const int nr = settings_mode_dd_pointer_row(app.pointerX, pyL, cbx, ly, kSettingsComboW, kSettingsDdRowH, 5);
+      if (nr != app.taskbarThumbThresholdDropdownHoverRow) {
+        app.taskbarThumbThresholdDropdownHoverRow = nr;
+        needDdDraw = true;
+      }
+    } else if (app.taskbarThumbThresholdDropdownHoverRow != -1) {
+      app.taskbarThumbThresholdDropdownHoverRow = -1;
+      needDdDraw = true;
+    }
     if (app.activeTab == 0 && app.rendererDd.open()) {
       dock_renderer_dd_sync(app, tcx, tcw);
       const int scr = settings_scroll_px_int(app);
@@ -951,6 +1021,58 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
                                             scr, app.width, app.height);
       if (nr != app.rendererDd.hover_row()) {
         app.rendererDd.set_hover_row(nr);
+        needDdDraw = true;
+      }
+    }
+    if (app.activeTab == 0 && app.dockDisplayDd.open()) {
+      dock_display_dd_sync(app, tcx, tcw);
+      const int scr = settings_scroll_px_int(app);
+      const int nr = app.dockDisplayDd.hit_row(static_cast<int>(app.pointerX), static_cast<int>(app.pointerY),
+                                               scr, app.width, app.height);
+      if (nr != app.dockDisplayDd.hover_row()) {
+        app.dockDisplayDd.set_hover_row(nr);
+        needDdDraw = true;
+      }
+    }
+    if (app.activeTab == 1 && app.panelDisplayDd.open()) {
+      panel_display_dd_sync(app, tcx, tcw);
+      const int scr = settings_scroll_px_int(app);
+      const int nr = app.panelDisplayDd.hit_row(static_cast<int>(app.pointerX), static_cast<int>(app.pointerY),
+                                                scr, app.width, app.height);
+      if (nr != app.panelDisplayDd.hover_row()) {
+        app.panelDisplayDd.set_hover_row(nr);
+        needDdDraw = true;
+      }
+    }
+    if (app.activeTab == 11 && app.taskbarDisplayDd.open()) {
+      taskbar_display_dd_sync(app, tcx, tcw);
+      const int scr = settings_scroll_px_int(app);
+      const int nr = app.taskbarDisplayDd.hit_row(static_cast<int>(app.pointerX), static_cast<int>(app.pointerY),
+                                                  scr, app.width, app.height);
+      if (nr != app.taskbarDisplayDd.hover_row()) {
+        app.taskbarDisplayDd.set_hover_row(nr);
+        needDdDraw = true;
+      }
+    }
+    if (app.activeTab == 27 && app.desktopWidgetsDisplayDd.open()) {
+      desktop_widgets_display_dd_sync(app, tcx, tcw);
+      const int scr = settings_scroll_px_int(app);
+      const int nr = app.desktopWidgetsDisplayDd.hit_row(static_cast<int>(app.pointerX),
+                                                         static_cast<int>(app.pointerY), scr, app.width,
+                                                         app.height);
+      if (nr != app.desktopWidgetsDisplayDd.hover_row()) {
+        app.desktopWidgetsDisplayDd.set_hover_row(nr);
+        needDdDraw = true;
+      }
+    }
+    if (app.activeTab == 5 && app.notifDisplayDd.open()) {
+      notif_display_dd_sync(app, tcx, tcw);
+      const int scr = settings_scroll_px_int(app);
+      const int nr = app.notifDisplayDd.hit_row(static_cast<int>(app.pointerX),
+                                                static_cast<int>(app.pointerY), scr, app.width,
+                                                app.height);
+      if (nr != app.notifDisplayDd.hover_row()) {
+        app.notifDisplayDd.set_hover_row(nr);
         needDdDraw = true;
       }
     }
@@ -1566,7 +1688,12 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
         app.settingsSliderDragNormT = -1.0;
       }
       const double ly = app.pointerY + settings_scroll_px(app);
-      if (dock_renderer_dd_commit_pointer_up(app, static_cast<float>(app.pointerX),
+      const int contentXUp = 16 + kSidebarW + 16;
+      const int contentWUp = app.width - contentXUp - 16;
+      if (dock_display_dd_commit_pointer_up(app, static_cast<float>(app.pointerX),
+                                            static_cast<float>(app.pointerY), contentXUp, contentWUp)) {
+        save_settings(app.settings);
+      } else if (dock_renderer_dd_commit_pointer_up(app, static_cast<float>(app.pointerX),
                                              static_cast<float>(app.pointerY))) {
         save_settings(app.settings);
       } else if (dock_m3_handle_pointer_up(app, static_cast<float>(app.pointerX), static_cast<float>(ly))) {
@@ -1592,10 +1719,50 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
       }
     }
 
+    // M3 panel tab: commit toggle/slider state
+    if (app.activeTab == 1) {
+      const double ly = app.pointerY + settings_scroll_px(app);
+      const int contentXUp = 16 + kSidebarW + 16;
+      const int contentWUp = app.width - contentXUp - 16;
+      if (panel_display_dd_commit_pointer_up(app, static_cast<float>(app.pointerX),
+                                             static_cast<float>(app.pointerY), contentXUp, contentWUp)) {
+        save_settings(app.settings);
+      } else if (panel_m3_handle_pointer_up(app, static_cast<float>(app.pointerX), static_cast<float>(ly))) {
+        save_settings(app.settings);
+      }
+    }
+
     // M3 taskbar tab: commit toggle/slider state
     if (app.activeTab == 11) {
       const double ly = app.pointerY + settings_scroll_px(app);
-      if (taskbar_m3_handle_pointer_up(app, static_cast<float>(app.pointerX), static_cast<float>(ly))) {
+      const int contentXUp = 16 + kSidebarW + 16;
+      const int contentWUp = app.width - contentXUp - 16;
+      if (taskbar_display_dd_commit_pointer_up(app, static_cast<float>(app.pointerX),
+                                               static_cast<float>(app.pointerY), contentXUp, contentWUp)) {
+        save_settings(app.settings);
+      } else if (taskbar_m3_handle_pointer_up(app, static_cast<float>(app.pointerX), static_cast<float>(ly))) {
+        save_settings(app.settings);
+      }
+    }
+
+    // Desktop widgets tab: commit display dropdown.
+    if (app.activeTab == 27) {
+      const int contentXUp = 16 + kSidebarW + 16;
+      const int contentWUp = app.width - contentXUp - 16;
+      if (desktop_widgets_display_dd_commit_pointer_up(app, static_cast<float>(app.pointerX),
+                                                       static_cast<float>(app.pointerY), contentXUp,
+                                                       contentWUp)) {
+        save_settings(app.settings);
+      }
+    }
+
+    // Notifications tab: commit display dropdown.
+    if (app.activeTab == 5) {
+      const int contentXUp = 16 + kSidebarW + 16;
+      const int contentWUp = app.width - contentXUp - 16;
+      if (notif_display_dd_commit_pointer_up(app, static_cast<float>(app.pointerX),
+                                             static_cast<float>(app.pointerY), contentXUp,
+                                             contentWUp)) {
         save_settings(app.settings);
       }
     }
@@ -1631,6 +1798,12 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
     if (app.mangoSliderDrag >= 0) mango_commit_cfg(app);
     app.mangoSliderDrag = -1;
     app.themesSliderDrag = -1;
+    if (app.monitorsScaleSliderDragIdx >= 0 || app.monitorsHyprExtraSlider >= 0) {
+      eh::settings::monitors_log::slider_drag_end("release");
+      eh::settings::monitors_log::mon_cause_set("release");
+    }
+    if (app.activeTab == 7 && app.monitorsCanvasDragIdx >= 0)
+      eh::settings::monitors_log::mon_cause_set("release");
     app.monitorsScaleSliderDragIdx = -1;
     app.monitorsHyprExtraSlider = -1;
     app.soundVolDragCode = -1;
@@ -1783,6 +1956,10 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
         if (app.widgetPickerSection == "left") add_widget_to(app.settings.taskbarLeftWidgets, w);
         else if (app.widgetPickerSection == "center") add_widget_to(app.settings.taskbarCenterWidgets, w);
         else add_widget_to(app.settings.taskbarRightWidgets, w);
+      } else if (app.widgetPickerForPanel) {
+        if (app.widgetPickerSection == "left") add_widget_to(app.settings.panelLeftWidgets, w);
+        else if (app.widgetPickerSection == "center") add_widget_to(app.settings.panelCenterWidgets, w);
+        else add_widget_to(app.settings.panelRightWidgets, w);
       } else {
         if (app.widgetPickerSection == "left") add_widget_to(app.settings.leftWidgets, w);
         else if (app.widgetPickerSection == "center") add_widget_to(app.settings.centerWidgets, w);
@@ -2127,11 +2304,6 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
     return;
   }
 
-  if (app.activeTab == 3 && settings_layout_consume_pointer_down(app, contentX, contentW)) {
-    draw(app);
-    return;
-  }
-
   if (app.activeTab == 0) {
     const double ly = settings_logical_content_y_tab01(app);
     if (dock_m3_handle_pointer_down(app, static_cast<float>(app.pointerX), static_cast<float>(ly), contentX, contentW)) {
@@ -2144,6 +2316,12 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
     }
   }
 
+  if (app.activeTab == 1) {
+    const double ly = settings_logical_content_y_tab01(app);
+    if (panel_m3_handle_pointer_down(app, static_cast<float>(app.pointerX), static_cast<float>(ly), contentX, contentW)) {
+      return;
+    }
+  }
   if (app.activeTab == 11) {
     const double ly = settings_logical_content_y_tab01(app);
     if (taskbar_m3_handle_pointer_down(app, static_cast<float>(app.pointerX), static_cast<float>(ly), contentX, contentW)) {
@@ -2276,6 +2454,8 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
     if (hyprland_m3_handle_pointer_down(app, static_cast<float>(app.pointerX), static_cast<float>(ly), contentX, contentW)) return;
   }
   if (app.activeTab == 27) {
+    if (desktop_widgets_display_dd_handle_pointer_down(app, contentX, contentW)) return;
+    if (app.desktopWidgetsDisplayDd.open()) return;
     if (settings_desktop_widgets_handle_remove_click(app, contentX, contentW)) return;
     if (settings_desktop_widgets_handle_settings_click(app, contentX, contentW)) return;
     if (settings_desktop_widgets_handle_toggle_click(app, contentX, contentW)) return;

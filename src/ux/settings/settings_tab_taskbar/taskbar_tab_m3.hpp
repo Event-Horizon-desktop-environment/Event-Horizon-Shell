@@ -22,21 +22,35 @@
 #include "ux/settings/utils/helpers/material_glyphs.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 
+#include "ux/settings/utils/display/settings_display_dropdown.hpp"
+
 #include "ux/settings/settings_tab_taskbar/settings_tab_taskbar.hpp"
 
 #include "desktop_shell/common/log/debug_log.hpp"
 
 extern void draw(App& app);
 extern const char* const kWidthModeLabels[];
+extern const char* const kThumbThresholdLabels[];
+extern const int kThumbThresholdValues[];
+extern const int kThumbThresholdCount;
+inline int thumb_threshold_ui_index(int v) {
+  for (int i = 0; i < kThumbThresholdCount; ++i)
+    if (kThumbThresholdValues[i] == v) return i;
+  return 2;
+}
 
 namespace m3::detail {
 
 struct TaskbarTabM3State {
-  // Layout constants.
+  // Layout constants. Settings card holds 8 legacy rows + display row +
+  // 4 window-button rows + 1 threshold combo row + compact media row.
   static constexpr int kTbVisToggleRows = 8;
-  static constexpr int kTbVisCardH = 52 + kDockVisRowPitch * kTbVisToggleRows + 24;
+  static constexpr int kTbVisRowsWithDisplay = 15;
+  static constexpr int kTbVisCardH = 52 + kDockVisRowPitch * kTbVisRowsWithDisplay + 24;
 
   // Settings tab toggles (rows 0,2,3,4,5,6; row 1 = width mode combo).
+  // Row 8 = display-output combo, rows 9-12 = window-button toggles,
+  // row 13 = thumbnail threshold combo.
   Toggle showTaskbar;
   Toggle positionTop;
   Toggle groupApps;
@@ -44,6 +58,11 @@ struct TaskbarTabM3State {
   Toggle tooltips;
   Toggle trayPill;
   Toggle trayPillRunning;
+  Toggle showLabels;
+  Toggle collapseWhenFull;
+  Toggle thumbPreviews;
+  Toggle thumbPeek;
+  Toggle compactMedia;
 
   // Widgets tab toggle.
   Toggle embeddedWidgets;
@@ -103,6 +122,8 @@ struct TaskbarTabM3State {
     };
     applyAll(showTaskbar); applyAll(positionTop); applyAll(groupApps);
     applyAll(autoHide); applyAll(tooltips); applyAll(trayPill); applyAll(trayPillRunning);
+    applyAll(showLabels); applyAll(collapseWhenFull); applyAll(thumbPreviews); applyAll(thumbPeek);
+    applyAll(compactMedia);
     applyAll(embeddedWidgets);
     applyBase(heightSlider); applyBase(radiusSlider); applyBase(opacitySlider);
     applyBase(iconSizeSlider); applyBase(iconSpacingSlider); applyBase(floatingGapSlider);
@@ -120,6 +141,8 @@ struct TaskbarTabM3State {
     auto setH = [&](auto& w) { w.setHovered(w.containsPoint(px, py)); };
     setH(showTaskbar); setH(positionTop); setH(groupApps);
     setH(autoHide); setH(tooltips); setH(trayPill); setH(trayPillRunning);
+    setH(showLabels); setH(collapseWhenFull); setH(thumbPreviews); setH(thumbPeek);
+    setH(compactMedia);
     setH(embeddedWidgets);
     setH(taskbarBorder);
 
@@ -220,6 +243,18 @@ struct TaskbarTabM3State {
     int cbx, cby, cbw, cbh;
     widthModeComboGeom(contentX, contentW, cbx, cby, cbw, cbh);
     return cby + cbh + 2;
+  }
+
+  void thumbThresholdComboGeom(int contentX, int contentW,
+                               int& cbx, int& cby, int& cbw, int& cbh) const {
+    const int kVisCardTop = kContentTop + kDockChildTabH + 12;
+    const int rowY = kVisCardTop + 52 + 13 * kDockVisRowPitch;
+    const int cardX = contentX + 8;
+    const int cardW = contentW - 16;
+    cbx = static_cast<int>(cardX + cardW - kCardPad - static_cast<double>(kSettingsComboW));
+    cby = rowY + (kDockVisRowPitch - kSettingsComboH) / 2;
+    cbw = kSettingsComboW;
+    cbh = kSettingsComboH;
   }
 
   // Paint.
@@ -638,6 +673,84 @@ struct TaskbarTabM3State {
                            textR_, textG_, textB_, 0.46f);
         trayPillRunning.paint(cr, 0);
       }
+
+      // Row 8: Display (output picker)
+      {
+        const int bandTop = visBandTop(8);
+        cairo_set_source_rgba(cr, outlineR_, outlineG_, outlineB_, 0.15);
+        cairo_set_line_width(cr, 1.0);
+        cairo_move_to(cr, static_cast<double>(cardX + kCardPad + 8), bandTop);
+        cairo_line_to(cr, static_cast<double>(cardX + cardW - kCardPad - 8), bandTop);
+        cairo_stroke(cr);
+        settings_show_text(cr, cardX + kCardPad, bandTop + 36, "Display", 14.f, 500,
+                           textR_, textG_, textB_, 0.93f);
+        settings_show_text(cr, cardX + kCardPad, bandTop + 53,
+                           "Auto = one monitor, All = every display.", 11.f, 400,
+                           textR_, textG_, textB_, 0.46f);
+        eh::settings::display::sync_dropdown(app, app.taskbarDisplayDd,
+                                             app.settings.taskbarOutputName,
+                                             contentX, contentW, bandTop);
+        app.taskbarDisplayDd.paint_trigger(app, cr, glassOv, settings_scroll_px(app));
+      }
+
+      // Rows 9-12: window-button toggles.
+      auto paintToggleRow = [&](int row, const char* title, const char* sub,
+                                Toggle& tg, bool on) {
+        const int bandTop = visBandTop(row);
+        const int titleY = bandTop + 36;
+        cairo_set_source_rgba(cr, outlineR_, outlineG_, outlineB_, 0.15);
+        cairo_set_line_width(cr, 1.0);
+        cairo_move_to(cr, static_cast<double>(cardX + kCardPad + 8), bandTop);
+        cairo_line_to(cr, static_cast<double>(cardX + cardW - kCardPad - 8), bandTop);
+        cairo_stroke(cr);
+        constexpr float tgH = 24.0f;
+        constexpr float tgW = 40.0f;
+        const float tgX = cardX + cardW - kCardPad - tgW;
+        const float tgY = static_cast<float>(bandTop) + (kDockVisRowPitch - tgH) * 0.5f;
+        tg.setSize(Toggle::Size::L);
+        tg.setGeometry(tgX, tgY, tgW, tgH);
+        tg.setOn(on);
+        tg.setEnabled(true);
+        tg.setAccentColor(accentR_, accentG_, accentB_);
+        settings_show_text(cr, cardX + kCardPad, titleY, title, 14.f, 500,
+                           textR_, textG_, textB_, 0.93f);
+        settings_show_text(cr, cardX + kCardPad, titleY + 17, sub, 11.f, 400,
+                           textR_, textG_, textB_, 0.46f);
+        tg.paint(cr, 0);
+      };
+
+      paintToggleRow(9, "Show window labels", "Show window titles on running buttons.",
+                     showLabels, app.settings.taskbarShowLabels);
+      paintToggleRow(10, "Collapse when full", "Fall back to grouped icons when the bar overflows.",
+                     collapseWhenFull, app.settings.taskbarCollapseWhenFull);
+      paintToggleRow(11, "Window previews", "Hover a running app to preview its windows.",
+                     thumbPreviews, app.settings.taskbarThumbnailsEnabled);
+      paintToggleRow(12, "Enlarge preview on hover", "Zoom the hovered window card (Aero Peek style).",
+                     thumbPeek, app.settings.taskbarThumbnailPeekEnabled);
+
+      // Row 13: thumbnail threshold combo.
+      {
+        const int bandTop = visBandTop(13);
+        cairo_set_source_rgba(cr, outlineR_, outlineG_, outlineB_, 0.15);
+        cairo_set_line_width(cr, 1.0);
+        cairo_move_to(cr, static_cast<double>(cardX + kCardPad + 8), bandTop);
+        cairo_line_to(cr, static_cast<double>(cardX + cardW - kCardPad - 8), bandTop);
+        cairo_stroke(cr);
+        int cbx, cby, cbw, cbh;
+        thumbThresholdComboGeom(contentX, contentW, cbx, cby, cbw, cbh);
+        settings_show_text(cr, cardX + kCardPad, bandTop + 36, "Preview threshold", 14.f, 500,
+                           textR_, textG_, textB_, 0.93f);
+        settings_show_text(cr, cardX + kCardPad, bandTop + 53, "Past this many windows, show a compact list.", 11.f, 400,
+                           textR_, textG_, textB_, 0.46f);
+        settings_paint_combo_closed(app, cr, cbx, cby, cbw, cbh, glassOv,
+                                    kThumbThresholdLabels[thumb_threshold_ui_index(
+                                        std::clamp(app.settings.taskbarThumbnailThreshold, 3, 20))],
+                                    app.taskbarThumbThresholdDropdownOpen);
+      }
+
+      // Row 14: compact media.
+      paintToggleRow(14, "Compact media", "Art + transport only; title lives in the hover popup.",
+                     compactMedia, app.settings.taskbarCompactMedia);
       return;
     }
 
@@ -793,6 +906,8 @@ struct TaskbarTabM3State {
       activeChildTab_ = tabHit;
       activeSlider_ = -1;
       app.taskbarWidthModeDropdownOpen = false;
+      app.taskbarThumbThresholdDropdownOpen = false;
+      app.taskbarDisplayDd.close();
       draw(app);
       return true;
     }
@@ -817,6 +932,22 @@ struct TaskbarTabM3State {
 
   bool handleSettingsPointerDown(App& app, float px, float py, int contentX, int contentW) {
     activeSlider_ = -1;
+
+    // Display-output dropdown: row select + trigger toggle + outside-close
+    // on pointer-down (shared helper). Takes precedence over the width-mode
+    // combo so an open display popup swallows the press.
+    {
+      const int kVisCardTop = kContentTop + kDockChildTabH + 12;
+      const int dispBand = kVisCardTop + 52 + 8 * kDockVisRowPitch;
+      if (app.taskbarDisplayDd.open()) {
+        if (eh::settings::display::handle_pointer_down(app, app.taskbarDisplayDd,
+                                                       app.settings.taskbarOutputName,
+                                                       contentX, contentW, dispBand)) {
+          app.taskbarWidthModeDropdownOpen = false;
+          return true;
+        }
+      }
+    }
 
     // Check width mode combo first (dropdown open)
     if (app.taskbarWidthModeDropdownOpen) {
@@ -853,6 +984,65 @@ struct TaskbarTabM3State {
       widthModeComboGeom(contentX, contentW, cbx, cby, cbw, cbh);
       if (px >= cbx && px < cbx + cbw && py >= cby && py < cby + cbh) {
         app.taskbarWidthModeDropdownOpen = true;
+        app.taskbarThumbThresholdDropdownOpen = false;
+        app.taskbarDisplayDd.close();
+        draw(app);
+        return true;
+      }
+    }
+
+    // Display-output combo click (open dropdown)
+    {
+      const int kVisCardTop = kContentTop + kDockChildTabH + 12;
+      const int dispBand = kVisCardTop + 52 + 8 * kDockVisRowPitch;
+      eh::settings::display::sync_dropdown(app, app.taskbarDisplayDd,
+                                           app.settings.taskbarOutputName,
+                                           contentX, contentW, dispBand);
+      const int scr = settings_scroll_px(app);
+      const int sx = static_cast<int>(app.pointerX);
+      const int sy = static_cast<int>(app.pointerY);
+      if (app.taskbarDisplayDd.hit_trigger(sx, sy, scr)) {
+        app.taskbarWidthModeDropdownOpen = false;
+        app.taskbarThumbThresholdDropdownOpen = false;
+        app.taskbarDisplayDd.open_popup();
+        draw(app);
+        return true;
+      }
+    }
+
+    // Thumbnail threshold combo: open-state selection first.
+    if (app.taskbarThumbThresholdDropdownOpen) {
+      int cbx, cby, cbw, cbh;
+      thumbThresholdComboGeom(contentX, contentW, cbx, cby, cbw, cbh);
+      const int ly = cby + cbh + 2;
+      const int lh = kThumbThresholdCount * kSettingsDdRowH;
+      if (px >= cbx && px < cbx + cbw && py >= ly && py < ly + lh) {
+        const int rr = static_cast<int>((py - ly) / kSettingsDdRowH);
+        if (rr >= 0 && rr < kThumbThresholdCount) {
+          app.settings.taskbarThumbnailThreshold = kThumbThresholdValues[rr];
+          save_settings(app.settings);
+        }
+        app.taskbarThumbThresholdDropdownOpen = false;
+        draw(app);
+        return true;
+      }
+      if (px >= cbx && px < cbx + cbw && py >= cby && py < cby + cbh) {
+        app.taskbarThumbThresholdDropdownOpen = false;
+        draw(app);
+        return true;
+      }
+      app.taskbarThumbThresholdDropdownOpen = false;
+      draw(app);
+      return false;
+    }
+
+    // Thumbnail threshold combo click (open dropdown).
+    {
+      int cbx, cby, cbw, cbh;
+      thumbThresholdComboGeom(contentX, contentW, cbx, cby, cbw, cbh);
+      if (px >= cbx && px < cbx + cbw && py >= cby && py < cby + cbh) {
+        app.taskbarWidthModeDropdownOpen = false;
+        app.taskbarThumbThresholdDropdownOpen = true;
         draw(app);
         return true;
       }
@@ -874,6 +1064,11 @@ struct TaskbarTabM3State {
     if (tryToggle(&tooltips)) return true;
     if (tryToggle(&trayPill)) return true;
     if (tryToggle(&trayPillRunning)) return true;
+    if (tryToggle(&showLabels)) return true;
+    if (tryToggle(&collapseWhenFull)) return true;
+    if (tryToggle(&thumbPreviews)) return true;
+    if (tryToggle(&thumbPeek)) return true;
+    if (tryToggle(&compactMedia)) return true;
 
     return false;
   }
@@ -1068,6 +1263,11 @@ struct TaskbarTabM3State {
       endToggle(&tooltips, &app.settings.taskbarTooltipsEnabled);
       if (!handled) endToggle(&trayPill, &app.settings.taskbarPinnedAppsTrayPill);
       if (!handled) endToggle(&trayPillRunning, &app.settings.taskbarRunningAppsTrayPill);
+      if (!handled) endToggle(&showLabels, &app.settings.taskbarShowLabels);
+      if (!handled) endToggle(&collapseWhenFull, &app.settings.taskbarCollapseWhenFull);
+      if (!handled) endToggle(&thumbPreviews, &app.settings.taskbarThumbnailsEnabled);
+      if (!handled) endToggle(&thumbPeek, &app.settings.taskbarThumbnailPeekEnabled);
+      if (!handled) endToggle(&compactMedia, &app.settings.taskbarCompactMedia);
     }
 
     // Slider drag end (for settings tab if any)
@@ -1111,6 +1311,8 @@ struct TaskbarTabM3State {
     auto reset = [&](auto& w) { w.handlePointerLeave(); };
     reset(showTaskbar); reset(positionTop); reset(groupApps);
     reset(autoHide); reset(tooltips); reset(trayPill); reset(trayPillRunning);
+    reset(showLabels); reset(collapseWhenFull); reset(thumbPreviews); reset(thumbPeek);
+    reset(compactMedia);
     reset(embeddedWidgets);
     reset(heightSlider); reset(radiusSlider); reset(opacitySlider);
     reset(iconSizeSlider); reset(iconSpacingSlider); reset(floatingGapSlider);
@@ -1162,6 +1364,30 @@ inline bool taskbarM3_is_appearance_child_tab() {
 
 inline bool taskbarM3_is_widgets_child_tab() {
   return taskbarM3().activeChildTab_ == TaskbarTabM3State::kTabWidgets;
+}
+
+inline int taskbar_display_band_top() {
+  const int kVisCardTop = kContentTop + kDockChildTabH + 12;
+  return kVisCardTop + 52 + 8 * kDockVisRowPitch;
+}
+
+inline void taskbar_display_dd_sync(App& app, int contentX, int contentW) {
+  eh::settings::display::sync_dropdown(app, app.taskbarDisplayDd,
+                                       app.settings.taskbarOutputName, contentX,
+                                       contentW, taskbar_display_band_top());
+}
+
+inline bool taskbar_display_dd_commit_pointer_up(App& app, float px, float py,
+                                                 int contentX, int contentW) {
+  auto& m3 = taskbarM3();
+  if (!app.taskbarDisplayDd.open()) return false;
+  if (m3.activeChildTab_ != TaskbarTabM3State::kTabSettings) {
+    app.taskbarDisplayDd.close();
+    return false;
+  }
+  return eh::settings::display::commit_pointer_up(
+      app, app.taskbarDisplayDd, app.settings.taskbarOutputName, contentX,
+      contentW, taskbar_display_band_top(), px, py);
 }
 
 } // namespace m3::detail

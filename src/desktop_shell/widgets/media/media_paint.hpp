@@ -19,13 +19,13 @@ namespace eh::widgets {
 
 [[nodiscard]] double dock_media_slot_width(cairo_t* measure_cr, const eh::config::ShellConfig& sc,
                                            std::string_view instance_id, double icon_ref_px, double bar_height,
-                                           const eh::mpris::PlayerSnapshot& snap);
+                                           const eh::mpris::PlayerSnapshot& snap, bool compact = false);
 
 [[nodiscard]] bool paint_media_slot(cairo_t* cr, const eh::config::ShellConfig& sc, std::string_view instance_id,
                                     double x, double y, double slot_w, double slot_h, double icon_ref_px,
                                     const eh::mpris::PlayerSnapshot& snap, bool hovered, bool pressed,
                                     int hoverBtn = -1,
                                     double pointerLocalX = -1, double pointerLocalY = -1,
-                                    bool* progress_tick_wanted = nullptr);
+                                    bool* progress_tick_wanted = nullptr, bool compact = false);
 
 }
