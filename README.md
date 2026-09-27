@@ -40,5 +40,3 @@ cd Event-Horizon-Shell
 - `EventHorizon --dock` — dock only
 - `EventHorizon --eh-settings` — standalone settings app
 - `EventHorizon --eh-screenshot [file.png]` — screenshot to PNG
-
->>>>>>> Stashed changes
