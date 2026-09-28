@@ -27,6 +27,7 @@
 #include "services/tray/manager/tray_manager.hpp"
 #include "services/tray/dbus/tray_context_menu.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
+#include "services/redeye/redeye_service.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
 #include "desktop_shell/shared/pins/pin_identity.hpp"
 #include "desktop_shell/shared/paint/glass_card_style.hpp"
@@ -1287,6 +1288,15 @@ static void taskbar_cc_click_handler(TaskbarApp& app) {
                   eh::shell::dock::control_center::cc_log("camera: screenshot selection spawn failed");
                 redraw();
                 return;
+              case pearcc::PearToggle::Redeye: {
+                const bool on = !eh::redeye::RedeyeService::instance().isEnabled();
+                wl_surface* barSurf = nullptr;
+                if (!app.layers.empty() && app.layers[0] && app.layers[0]->surface)
+                  barSurf = app.layers[0]->surface;
+                eh::redeye::RedeyeService::instance().setEnabled(on, barSurf);
+                redraw();
+                return;
+              }
               case pearcc::PearToggle::Cmd1:
                 pear_spawn(cfg.cmdRun1);
                 break;
@@ -2994,6 +3004,7 @@ static void taskbar_pointer_motion(void* data, wl_pointer* p, uint32_t time,
                 case PT::NightColor: t = CcHT::NightColorCard; break;
                 case PT::ColorScheme: t = CcHT::ColorSchemeCard; break;
                 case PT::Camera: t = CcHT::CameraCard; break;
+                case PT::Redeye: t = CcHT::RedeyeCard; break;
                 case PT::Cmd1: t = CcHT::CmdCard1; break;
                 case PT::Cmd2: t = CcHT::CmdCard2; break;
                 default: break;
@@ -4247,6 +4258,7 @@ void taskbar_init_deferred_startup(TaskbarApp& app) {
   setup_tray_bus(app);
 
   eh::net::NetworkManagerService::instance().start();
+  if (app.wl) eh::redeye::RedeyeService::instance().set_manager(app.wl->idle_inhibit_manager());
 
   try {
     app.mpris = std::make_unique<eh::mpris::DockMpris>();

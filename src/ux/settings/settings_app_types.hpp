@@ -388,6 +388,27 @@ struct App {
   bool running = true;
   bool pendingRedraw = false;
 
+  // Draw coalescing (see draw()): a draw arriving <8ms after the previous
+  // painted frame with no intervening user input and no active animation is
+  // deferred to the next frame callback instead of repainting. lastPaintedW/H
+  // force a paint on resize; coalescedSkips counts deferred draws for logs.
+  std::uint64_t lastDrawMonoMs = 0;
+  std::uint64_t lastInputMonoMs = 0;
+  int lastPaintedW = -1;
+  int lastPaintedH = -1;
+  unsigned long long coalescedSkips = 0;
+
+  // Tier-2 damage tracking: draw() fills these with the committed damage
+  // spans (surface coords) so painters can skip fully-clean elements.
+  // Fixed array, no allocation. Active only when damage was computed.
+  static constexpr int kPaintDamageMax = 16;
+  struct PaintDamageRect {
+    int x = 0, y = 0, w = 0, h = 0;
+  };
+  PaintDamageRect paintDamage[kPaintDamageMax]{};
+  int paintDamageCount = 0;
+  bool paintDamageActive = false;
+
   double pointerX = 0;
   double pointerY = 0;
   bool pointerLeftDown = false;
@@ -436,6 +457,13 @@ struct App {
   std::unordered_set<std::string> sidebarExpanded{};
   int sidebarHoverIdx = -1;
   int sidebarScrollPx = 0;
+
+  // Global settings search (sidebar search bar, top-left).
+  std::string settingsSearchQuery{};
+  bool settingsSearchFocused = false;
+  int settingsSearchHoverRow = -1;
+  int settingsSearchSelectedRow = 0;
+  bool settingsSearchBarHover = false;
 
   bool widgetPickerOpen = false;
   std::string widgetPickerSection{};
@@ -830,8 +858,7 @@ struct App {
   bool accountsLoginErr = false;
 
   // Autostart / Startup Applications tab
-  std::vector<eh::autostart::AutostartUiEntry> autostartEntries;
-  int autostartScrollPx = 0;
+  std::vector<eh::autostart::AutostartUiEntry> autostartEntries;  int autostartScrollPx = 0;
   int autostartHoverRow = -1;
   bool autostartNeedsRefresh = true;
   bool autostartFormOpen = false;

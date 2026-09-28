@@ -83,6 +83,7 @@
 
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/widgets/dock_slot_hooks.hpp"
+#include "services/redeye/redeye_service.hpp"
 #include "desktop_shell/spotlight/search/spotlight_search.hpp"
 #include "desktop_shell/widgets/start_menu/start_menu.hpp"
 #include "desktop_shell/widgets/app_drawer/list/desktop_list.hpp"
@@ -2583,6 +2584,7 @@ void dock_init_deferred_startup(DockApp& app) {
   eh::shell::dock_slot_hooks::control_center_weather_startup_dock(&app, dock_cc_weather_redraw);
   eh::shell::dock_slot_hooks::battery_widget_init();
   eh::shell::dock_slot_hooks::bluetooth_widget_init();
+  eh::redeye::RedeyeService::instance().set_manager(app.idleInhibitMgr);
   eh::shell::dock::dock_boot_step("deferred: warm startup caches");
   dock_warm_startup_caches(app);
   eh::shell::dock::dock_boot_step("deferred startup complete");

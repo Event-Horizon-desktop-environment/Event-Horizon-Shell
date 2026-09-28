@@ -40,6 +40,7 @@
 #include "ux/settings/utils/widget_picker/widget_picker.hpp"
 #include "ux/settings/settings_tab_desktop_widgets/world_clock_popup.hpp"
 #include "ux/settings/utils/monitors/settings_monitors_tab.hpp"
+#include "ux/settings/utils/search/settings_search.hpp"
 
 #include "ux/settings/settings_tab_power/settings_tab_power.hpp"
 #include "ux/settings/settings_tab_notifications/settings_tab_notifications.hpp"
@@ -417,7 +418,10 @@ void settings_close_mode_dropdowns(App& app) {
 }
 
 // Event handlers.
+void settings_note_input(App& app) { app.lastInputMonoMs = eh::shell::now_mono_ms(); }
+
 void on_pointer_leave(App& app) {
+  settings_note_input(app);
   app.btnHoverIdx = -1;
   if (app.worldClockPopupOpen &&
       (app.worldClockHoverItem != -1 || app.worldClockDropdownHover != -1)) {
@@ -470,6 +474,7 @@ void on_pointer_leave(App& app) {
 }
 
 void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
+  settings_note_input(app);
   app.pointerX = x;
   app.pointerY = y;
 
@@ -719,20 +724,37 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
         eh::settings_monitors_tab::canvas_delta_to_monitor_delta(dcx, dcy, sf, &dmx, &dmy);
         const int nx = app.monitorsCanvasDragAnchorX + static_cast<int>(std::lround(dmx));
         const int ny = app.monitorsCanvasDragAnchorY + static_cast<int>(std::lround(dmy));
+        const std::string oldPos = app.monitorsTab.outputs[ix].position;
         eh::settings_monitors_tab::format_position_xy(nx, ny, &app.monitorsTab.outputs[ix].position);
+        if (app.monitorsTab.outputs[ix].position == oldPos) return;
         app.monitorsTab.dirty = true;
+      } else {
+        return;
       }
       monitors_drag_draw_throttled(app);
       return;
     }
     if (app.monitorsCanvasPanArmed) {
-      app.monitorsCanvasPanX = app.pointerX - app.monitorsCanvasPanGrabX;
-      app.monitorsCanvasPanY = pyLogical - app.monitorsCanvasPanGrabY;
+      const double nx = app.pointerX - app.monitorsCanvasPanGrabX;
+      const double ny = pyLogical - app.monitorsCanvasPanGrabY;
+      if (nx == app.monitorsCanvasPanX && ny == app.monitorsCanvasPanY) return;
+      app.monitorsCanvasPanX = nx;
+      app.monitorsCanvasPanY = ny;
       monitors_drag_draw_throttled(app);
       return;
     }
     if (app.monitorsScaleSliderDragIdx >= 0) {
+      monitors_clamp_selected(app);
+      const size_t six = static_cast<size_t>(app.monitorsSelectedIdx);
+      const double oldNorm = app.settingsSliderDragNormT;
+      std::string oldScale;
+      if (six < app.monitorsTab.outputs.size()) oldScale = app.monitorsTab.outputs[six].scale;
       monitors_apply_form_scale_drag(app, app.pointerX, monLay, tcx, tcw);
+      bool scaleChanged = (app.settingsSliderDragNormT != oldNorm);
+      if (six < app.monitorsTab.outputs.size() &&
+          app.monitorsTab.outputs[six].scale != oldScale)
+        scaleChanged = true;
+      if (!scaleChanged) return;
       eh::settings::monitors_log::slider_drag_motion();
       monitors_drag_draw_throttled(app);
       return;
@@ -740,6 +762,7 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
     if (app.monitorsHyprExtraSlider >= 0) {
       monitors_clamp_selected(app);
       const size_t six = static_cast<size_t>(app.monitorsSelectedIdx);
+      bool hyprChanged = false;
       if (six < app.monitorsTab.outputs.size()) {
         auto& hrow = app.monitorsTab.outputs[six];
         auto hcit = app.monitorsTab.caps.find(hrow.name);
@@ -784,11 +807,40 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
         if (sliderRow >= 0 && hsec && hfg.has_hdr) {
           int htrX = 0, htrY = 0, htrW = 0;
           monitors_form_slider_track_geom_content(hsec->content_y0, hsec->x, hsec->w, sliderRow, &htrX, &htrY, &htrW);
+          const double oldNorm = app.settingsSliderDragNormT;
+          const std::string* oldField = nullptr;
+          switch (app.monitorsHyprExtraSlider) {
+            case 0: oldField = &hrow.sdrbrightness; break;
+            case 1: oldField = &hrow.sdrsaturation; break;
+            case 2: oldField = &hrow.sdr_min_luminance; break;
+            case 3: oldField = &hrow.sdr_max_luminance; break;
+            case 4: oldField = &hrow.min_luminance; break;
+            case 5: oldField = &hrow.max_luminance; break;
+            case 6: oldField = &hrow.max_avg_luminance; break;
+            default: break;
+          }
+          const std::string oldVal = oldField ? *oldField : std::string();
           monitors_apply_hypr_extra_drag(app, &hrow, app.monitorsHyprExtraSlider, app.pointerX, htrX, htrW);
-          app.monitorsTab.dirty = true;
-          eh::settings::monitors_log::slider_drag_motion();
+          const std::string* newField = nullptr;
+          switch (app.monitorsHyprExtraSlider) {
+            case 0: newField = &hrow.sdrbrightness; break;
+            case 1: newField = &hrow.sdrsaturation; break;
+            case 2: newField = &hrow.sdr_min_luminance; break;
+            case 3: newField = &hrow.sdr_max_luminance; break;
+            case 4: newField = &hrow.min_luminance; break;
+            case 5: newField = &hrow.max_luminance; break;
+            case 6: newField = &hrow.max_avg_luminance; break;
+            default: break;
+          }
+          const std::string newVal = newField ? *newField : std::string();
+          if (app.settingsSliderDragNormT != oldNorm || newVal != oldVal) {
+            app.monitorsTab.dirty = true;
+            eh::settings::monitors_log::slider_drag_motion();
+            hyprChanged = true;
+          }
         }
       }
+      if (!hyprChanged) return;
       monitors_drag_draw_throttled(app);
       return;
     }
@@ -895,6 +947,36 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
     bool needDdDraw = false;
     int tcx, tcw;
     settings_content_column_geom(app, &tcx, &tcw);
+    // ── Global search hover (sidebar top-left) ──
+    {
+      int ssx = 0, ssy = 0, ssw = 0, ssh = 0;
+      settings_search_bar_geom(&ssx, &ssy, &ssw, &ssh);
+      const bool barHov = point_in_rect(app.pointerX, app.pointerY, ssx, ssy, ssw, ssh);
+      if (barHov != app.settingsSearchBarHover) {
+        app.settingsSearchBarHover = barHov;
+        needDdDraw = true;
+      }
+      if (!app.settingsSearchQuery.empty()) {
+        const std::vector<int> sres = settings_search_collect(app.settingsSearchQuery, app.monitorsTab.kind);
+        int newHov = -1;
+        const int sscroll = app.sidebarScrollPx;
+        for (int ri = 0; ri < static_cast<int>(sres.size()); ++ri) {
+          const int ry = settings_sidebar_tabs_base_y() + ri * kSettingsSearchResultPitch - sscroll;
+          if (point_in_rect(app.pointerX, app.pointerY, ssx, ry, ssw, kSettingsSearchResultH)) {
+            newHov = ri;
+            break;
+          }
+        }
+        if (newHov != app.settingsSearchHoverRow) {
+          app.settingsSearchHoverRow = newHov;
+          if (newHov >= 0) app.settingsSearchSelectedRow = newHov;
+          needDdDraw = true;
+        }
+      } else if (app.settingsSearchHoverRow != -1) {
+        app.settingsSearchHoverRow = -1;
+        needDdDraw = true;
+      }
+    }
     if (app.activeTab == 6 && app.wallpaperModeDropdownOpen) {
       int wcx, wcy, wcw, wch;
       const WallpaperVerticalMetrics wm = wallpaper_vertical_metrics(static_cast<double>(tcx), static_cast<double>(tcw));
@@ -1249,6 +1331,10 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       const int stX = sidebarX + 8;
       const int stW = kSidebarW - 16;
       int newHover = -1;
+      const bool searching = !app.settingsSearchQuery.empty();
+      if (searching) {
+        if (app.sidebarHoverIdx != -1) { app.sidebarHoverIdx = -1; needDdDraw = true; }
+      } else {
       if (app.pointerX >= stX && app.pointerX < stX + stW) {
         const int scroll = app.sidebarScrollPx;
         int y = kSidebarTabBaseY;
@@ -1280,6 +1366,7 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       if (newHover != app.sidebarHoverIdx) {
         app.sidebarHoverIdx = newHover;
         needDdDraw = true;
+      }
       }
     }
     if (app.activeTab == 33 && app.hyprlandLayoutDropdownOpen) {
@@ -1585,11 +1672,20 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
   // be updated by the next tab-content redraw.
   // Throttle to ~60 fps to prevent flooding the compositor at high pointer
   // rates (e.g. 1000+ Hz mice) which otherwise causes visible lag.
+  // Distance gate: a resting pointer emits micro-motion jitter that used to
+  // repaint the whole tab every 16ms indefinitely (~20-50fps with zero state
+  // change). Hover targets are >=26px, so only redraw once the pointer moved
+  // >=4px since the last motion draw; boundary crossings always qualify.
   if (!app.pointerLeftDown && !app.widgetPickerOpen) {
     static auto lastMotionDraw = std::chrono::steady_clock::time_point{};
+    static double lastMotionDrawX = 1e9, lastMotionDrawY = 1e9;
     const auto now = std::chrono::steady_clock::now();
-    if (now - lastMotionDraw >= std::chrono::milliseconds(16)) {
+    const double mdx = app.pointerX - lastMotionDrawX;
+    const double mdy = app.pointerY - lastMotionDrawY;
+    if ((mdx * mdx + mdy * mdy) >= 16.0 && now - lastMotionDraw >= std::chrono::milliseconds(16)) {
       lastMotionDraw = now;
+      lastMotionDrawX = app.pointerX;
+      lastMotionDrawY = app.pointerY;
       const int sidebarBoundary = kSpacingL + kSidebarW;
       if (app.pointerX >= sidebarBoundary) {
         draw(app);
@@ -1630,6 +1726,7 @@ static void default_apps_pick_picker_row(App& app, int idx) {
 
 void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t state,
                               uint32_t pointer_btn_serial) {
+  settings_note_input(app);
   if (!ptrSurf && !app.embedded) ptrSurf = app.seat.pointer_focus_surface();
   (void)pointer_btn_serial;
   if (button != 0x110  ) return;
@@ -1864,6 +1961,74 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
     if (point_in_rect(app.pointerX, app.pointerY, bx, btnY, kBtnSize, kBtnSize)) {
       eh::settings::embed_minimize();  // minimize (green, leftmost)
       return;
+    }
+  }
+
+  // ── Global settings search (top-left) ──
+  {
+    int ssx = 0, ssy = 0, ssw = 0, ssh = 0;
+    settings_search_bar_geom(&ssx, &ssy, &ssw, &ssh);
+    if (!app.settingsSearchQuery.empty()) {
+      const int cbS = 22, cbX = ssx + ssw - cbS - 7, cbY = ssy + (ssh - cbS) / 2;
+      if (point_in_rect(app.pointerX, app.pointerY, cbX, cbY, cbS, cbS)) {
+        app.settingsSearchQuery.clear();
+        app.settingsSearchHoverRow = -1;
+        app.settingsSearchSelectedRow = 0;
+        app.settingsSearchFocused = true;
+        app.sidebarScrollPx = 0;
+        settings_clamp_sidebar_scroll_px(app);
+        settings_close_mode_dropdowns(app);
+        draw(app);
+        return;
+      }
+    }
+    if (point_in_rect(app.pointerX, app.pointerY, ssx, ssy, ssw, ssh)) {
+      app.settingsSearchFocused = true;
+      draw(app);
+      return;
+    }
+    if (!app.settingsSearchQuery.empty()) {
+      const std::vector<int> sres = settings_search_collect(app.settingsSearchQuery, app.monitorsTab.kind);
+      const int sscroll = app.sidebarScrollPx;
+      for (int ri = 0; ri < static_cast<int>(sres.size()); ++ri) {
+        const int ry = settings_sidebar_tabs_base_y() + ri * kSettingsSearchResultPitch - sscroll;
+        if (point_in_rect(app.pointerX, app.pointerY, ssx, ry, ssw, kSettingsSearchResultH)) {
+          const SettingsSearchEntry& e = kSettingsSearchEntries[sres[static_cast<size_t>(ri)]];
+          settings_close_mode_dropdowns(app);
+          if (app.activeTab == 44) { clear_icons_preview_cache(); icons_backup_reset(); }
+          if (app.activeTab == 45) themes_backup_reset();
+          app.activeTab = e.tab;
+          app.activeSubTab = -1;
+          if (e.tab == 7) { app.monitorsTab.refresh_from_system(); app.monitorsTabDidInitialRefresh = true; }
+          if (e.tab == 8) eh::audio::PipeWireService::instance().start();
+          if (e.tab == 17 || e.tab == 18 || e.tab == 28) eh::net::NetworkManagerService::instance().start();
+          if (e.tab == 47) eh::bt::BluezService::instance().start();
+          if (e.tab >= 20 && e.tab <= 26) {
+            auto mcf = eh::settings_mango::read_mango_config();
+            app.mangoConfig = mcf.cfg;
+            app.mangoConfigLines = mcf.lines;
+          }
+          if (e.tab == 33) { app.hyprlandConfig = eh::settings_hyprland::read_config(); }
+          if (e.tab == 48) { app.autostartNeedsRefresh = true; }
+          app.settingsSearchQuery.clear();
+          app.settingsSearchFocused = false;
+          app.settingsSearchHoverRow = -1;
+          app.settingsSearchSelectedRow = 0;
+          app.sidebarScrollPx = 0;
+          app.sidebarHoverIdx = -1;
+          draw(app);
+          return;
+        }
+      }
+      if (app.pointerX >= kSpacingL && app.pointerX < kSpacingL + kSidebarW &&
+          app.pointerY >= kContentTop && app.pointerY < app.height - kSpacingL) {
+        app.settingsSearchFocused = false;
+        draw(app);
+        return;
+      }
+      app.settingsSearchFocused = false;
+    } else if (app.settingsSearchFocused) {
+      app.settingsSearchFocused = false;
     }
   }
 
@@ -2486,6 +2651,7 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
 }
 
 void on_settings_keyboard(App& app, const eh::wayland::WaylandSeat::KeyboardEvent& ev) {
+  settings_note_input(app);
   if (keyring_prompt_visible(app)) {
     keyring_prompt_handle_key(app, ev.sym, ev.state, ev.utf8.data(), ev.utf8_len);
     draw(app);
@@ -2504,6 +2670,150 @@ void on_settings_keyboard(App& app, const eh::wayland::WaylandSeat::KeyboardEven
 
   if (world_clock_popup_visible(app)) {
     world_clock_popup_consume_key(app, ev.sym, ev.state, ev.utf8.data(), ev.utf8_len);
+    return;
+  }
+
+  // ── Global settings search: focus shortcuts (Ctrl+F / Ctrl+K / '/') ──
+  {
+    xkb_state* fkb = app.seat.xkb_state_ptr();
+    const bool fctrl = fkb && xkb_state_mod_name_is_active(fkb, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
+    const bool falt = fkb && xkb_state_mod_name_is_active(fkb, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE);
+    const bool fmod4 = fkb && xkb_state_mod_name_is_active(fkb, "Mod4", XKB_STATE_MODS_EFFECTIVE);
+    if ((ev.state == WL_KEYBOARD_KEY_STATE_PRESSED || ev.state == WL_KEYBOARD_KEY_STATE_REPEATED) &&
+        !app.settingsSearchFocused) {
+      if (fctrl && !falt && !fmod4 && (ev.sym == XKB_KEY_f || ev.sym == XKB_KEY_F || ev.sym == XKB_KEY_k || ev.sym == XKB_KEY_K)) {
+        app.settingsSearchFocused = true;
+        draw(app);
+        return;
+      }
+      if (!fctrl && !falt && !fmod4 && ev.sym == XKB_KEY_slash && ev.state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+        const bool otherTextActive =
+            (app.activeTab == 46 && app.accountsActiveField != AccountsField::None) ||
+            (app.activeTab == 48 && app.autostartActiveField != AutostartField::None) ||
+            app.timeCustomFormatActive || app.timeZonePickerOpen || app.defaultAppPickerOpen ||
+            app.widgetPickerSearchActive || app.hyprlandAnimSpeedEditActive ||
+            app.worldClockSearchFocus;
+        if (!otherTextActive) {
+          app.settingsSearchFocused = true;
+          draw(app);
+          return;
+        }
+      }
+    }
+  }
+
+  // ── Global settings search ──
+  if (app.settingsSearchFocused) {
+    if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED &&
+        ev.state != WL_KEYBOARD_KEY_STATE_REPEATED)
+      return;
+    xkb_state* skb = app.seat.xkb_state_ptr();
+    const bool sctrl = skb && xkb_state_mod_name_is_active(skb, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
+    if (ev.sym == XKB_KEY_Escape) {
+      if (!app.settingsSearchQuery.empty()) {
+        app.settingsSearchQuery.clear();
+        app.settingsSearchHoverRow = -1;
+        app.settingsSearchSelectedRow = 0;
+        app.sidebarScrollPx = 0;
+      } else {
+        app.settingsSearchFocused = false;
+      }
+      draw(app);
+      return;
+    }
+    if (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter) {
+      const std::vector<int> sres = settings_search_collect(app.settingsSearchQuery, app.monitorsTab.kind);
+      int idx = app.settingsSearchSelectedRow;
+      if (app.settingsSearchHoverRow >= 0 && app.settingsSearchHoverRow < static_cast<int>(sres.size()))
+        idx = app.settingsSearchHoverRow;
+      if (!sres.empty() && idx >= 0 && idx < static_cast<int>(sres.size())) {
+        const SettingsSearchEntry& e = kSettingsSearchEntries[sres[static_cast<size_t>(idx)]];
+        settings_close_mode_dropdowns(app);
+        if (app.activeTab == 44) { clear_icons_preview_cache(); icons_backup_reset(); }
+        if (app.activeTab == 45) themes_backup_reset();
+        app.activeTab = e.tab;
+        app.activeSubTab = -1;
+        if (e.tab == 7) { app.monitorsTab.refresh_from_system(); app.monitorsTabDidInitialRefresh = true; }
+        if (e.tab == 8) eh::audio::PipeWireService::instance().start();
+        if (e.tab == 17 || e.tab == 18 || e.tab == 28) eh::net::NetworkManagerService::instance().start();
+        if (e.tab == 47) eh::bt::BluezService::instance().start();
+        if (e.tab >= 20 && e.tab <= 26) {
+          auto mcf = eh::settings_mango::read_mango_config();
+          app.mangoConfig = mcf.cfg;
+          app.mangoConfigLines = mcf.lines;
+        }
+        if (e.tab == 33) { app.hyprlandConfig = eh::settings_hyprland::read_config(); }
+        if (e.tab == 48) { app.autostartNeedsRefresh = true; }
+        app.settingsSearchQuery.clear();
+        app.settingsSearchFocused = false;
+        app.settingsSearchHoverRow = -1;
+        app.settingsSearchSelectedRow = 0;
+        app.sidebarScrollPx = 0;
+        app.sidebarHoverIdx = -1;
+      } else {
+        app.settingsSearchFocused = false;
+      }
+      draw(app);
+      return;
+    }
+    if (ev.sym == XKB_KEY_Up || ev.sym == XKB_KEY_Down) {
+      const std::vector<int> sres = settings_search_collect(app.settingsSearchQuery, app.monitorsTab.kind);
+      const int n = static_cast<int>(sres.size());
+      if (n > 0) {
+        int sel = app.settingsSearchSelectedRow;
+        if (ev.sym == XKB_KEY_Up) sel = (sel <= 0) ? n - 1 : sel - 1;
+        else sel = (sel >= n - 1) ? 0 : sel + 1;
+        app.settingsSearchSelectedRow = sel;
+        app.settingsSearchHoverRow = sel;
+        // Keep selection visible.
+        const int viewH = app.height - kContentTop - kSpacingL;
+        const int totalH = kSidebarTabBaseY + n * kSettingsSearchResultPitch + 8;
+        const int maxScroll = std::max(0, totalH - viewH);
+        const int rowTop = settings_sidebar_tabs_base_y() + sel * kSettingsSearchResultPitch;
+        const int rowBot = rowTop + kSettingsSearchResultH;
+        const int visTop = app.sidebarScrollPx + settings_sidebar_tabs_base_y();
+        const int visBot = visTop + (viewH - (settings_sidebar_tabs_base_y() - kContentTop));
+        if (rowTop < visTop) app.sidebarScrollPx = std::max(0, rowTop - settings_sidebar_tabs_base_y());
+        else if (rowBot > visBot) app.sidebarScrollPx = std::min(maxScroll, rowBot - (settings_sidebar_tabs_base_y() + (viewH - (settings_sidebar_tabs_base_y() - kContentTop))));
+        app.sidebarScrollPx = std::clamp(app.sidebarScrollPx, 0, maxScroll);
+      }
+      draw(app);
+      return;
+    }
+    if (sctrl && app.clipboard.is_available() && (ev.sym == XKB_KEY_v || ev.sym == XKB_KEY_V) && app.wl.display()) {
+      std::string pasted = app.clipboard.read_selection_text(app.wl.display());
+      pasted.erase(std::remove(pasted.begin(), pasted.end(), '\r'), pasted.end());
+      pasted.erase(std::remove(pasted.begin(), pasted.end(), '\n'), pasted.end());
+      if (!pasted.empty()) {
+        if (app.settingsSearchQuery.size() + pasted.size() > 64) pasted.resize(64 - app.settingsSearchQuery.size());
+        app.settingsSearchQuery += pasted;
+        app.settingsSearchSelectedRow = 0;
+        app.settingsSearchHoverRow = -1;
+        app.sidebarScrollPx = 0;
+        draw(app);
+      }
+      return;
+    }
+    if (ev.sym == XKB_KEY_BackSpace) {
+      if (!app.settingsSearchQuery.empty()) {
+        while (!app.settingsSearchQuery.empty() && (app.settingsSearchQuery.back() & 0xC0) == 0x80)
+          app.settingsSearchQuery.pop_back();
+        if (!app.settingsSearchQuery.empty()) app.settingsSearchQuery.pop_back();
+        app.settingsSearchSelectedRow = 0;
+        app.settingsSearchHoverRow = -1;
+        app.sidebarScrollPx = 0;
+        draw(app);
+      }
+      return;
+    }
+    if (ev.utf8_len > 0 && app.settingsSearchQuery.size() < 64) {
+      app.settingsSearchQuery.append(ev.utf8.data(), static_cast<size_t>(ev.utf8_len));
+      app.settingsSearchSelectedRow = 0;
+      app.settingsSearchHoverRow = -1;
+      app.sidebarScrollPx = 0;
+      draw(app);
+      return;
+    }
     return;
   }
 
@@ -2824,7 +3134,8 @@ bool embed_try_keyboard(std::uint32_t keycode, std::uint32_t state, xkb_state* x
   }
 
   if (!g_embed->widgetPickerOpen && !wifi_password_prompt_visible(*g_embed) && !keyring_prompt_visible(*g_embed) &&
-      !g_embed->defaultAppPickerOpen && !g_embed->timeZonePickerOpen && !g_embed->timeCustomFormatActive)
+      !g_embed->defaultAppPickerOpen && !g_embed->timeZonePickerOpen && !g_embed->timeCustomFormatActive &&
+      !g_embed->settingsSearchFocused)
     return false;
 
   eh::wayland::WaylandSeat::KeyboardEvent ev{};

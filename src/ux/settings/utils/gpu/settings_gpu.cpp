@@ -176,3 +176,39 @@ bool settings_present_vk_raster(App& app, int buf_w, int buf_h, bool* transient_
   return true;
 #endif
 }
+
+bool settings_present_vk_raster_damaged(App& app, int buf_w, int buf_h, bool* transient_failure,
+                                        const eh::wayland::DamageRegion& frame_damage,
+                                        eh::wayland::DamageRegion* effective_damage_out) {
+  debug_log("vulkan", "settings_present_vk_raster_damaged: app=%p %dx%d spans=%zu full=%d",
+            (void*)&app, buf_w, buf_h, frame_damage.span_count(),
+            frame_damage.full() ? 1 : 0);
+#if defined(EH_NO_VULKAN_LOADER) && EH_NO_VULKAN_LOADER
+  (void)app;
+  (void)buf_w;
+  (void)buf_h;
+  (void)frame_damage;
+  if (transient_failure) *transient_failure = false;
+  if (effective_damage_out) effective_damage_out->clear();
+  return false;
+#else
+  bool transient = false;
+  if (!app.vkDisplay || !app.vkLayer ||
+      !app.vkLayer->present_cpu_bgra(*app.vkDisplay, app.glRaster.data(), buf_w, buf_h,
+                                     app.glRaster.stride(), &transient, frame_damage,
+                                     effective_damage_out)) {
+    if (transient_failure) *transient_failure = transient;
+    if (transient) {
+      debug_log("vulkan", "settings_present_vk_raster_damaged: transient failure (OUT_OF_DATE)");
+      settings_clear_all_gpu_surfaces(app);
+      return false;
+    }
+    debug_log("vulkan", "settings_present_vk_raster_damaged: non-transient failure, aborting VK");
+    settings_abort_vk(app);
+    return false;
+  }
+  if (transient_failure) *transient_failure = false;
+  debug_log("vulkan", "settings_present_vk_raster_damaged: OK");
+  return true;
+#endif
+}

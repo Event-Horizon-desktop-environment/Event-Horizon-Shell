@@ -77,6 +77,7 @@ struct WaylandState {
   zwlr_gamma_control_manager_v1* gammaControlMgr = nullptr;
   eh::wayland::GammaService* gammaService_ = nullptr;
   ext_idle_notifier_v1* idleNotifier = nullptr;
+  zwp_idle_inhibit_manager_v1* idleInhibitMgr = nullptr;
   ext_session_lock_manager_v1* sessionLockMgr = nullptr;
   ext_background_effect_manager_v1* bgEffectMgr = nullptr;
   zwp_pointer_constraints_v1* pointerConstraints = nullptr;

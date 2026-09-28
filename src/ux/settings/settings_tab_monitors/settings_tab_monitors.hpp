@@ -17,6 +17,8 @@ struct MonitorsTabLayout;
 
 void settings_clamp_monitors_scroll_px(App& app);
 void monitors_wheel_zoom_canvas(App& app, const eh::settings_monitors_tab::MonitorsTabLayout& lay, double delta_px);
+bool monitors_canvas_drag_fit(const App& app, int canvas_w, int canvas_h, double* min_x,
+                              double* min_y, double* sf);
 
 // Layout constants.
 static constexpr int kMonToolbarBtnW = 92;

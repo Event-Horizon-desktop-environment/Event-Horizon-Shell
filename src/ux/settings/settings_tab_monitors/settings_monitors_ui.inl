@@ -294,6 +294,7 @@ static void monitors_center_canvas_view(App& app, const eh::settings_monitors_ta
 
 static void monitors_canvas_transform(const App& app, const eh::settings_monitors_tab::MonitorsTabLayout& lay,
                                       double* min_x, double* min_y, double* sf_out) {
+  if (monitors_canvas_drag_fit(app, lay.canvas_w, lay.canvas_h, min_x, min_y, sf_out)) return;
   std::vector<eh::settings_monitors_tab::ArrangeRect> rects;
   eh::settings_monitors_tab::layout_rects_from_outputs(app.monitorsTab.outputs, app.monitorsTab.caps, &rects);
   double span_w = 1, span_h = 1, fit_scale = 1;

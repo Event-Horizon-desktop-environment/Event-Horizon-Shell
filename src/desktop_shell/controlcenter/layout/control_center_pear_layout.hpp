@@ -56,7 +56,8 @@ enum class PearToggle : unsigned char {
   ColorScheme,
   Camera,
   Cmd1,
-  Cmd2
+  Cmd2,
+  Redeye
 };
 
 // Single source of truth for the PearCenter compact popup. Paint, hit-testing,

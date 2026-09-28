@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 
 #include <cairo/cairo.h>
 
@@ -239,18 +240,151 @@ inline void Slider::drawValuePopup(cairo_t* cr, float tc, float ty, float tw, fl
   (void)tw;
   if (!showValueLabel_ || valueLabel_.empty()) return;
 
-  cairo_text_extents_t te{};
-  cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-  cairo_set_font_size(cr, 10);
+  // Fast path: the popup used to rasterize its text with cairo_text_path +
+  // a 2.2px stroke + fill EVERY frame (~20-45us during drags, when the value
+  // changes each frame). Glyph shapes for a 10px bold Sans value string come
+  // from a tiny alphabet (digits, '.', 'x', "nits"), so pre-render each
+  // distinct glyph ONCE (white fill + dark outline baked in with the same ops
+  // as the old path) and blit per frame. Same for the rounded-rect background
+  // (keyed by its computed width) and the arrow (shape-constant, tinted via
+  // mask). Geometry, advances and colors match the old path exactly (toy font
+  // has no kerning/ligatures, so per-glyph advances sum to the whole-string
+  // advance). One known delta: adjacent glyphs' 2.2px outlines overlap, and
+  // separate per-glyph strokes double-darken those ~1px seam columns versus
+  // the old single combined stroke (up to ~127 channel delta in seam pixels,
+  // invisible at 1x, measurable under magnification).
+  struct PEntry {
+    cairo_surface_t* surf = nullptr;
+    int sw = 0, sh = 0;
+    float adv = 0;  // user-unit x advance
+    float xb = 0, yb = 0;  // bearing box top-left, user units from baseline origin
+  };
+  static std::unordered_map<uint64_t, PEntry> s_glyphs;
+  static std::unordered_map<uint64_t, PEntry> s_bgs;
+  static cairo_surface_t* s_arrow = nullptr;
+  static int s_arrowSw = 0, s_arrowSh = 0, s_arrowDsQ = 0;
 
-  // Size the popup to the label so long values stay readable.
-  cairo_text_extents(cr, valueLabel_.c_str(), &te);
-  const float popupW = std::clamp(static_cast<float>(te.x_advance) + 18.0f, 44.0f, 180.0f);
+  cairo_matrix_t ctm;
+  cairo_get_matrix(cr, &ctm);
+  double ds = std::hypot(ctm.xx, ctm.xy);
+  if (!(ds > 0.0) || !std::isfinite(ds)) ds = 1.0;
+  const int dsQ = static_cast<int>(std::lround(ds * 128.0));
+  const int alphaQ = std::clamp(static_cast<int>(std::lround(alpha * 255.0f)), 0, 255);
+
+  auto clear_glyphs = []() {
+    for (auto& kv : s_glyphs)
+      if (kv.second.surf) cairo_surface_destroy(kv.second.surf);
+    s_glyphs.clear();
+  };
+  auto clear_bgs = []() {
+    for (auto& kv : s_bgs)
+      if (kv.second.surf) cairo_surface_destroy(kv.second.surf);
+    s_bgs.clear();
+  };
+
+  // Decode one UTF-8 code point; advances *p past it (U+FFFD on bad input).
+  auto utf8_next = [](const char*& p) -> uint32_t {
+    const unsigned char c0 = static_cast<unsigned char>(*p);
+    if (c0 < 0x80) {
+      if (c0 == 0) return 0;
+      ++p;
+      return c0;
+    }
+    if ((c0 & 0xE0) == 0xC0) {
+      const unsigned char c1 = static_cast<unsigned char>(p[1]);
+      if ((c1 & 0xC0) != 0x80) { ++p; return 0xFFFD; }
+      p += 2;
+      return (static_cast<uint32_t>(c0 & 0x1F) << 6) | (c1 & 0x3F);
+    }
+    if ((c0 & 0xF0) == 0xE0) {
+      const unsigned char c1 = static_cast<unsigned char>(p[1]);
+      const unsigned char c2 = static_cast<unsigned char>(p[2]);
+      if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80) { ++p; return 0xFFFD; }
+      p += 3;
+      return (static_cast<uint32_t>(c0 & 0x0F) << 12) | (static_cast<uint32_t>(c1 & 0x3F) << 6) |
+             (c2 & 0x3F);
+    }
+    if ((c0 & 0xF8) == 0xF0) {
+      const unsigned char c1 = static_cast<unsigned char>(p[1]);
+      const unsigned char c2 = static_cast<unsigned char>(p[2]);
+      const unsigned char c3 = static_cast<unsigned char>(p[3]);
+      if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80) {
+        ++p;
+        return 0xFFFD;
+      }
+      p += 4;
+      return (static_cast<uint32_t>(c0 & 0x07) << 18) | (static_cast<uint32_t>(c1 & 0x3F) << 12) |
+             (static_cast<uint32_t>(c2 & 0x3F) << 6) | (c3 & 0x3F);
+    }
+    ++p;
+    return 0xFFFD;
+  };
+
+  // Total advance from cached (or freshly measured) per-glyph advances.
+  float totalAdv = 0.0f;
+  {
+    const char* p = valueLabel_.c_str();
+    while (*p) {
+      const char* start = p;
+      const uint32_t cp = utf8_next(p);
+      if (cp == 0) break;
+      const uint64_t gkey =
+          (static_cast<uint64_t>(cp) << 24) | (static_cast<uint64_t>(dsQ & 0xFFFF) << 8) |
+          static_cast<uint64_t>(alphaQ & 0xFF);
+      auto git = s_glyphs.find(gkey);
+      if (git != s_glyphs.end() && git->second.surf) {
+        totalAdv += git->second.adv;
+        continue;
+      }
+      // Cold glyph: measure with the same toy-font calls the old path used.
+      char buf[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+      size_t bl = 0;
+      for (const char* q = start; q < p && bl < sizeof(buf) - 1; ++q) buf[bl++] = *q;
+      cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+      cairo_set_font_size(cr, 10);
+      cairo_text_extents_t te{};
+      cairo_text_extents(cr, buf, &te);
+      totalAdv += static_cast<float>(te.x_advance);
+      // Render white fill + dark outline once (the old per-frame ops).
+      if (s_glyphs.size() >= 256) clear_glyphs();
+      const int pad = 3;
+      const int gsw = std::max(1, static_cast<int>(std::ceil((te.width + 2 * pad) * ds)));
+      const int gsh = std::max(1, static_cast<int>(std::ceil((te.height + 2 * pad) * ds)));
+      PEntry e;
+      e.surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, gsw, gsh);
+      e.sw = gsw;
+      e.sh = gsh;
+      e.adv = static_cast<float>(te.x_advance);
+      e.xb = static_cast<float>(te.x_bearing);
+      e.yb = static_cast<float>(te.y_bearing);
+      cairo_t* tmp = cairo_create(e.surf);
+      cairo_set_operator(tmp, CAIRO_OPERATOR_CLEAR);
+      cairo_paint(tmp);
+      cairo_set_operator(tmp, CAIRO_OPERATOR_OVER);
+      cairo_scale(tmp, ds, ds);
+      cairo_translate(tmp, pad - te.x_bearing, pad - te.y_bearing);
+      cairo_select_font_face(tmp, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+      cairo_set_font_size(tmp, 10);
+      cairo_new_path(tmp);
+      cairo_move_to(tmp, 0, 0);
+      cairo_text_path(tmp, buf);
+      cairo_set_line_width(tmp, 2.2f);
+      cairo_set_line_join(tmp, CAIRO_LINE_JOIN_ROUND);
+      cairo_set_line_cap(tmp, CAIRO_LINE_CAP_ROUND);
+      cairo_set_source_rgba(tmp, 0.0f, 0.0f, 0.0f, alpha * 0.9f);
+      cairo_stroke_preserve(tmp);
+      cairo_set_source_rgba(tmp, 1.0f, 1.0f, 1.0f, alpha);
+      cairo_fill(tmp);
+      cairo_destroy(tmp);
+      s_glyphs.emplace(gkey, e);
+    }
+  }
+
+  // Same popup geometry the old code computed (te.x_advance == totalAdv: no kerning in toy API).
+  const float popupW = std::clamp(totalAdv + 18.0f, 44.0f, 180.0f);
   const float popupH = 26.0f;
   const float popupR = 9.0f;
 
-  // Center above the thumb, kept fully inside the slider geometry so it never
-  // slides over row labels or off the side of the control.
   float popupX = tc - popupW * 0.5f;
   if (popupW <= w_) {
     popupX = std::clamp(popupX, x_, x_ + w_ - popupW);
@@ -260,42 +394,109 @@ inline void Slider::drawValuePopup(cairo_t* cr, float tc, float ty, float tw, fl
   const float thumbR = kThumbSize[static_cast<int>(size_)] * 0.5f;
   const float popupY = ty - popupH - 6.0f - thumbR;
 
-  cairo_save(cr);
+  // Background (accent rounded rect), keyed by exact width + colors + scale.
+  {
+    const int pwQ = static_cast<int>(std::lround(popupW * 64.0f));
+    const int acR = std::clamp(static_cast<int>(std::lround(accentR_ * 255.0f)), 0, 255);
+    const int acG = std::clamp(static_cast<int>(std::lround(accentG_ * 255.0f)), 0, 255);
+    const int acB = std::clamp(static_cast<int>(std::lround(accentB_ * 255.0f)), 0, 255);
+    const uint64_t bkey = (static_cast<uint64_t>(pwQ) << 40) |
+                          (static_cast<uint64_t>(acR) << 32) | (static_cast<uint64_t>(acG) << 24) |
+                          (static_cast<uint64_t>(acB) << 16) |
+                          (static_cast<uint64_t>(alphaQ) << 8) | static_cast<uint64_t>(dsQ & 0xFF);
+    auto bit = s_bgs.find(bkey);
+    if (bit == s_bgs.end() || !bit->second.surf) {
+      if (s_bgs.size() >= 32) clear_bgs();
+      const int bsw = std::max(1, static_cast<int>(std::ceil(popupW * ds)));
+      const int bsh = std::max(1, static_cast<int>(std::ceil(popupH * ds)));
+      PEntry e;
+      e.surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, bsw, bsh);
+      e.sw = bsw;
+      e.sh = bsh;
+      cairo_t* tmp = cairo_create(e.surf);
+      cairo_set_operator(tmp, CAIRO_OPERATOR_CLEAR);
+      cairo_paint(tmp);
+      cairo_set_operator(tmp, CAIRO_OPERATOR_OVER);
+      cairo_scale(tmp, ds, ds);
+      cairo_new_path(tmp);
+      cairo_arc(tmp, popupR, popupR, popupR, M_PI, 1.5 * M_PI);
+      cairo_arc(tmp, popupW - popupR, popupR, popupR, 1.5 * M_PI, 2.0 * M_PI);
+      cairo_arc(tmp, popupW - popupR, popupH - popupR, popupR, 0.0, 0.5 * M_PI);
+      cairo_arc(tmp, popupR, popupH - popupR, popupR, 0.5 * M_PI, M_PI);
+      cairo_close_path(tmp);
+      cairo_set_source_rgba(tmp, accentR_, accentG_, accentB_, alpha * 0.96f);
+      cairo_fill(tmp);
+      cairo_destroy(tmp);
+      s_bgs.emplace(bkey, e);
+      bit = s_bgs.find(bkey);
+    }
+    if (bit != s_bgs.end() && bit->second.surf) {
+      cairo_save(cr);
+      cairo_translate(cr, popupX, popupY);
+      cairo_scale(cr, 1.0 / ds, 1.0 / ds);
+      cairo_set_source_surface(cr, bit->second.surf, 0, 0);
+      cairo_rectangle(cr, 0, 0, bit->second.sw, bit->second.sh);
+      cairo_fill(cr);
+      cairo_restore(cr);
+    }
+  }
 
-  // Popup background (semi-rounded)
-  cairo_new_path(cr);
-  cairo_arc(cr, popupX + popupR, popupY + popupR, popupR, M_PI, 1.5 * M_PI);
-  cairo_arc(cr, popupX + popupW - popupR, popupY + popupR, popupR, 1.5 * M_PI, 2.0 * M_PI);
-  cairo_arc(cr, popupX + popupW - popupR, popupY + popupH - popupR, popupR, 0.0, 0.5 * M_PI);
-  cairo_arc(cr, popupX + popupR, popupY + popupH - popupR, popupR, 0.5 * M_PI, M_PI);
-  cairo_close_path(cr);
-  cairo_set_source_rgba(cr, accentR_, accentG_, accentB_, alpha * 0.96f);
-  cairo_fill(cr);
+  // Arrow (shape-constant white triangle, tinted via mask so accent stays out of the key).
+  {
+    const int asw = std::max(1, static_cast<int>(std::ceil(10.0 * ds)));
+    const int ash = std::max(1, static_cast<int>(std::ceil(7.0 * ds)));
+    if (!s_arrow || s_arrowDsQ != dsQ || s_arrowSw != asw || s_arrowSh != ash) {
+      if (s_arrow) cairo_surface_destroy(s_arrow);
+      s_arrow = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, asw, ash);
+      s_arrowSw = asw;
+      s_arrowSh = ash;
+      s_arrowDsQ = dsQ;
+      cairo_t* tmp = cairo_create(s_arrow);
+      cairo_set_operator(tmp, CAIRO_OPERATOR_CLEAR);
+      cairo_paint(tmp);
+      cairo_set_operator(tmp, CAIRO_OPERATOR_OVER);
+      cairo_scale(tmp, ds, ds);
+      cairo_move_to(tmp, 0, 0);
+      cairo_line_to(tmp, 10.0, 0);
+      cairo_line_to(tmp, 5.0, 7.0);
+      cairo_close_path(tmp);
+      cairo_set_source_rgba(tmp, 1, 1, 1, 1);
+      cairo_fill(tmp);
+      cairo_destroy(tmp);
+    }
+    cairo_save(cr);
+    cairo_translate(cr, tc - 5.0, popupY + popupH);
+    cairo_scale(cr, 1.0 / ds, 1.0 / ds);
+    cairo_set_source_rgba(cr, accentR_, accentG_, accentB_, alpha * 0.96f);
+    cairo_mask_surface(cr, s_arrow, 0, 0);
+    cairo_restore(cr);
+  }
 
-  // Arrow from popup to thumb
-  cairo_move_to(cr, tc - 5.0f, popupY + popupH);
-  cairo_line_to(cr, tc, popupY + popupH + 7.0f);
-  cairo_line_to(cr, tc + 5.0f, popupY + popupH);
-  cairo_close_path(cr);
-  cairo_set_source_rgba(cr, accentR_, accentG_, accentB_, alpha * 0.96f);
-  cairo_fill(cr);
-
-  // Label text stroked dark + filled white so it stays readable even on harsh
-  // bright accents (e.g. light yellow color themes).
-  const float textX = popupX + (popupW - te.x_advance) * 0.5f;
-  const float textY = popupY + popupH * 0.5f + 4.0f;
-  cairo_new_path(cr);
-  cairo_move_to(cr, textX, textY);
-  cairo_text_path(cr, valueLabel_.c_str());
-  cairo_set_line_width(cr, 2.2f);
-  cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-  cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-  cairo_set_source_rgba(cr, 0.0f, 0.0f, 0.0f, alpha * 0.9f);
-  cairo_stroke_preserve(cr);
-  cairo_set_source_rgba(cr, 1.0f, 1.0f, 1.0f, alpha);
-  cairo_fill(cr);
-
-  cairo_restore(cr);
+  // Text: blit cached glyphs along the baseline (same positions as text_path layout).
+  {
+    const float textX = popupX + (popupW - totalAdv) * 0.5f;
+    const float textY = popupY + popupH * 0.5f + 4.0f;
+    float cur = textX;
+    const char* p = valueLabel_.c_str();
+    while (*p) {
+      const uint32_t cp = utf8_next(p);
+      if (cp == 0) break;
+      const uint64_t gkey =
+          (static_cast<uint64_t>(cp) << 24) | (static_cast<uint64_t>(dsQ & 0xFFFF) << 8) |
+          static_cast<uint64_t>(alphaQ & 0xFF);
+      auto git = s_glyphs.find(gkey);
+      if (git == s_glyphs.end() || !git->second.surf) break;  // rendered above; be safe
+      const PEntry& e = git->second;
+      cairo_save(cr);
+      cairo_translate(cr, cur + e.xb - 3.0, textY + e.yb - 3.0);
+      cairo_scale(cr, 1.0 / ds, 1.0 / ds);
+      cairo_set_source_surface(cr, e.surf, 0, 0);
+      cairo_rectangle(cr, 0, 0, e.sw, e.sh);
+      cairo_fill(cr);
+      cairo_restore(cr);
+      cur += e.adv;
+    }
+  }
 }
 
 inline void Slider::paint(cairo_t* cr) const {

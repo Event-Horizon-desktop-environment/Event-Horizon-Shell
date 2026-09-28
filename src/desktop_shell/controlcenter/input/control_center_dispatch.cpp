@@ -1,5 +1,7 @@
 #include "desktop_shell/controlcenter/input/control_center_dispatch.hpp"
 
+#include "services/redeye/redeye_service.hpp"
+
 #include "desktop_shell/controlcenter/input/control_center_bus_hook.hpp"
 #include "desktop_shell/controlcenter/input/control_center_hit.hpp"
 #include "desktop_shell/controlcenter/input/control_center_pear_hit.hpp"
@@ -126,6 +128,9 @@ static void cc_update_hover(DockApp& app) {
                 break;
               case eh::shell::dock::control_center::PearToggle::Camera:
                 t = CcHoverTarget::CameraCard;
+                break;
+              case eh::shell::dock::control_center::PearToggle::Redeye:
+                t = CcHoverTarget::RedeyeCard;
                 break;
               case eh::shell::dock::control_center::PearToggle::Cmd1:
                 t = CcHoverTarget::CmdCard1;
@@ -331,6 +336,16 @@ bool handle_button_press(DockApp& app, uint32_t serial) {
                 else if (!pearcc::pear_spawn_screenshot_select())
                   pearcc::cc_log("camera: screenshot selection spawn failed");
                 return true;
+              case pearcc::PearToggle::Redeye: {
+                const bool on = !eh::redeye::RedeyeService::instance().isEnabled();
+                wl_surface* barSurf = nullptr;
+                if (!app.dockLayers.empty() && app.dockLayers[0] && app.dockLayers[0]->surface)
+                  barSurf = app.dockLayers[0]->surface;
+                eh::redeye::RedeyeService::instance().setEnabled(on, barSurf);
+                popup_draw_surface(app);
+                wl_display_flush(app.display);
+                return true;
+              }
               case pearcc::PearToggle::Cmd1:
                 pear_spawn(cfg.cmdRun1);
                 break;

@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include "ux/settings/utils/scroll/settings_scroll.hpp"
+#include "ux/settings/utils/events/settings_event_handlers.hpp"
 #include "ux/settings/utils/widget_picker/settings_widget_drag.hpp"
 #include "ux/settings/utils/widget_picker/widget_picker.hpp"
 #include "ux/settings/settings_tab_desktop_widgets/world_clock_popup.hpp"
@@ -198,6 +199,7 @@ void settings_clamp_time_scroll_px(App& app) {
 }
 
 void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
+  settings_note_input(app);
   if (world_clock_popup_visible(app)) {
     world_clock_popup_consume_scroll(app, delta_px);
     return;

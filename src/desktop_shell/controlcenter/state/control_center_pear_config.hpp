@@ -32,6 +32,7 @@ struct PearCenterConfig {
   bool showMediaPlayer = true;
   bool showCamera = true;
   std::string cameraCmd;
+  bool showRedeye = true;
   bool showCmd1 = false;
   bool showCmd2 = false;
   bool showPercentage = false;
@@ -85,6 +86,7 @@ inline PearCenterConfig pear_center_config(const eh::config::ShellConfig& sc,
   c.showMediaPlayer = getBool("pear_show_mediaplayer", true);
   c.showCamera = getBool("pear_show_camera", true);
   c.cameraCmd = get("pear_camera_cmd", "");
+  c.showRedeye = getBool("pear_show_redeye", true);
   c.showCmd1 = getBool("pear_show_cmd1", false);
   c.showCmd2 = getBool("pear_show_cmd2", false);
   c.showPercentage = getBool("pear_show_percentage", false);

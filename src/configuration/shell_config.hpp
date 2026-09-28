@@ -328,6 +328,7 @@ struct PowerSettings {
   int displaySleepTimeoutMin = 10;
   bool idleSuspend = true;
   int idleSuspendTimeoutMin = 30;
+  bool redeyeEnabled = false;
   int powerButtonAction = 0;  // 0=ask, 1=suspend, 2=hibernate, 3=shutdown
   int lidCloseAction = 1;     // 0=nothing, 1=suspend, 2=hibernate
   bool showBatteryPercentage = true;

@@ -638,6 +638,7 @@ shell_cpp_sources = [
   'src/services/audio/pipewire_service.cpp',
   'src/services/network/types/network_secret_agent.cpp',
   'src/services/keyring/secret_service_daemon.cpp',
+  'src/services/redeye/redeye_service.cpp',
   'src/services/global_keyboard/global_keyboard_handler.cpp',
   'src/dialog/dialog_base.cpp',
   'src/dialog/file_chooser_dialog.cpp',
@@ -654,6 +655,11 @@ shell_cpp_sources = [
   'src/desktop_shell/dock/pinned/dock_pinned.cpp',
 
   'src/desktop_shell/spotlight/search/spotlight_query.cpp',
+  'src/desktop_shell/spotlight/providers/seeker_registry.cpp',
+  'src/desktop_shell/spotlight/providers/seeker_math.cpp',
+  'src/desktop_shell/spotlight/providers/seeker_power.cpp',
+  'src/desktop_shell/spotlight/providers/seeker_glyphs.cpp',
+  'src/desktop_shell/spotlight/providers/seeker_windows.cpp',
   'src/desktop_shell/spotlight/search/spotlight_keyboard.cpp',
   'src/desktop_shell/spotlight/paint/popup_paint_spotlight.cpp',
   'src/desktop_shell/power_confirm/power_confirm.cpp',
@@ -1345,6 +1351,16 @@ test_hit_registry = executable('test_hit_registry',
   install: false,
 )
 test('hit_registry', test_hit_registry)
+
+# ── MPRIS partial-metadata track-change test ────────────────────────────────
+test_mpris_track_change = executable('test_mpris_track_change',
+  ['test/test_mpris_track_change.cpp'],
+  include_directories: test_inc,
+  dependencies: [],
+  cpp_args: test_cpp_args,
+  install: false,
+)
+test('mpris_track_change', test_mpris_track_change)
 
 # ── Test & Benchmark Targets ─────────────────────────────────────────────────
 subdir('tests')

@@ -82,6 +82,7 @@
 #include "desktop_shell/notifications/types/notifications_notify.hpp"
 
 #include "ux/settings/common/settings_common.hpp"
+#include "ux/settings/common/retain/retained_surface.hpp"
 #include "ux/settings/settings_tab_launcher/settings_tab_launcher.hpp"
 #include "ux/settings/settings_tab_workspaces/settings_tab_workspaces.hpp"
 #include "ux/settings/settings_tab_bing/settings_tab_bing.hpp"
@@ -118,6 +119,32 @@
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 #include "ux/settings/utils/scroll/settings_scroll.hpp"
 #include "ux/settings/utils/events/settings_event_handlers.hpp"
+#include "ux/settings/utils/search/settings_search.hpp"
+#include "desktop_shell/common/time/text_caret.hpp"
+
+static int settings_search_text_width_px(const char* text, float fontSize, int weight) {
+  if (!text || !text[0]) return 0;
+  cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
+  if (!surf || cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+    if (surf) cairo_surface_destroy(surf);
+    return 0;
+  }
+  cairo_t* mcr = cairo_create(surf);
+  auto* layout = pango_cairo_create_layout(mcr);
+  auto* desc = pango_font_description_new();
+  pango_font_description_set_family(desc, "Inter");
+  pango_font_description_set_size(desc, static_cast<int>(fontSize * PANGO_SCALE));
+  pango_font_description_set_weight(desc, static_cast<PangoWeight>(weight));
+  pango_layout_set_font_description(layout, desc);
+  pango_layout_set_text(layout, text, -1);
+  int tw = 0, th = 0;
+  pango_layout_get_pixel_size(layout, &tw, &th);
+  pango_font_description_free(desc);
+  g_object_unref(layout);
+  cairo_destroy(mcr);
+  cairo_surface_destroy(surf);
+  return tw;
+}
 
 static uint64_t g_settings_content_draw_count = 0;
 
@@ -319,7 +346,12 @@ static const SidebarItemDef kSidebarDefs[] = {
 static constexpr int kSidebarDefCount = sizeof(kSidebarDefs) / sizeof(kSidebarDefs[0]);
 
 static int compute_sidebar_total_height(const App& app) {
-   
+  if (!app.settingsSearchQuery.empty()) {
+    const std::vector<int> res = settings_search_collect(app.settingsSearchQuery, app.monitorsTab.kind);
+    const int n = static_cast<int>(res.size());
+    if (n == 0) return kSidebarTabBaseY + 60;
+    return kSidebarTabBaseY + n * kSettingsSearchResultPitch + 8;
+  }
   int h = kSidebarTabBaseY;
   for (int i = 0; i < kSidebarDefCount; ++i) {
     const auto& def = kSidebarDefs[i];
@@ -405,8 +437,10 @@ static void settings_surface_frame_done(void* data, wl_callback* cb, uint32_t ti
   const bool needPendingRedraw = app.pendingRedraw;
   const bool redrew = hasContentChange || needScrollAnim || needPendingRedraw;
   if (redrew) {
-    debug_log("settings", "frame_done: redraw needAnim=%d needScroll=%d needPendingRedraw=%d embedPresentT=%.3f",
-              needAnim, needScrollAnim, needPendingRedraw, app.embedPresentT);
+    debug_log("settings", "frame_done: redraw needAnim=%d needScroll=%d needPendingRedraw=%d needThumb=%d needWallHover=%d coalescedDrag=%d needTog=%d scrollNeedsRedraw=%d tab=%d embedPresentT=%.3f",
+              needAnim, needScrollAnim, needPendingRedraw, needThumb ? 1 : 0,
+              needWallpaperHoverAnim ? 1 : 0, coalescedWidgetDrag ? 1 : 0, needTogAnim ? 1 : 0,
+              app.settingsScrollNeedsRedraw ? 1 : 0, app.activeTab, app.embedPresentT);
     app.settingsScrollNeedsRedraw = false;
     if (hasContentChange) app.tabContentDirty = true;
     app.pendingRedraw = false;
@@ -429,8 +463,10 @@ void schedule_settings_surface_frame(App& app) {
     debug_log("settings", "schedule_frame: nothing pending, skip");
     return;
   }
-  debug_log("settings", "schedule_frame: needAnim=%d needScroll=%d pendingRedraw=%d embedPresentT=%.3f",
-            needAnim, needScrollAnim, needPendingRedraw, app.embedPresentT);
+  debug_log("settings", "schedule_frame: needAnim=%d needScroll=%d pendingRedraw=%d needThumb=%d needWallHover=%d coalescedDrag=%d needTog=%d scrollNeedsRedraw=%d tab=%d embedPresentT=%.3f",
+            needAnim, needScrollAnim, needPendingRedraw, needThumb ? 1 : 0,
+            needWallpaperHoverAnim ? 1 : 0, needCoalescedWidgetDrag ? 1 : 0, needTogAnim ? 1 : 0,
+            app.settingsScrollNeedsRedraw ? 1 : 0, app.activeTab, app.embedPresentT);
   static const wl_callback_listener kListener = {.done = settings_surface_frame_done};
   app.surfaceFrameCb = wl_surface_frame(app.surface);
   wl_callback_add_listener(app.surfaceFrameCb, &kListener, &app);
@@ -671,10 +707,764 @@ static void settings_paint_mode_dropdown_popups(App& app, cairo_t* cr, int conte
   }
 }
 
-void draw(App& app) {
-  if (!app.surface) {
-    debug_log("settings", "WARN draw: no surface, skipping");
+// ── Tier-2 damage tracking (clip-only phase) ────────────────────────────────
+// Computes the precise dirty region for the coming paint by diffing a compact
+// state snapshot. Painters rasterize clipped to it; commit damages exactly it.
+// Buffers persist across frames, so per-SHM-buffer age tracking (frameSeq +
+// 4-slot damage history) repaints the union of changes since each buffer was
+// last shown. Anything uncertain degrades to full damage (today's behavior).
+
+struct DmgSig {
+  int tab = -999, subTab = -999, w = -1, h = -1;
+  int matugen = -1, glassQ = -1, sideQ = -1;
+  unsigned accQ = 0, outQ = 0, panelQ = 0;
+  uint64_t scrollBits = 0;
+  int monScroll = INT_MIN, sideScroll = INT_MIN;
+  int sel = INT_MIN, dd = INT_MIN, ddHover = INT_MIN, dirty = INT_MIN;
+  int nOut = -1;
+  uint64_t zoomBits = 0, panXBits = 0, panYBits = 0, normBits = 0;
+  std::string status;
+  std::vector<std::string> outs;
+  uint64_t hovMask = 0;
+  int pillHov = INT_MIN;
+  int scaleDrag = INT_MIN, hyprDrag = INT_MIN;
+  int canvasDrag = INT_MIN, panArmed = INT_MIN;
+  int sideHovD = INT_MIN, sideHovS = INT_MIN, sideSelD = INT_MIN, sideSelS = INT_MIN;
+  std::string sideExp;
+  int kind = -1;
+  unsigned modals = 0;
+  int mergedFlag = 0;
+  std::string searchQ;
+  int searchFocus = INT_MIN;
+  int searchHover = INT_MIN;
+  int searchSel = INT_MIN;
+  int searchBarHover = INT_MIN;
+};
+
+namespace {
+int dmg_no_damage() {
+  static const int v = []() {
+    const char* e = std::getenv("EH_NO_DAMAGE");
+    return (e && e[0] != '\0' && e[0] != '0') ? 1 : 0;
+  }();
+  return v;
+}
+
+uint64_t dmg_dbits(double d) {
+  uint64_t u = 0;
+  static_assert(sizeof(u) == sizeof(d));
+  std::memcpy(&u, &d, sizeof(d));
+  return u;
+}
+
+uint32_t dmg_rgb(float r, float g, float b) {
+  const auto q = [](float v) -> uint32_t {
+    return static_cast<uint32_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
+  };
+  return (q(r) << 16) | (q(g) << 8) | q(b);
+}
+
+// Sidebar row doc-Y for (defIdx, subIdx) under the CURRENT expand/scroll state.
+bool dmg_sb_row_y(const App& app, int defIdx, int subIdx, int* y, int* h) {
+  int curY = kSidebarTabBaseY;
+  for (int i = 0; i < kSidebarDefCount; ++i) {
+    const auto& def = kSidebarDefs[i];
+    if (def.id == 16 && app.monitorsTab.kind != CompositorKind::Mango) continue;
+    if (def.id == 33 && app.monitorsTab.kind != CompositorKind::Hyprland) continue;
+    if (i == defIdx && subIdx < 0) {
+      *y = curY;
+      *h = kSidebarTabH;
+      return true;
+    }
+    curY += kSidebarTabPitchY;
+    const bool expanded = app.sidebarExpanded.find(def.label) != app.sidebarExpanded.end();
+    if (def.subCount > 0 && expanded) {
+      for (int j = 0; j < def.subCount; ++j) {
+        if (i == defIdx && j == subIdx) {
+          *y = curY;
+          *h = 36;
+          return true;
+        }
+        curY += 36;
+      }
+    }
+  }
+  return false;
+}
+
+void dmg_sb_sel(const App& app, int* defIdx, int* subIdx) {  *defIdx = -1;
+  *subIdx = -1;
+  int di = 0;
+  for (int i = 0; i < kSidebarDefCount; ++i) {
+    const auto& def = kSidebarDefs[i];
+    if (def.id == 16 && app.monitorsTab.kind != CompositorKind::Mango) continue;
+    if (def.id == 33 && app.monitorsTab.kind != CompositorKind::Hyprland) continue;
+    const bool isExpanded = app.sidebarExpanded.find(def.label) != app.sidebarExpanded.end();
+    bool active = false;
+    if (def.isCategory && def.subCount > 0) {
+      active = (app.activeTab == def.id);
+      if (def.subTabIds) {
+        for (int c = 0; c < def.subCount; ++c)
+          if (def.subTabIds[c] == app.activeTab) active = true;
+      }
+    } else {
+      active = (app.activeTab == def.id);
+    }
+    if (active && def.subTabIds) {
+      for (int j = 0; j < def.subCount; ++j) {
+        if (def.subTabIds[j] == app.activeTab) {
+          *defIdx = di;
+          *subIdx = j;
+          return;
+        }
+      }
+    }
+    if (active) {
+      *defIdx = di;
+      *subIdx = -1;
+      return;
+    }
+    (void)isExpanded;
+    ++di;
+  }
+}
+
+// Damage aging + committed snapshot (Tier 2).
+int dmg_seq = 0;
+int dmg_last_frame[2] = {-1, -1};
+eh::wayland::DamageRegion dmg_hist[4];
+int dmg_hist_seq[4] = {-1, -1, -1, -1};
+DmgSig dmg_committed;
+bool dmg_have_committed = false;
+unsigned long long dmg_skips = 0;
+
+void dmg_emit_rect(eh::wayland::DamageRegion& dmg, int x, int y, int w, int h) {
+  if (w > 0 && h > 0) dmg.add_rect(x, y, w, h);
+}
+
+void dmg_split_fields(const std::string& s, std::vector<std::string>& out) {
+  out.clear();
+  size_t start = 0;
+  for (;;) {
+    const size_t p = s.find('\x1f', start);
+    if (p == std::string::npos) {
+      out.push_back(s.substr(start));
+      break;
+    }
+    out.push_back(s.substr(start, p - start));
+    start = p + 1;
+  }
+}
+
+void dmg_out_sig(const eh::settings_monitors::MonitorRow& r, std::string& out) {
+  out.clear();
+  out += r.name;
+  out.push_back('\x1f');
+  out += r.resolution;
+  out.push_back('\x1f');
+  out += r.refresh_rate;
+  out.push_back('\x1f');
+  out += r.position;
+  out.push_back('\x1f');
+  out += r.scale;
+  out.push_back('\x1f');
+  out += r.transform;
+  out.push_back('\x1f');
+  out += r.disabled ? '1' : '0';
+  out.push_back('\x1f');
+  out += r.bitdepth;
+  out.push_back('\x1f');
+  out += r.cm;
+  out.push_back('\x1f');
+  out += r.icc;
+  out.push_back('\x1f');
+  out += r.vrr;
+  out.push_back('\x1f');
+  out += r.mirror;
+  out.push_back('\x1f');
+  out += r.sdrbrightness;
+  out.push_back('\x1f');
+  out += r.sdrsaturation;
+  out.push_back('\x1f');
+  out += r.sdr_eotf;
+  out.push_back('\x1f');
+  out += r.supports_hdr;
+  out.push_back('\x1f');
+  out += r.supports_wide_color;
+  out.push_back('\x1f');
+  out += r.sdr_min_luminance;
+  out.push_back('\x1f');
+  out += r.sdr_max_luminance;
+  out.push_back('\x1f');
+  out += r.min_luminance;
+  out.push_back('\x1f');
+  out += r.max_luminance;
+  out.push_back('\x1f');
+  out += r.max_avg_luminance;
+}
+
+void dmg_compute_frame(App& app, int contentX, int contentW, double glassOv, double sideOv,
+                       int mergedThumbs, DmgSig& cur, eh::wayland::DamageRegion& newDamage) {
+  const int W = app.width;
+  const int H = app.height;
+  cur.tab = app.activeTab;
+  cur.subTab = app.activeSubTab;
+  cur.w = W;
+  cur.h = H;
+  cur.matugen = app.drawChromeMatugen ? 1 : 0;
+  cur.glassQ = static_cast<int>(std::lround(glassOv * 1000.0));
+  cur.sideQ = static_cast<int>(std::lround(sideOv * 1000.0));
+  cur.accQ = dmg_rgb(static_cast<float>(app.drawChrome.accentR),
+                     static_cast<float>(app.drawChrome.accentG),
+                     static_cast<float>(app.drawChrome.accentB));
+  cur.outQ = dmg_rgb(static_cast<float>(app.drawChrome.outlineR),
+                     static_cast<float>(app.drawChrome.outlineG),
+                     static_cast<float>(app.drawChrome.outlineB));
+  cur.panelQ = dmg_rgb(static_cast<float>(app.drawChrome.panelFillR),
+                       static_cast<float>(app.drawChrome.panelFillG),
+                       static_cast<float>(app.drawChrome.panelFillB));
+  cur.scrollBits = dmg_dbits(app.settingsScroll.current());
+  cur.monScroll = app.settingsMonitorsScrollPx;
+  cur.sideScroll = app.sidebarScrollPx;
+  cur.kind = static_cast<int>(app.monitorsTab.kind);
+  unsigned modals = 0;
+  if (app.widgetPickerOpen) modals |= 1u << 0;
+  if (app.iconThemePickerOpen) modals |= 1u << 1;
+  if (app.wallpaperFolderPickerOpen) modals |= 1u << 2;
+  if (app.defaultAppPickerOpen) modals |= 1u << 3;
+  if (app.qtColorSchemeDropdownOpen) modals |= 1u << 4;
+  if (wifi_password_prompt_visible(app)) modals |= 1u << 5;
+  if (keyring_prompt_visible(app)) modals |= 1u << 6;
+  if (vpn_add_dialog_visible(app)) modals |= 1u << 7;
+  if (world_clock_popup_visible(app)) modals |= 1u << 8;
+  if (app.hyprlandBezierOpen) modals |= 1u << 9;
+  if (app.hyprlandAnimEditIdx >= 0) modals |= 1u << 10;
+  if (app.hyprlandLayoutDropdownOpen) modals |= 1u << 11;
+  cur.modals = modals;
+  cur.mergedFlag = mergedThumbs > 0 ? 1 : 0;
+
+  const int contentR[4] = {contentX, kContentTop, contentW, H - kContentTop - kSpacingL};
+  const int sideR[4] = {kSpacingL, kContentTop, kSidebarW, H - kContentTop - kSpacingL};
+
+  if (dmg_no_damage()) {
+    newDamage.mark_full();
     return;
+  }
+  if (!dmg_have_committed) {
+    newDamage.mark_full();
+    return;
+  }
+  const DmgSig& prev = dmg_committed;
+  if (cur.w != prev.w || cur.h != prev.h || cur.matugen != prev.matugen ||
+      cur.glassQ != prev.glassQ || cur.sideQ != prev.sideQ || cur.accQ != prev.accQ ||
+      cur.outQ != prev.outQ || cur.panelQ != prev.panelQ || cur.kind != prev.kind ||
+      cur.modals != prev.modals || modals != 0) {
+    newDamage.mark_full();
+    return;
+  }
+
+  const bool needEmbedGroup = app.embedded && app.embedPresentT < 1.0f;
+  const bool animatedContent = wallpaper_thumb_needs_followup_frame(app) ||
+                               app.wallpaperHoverAnim.has_active() || app.settingsScroll.animating() ||
+                               app.wifiToggle.animating() || app.settingsWidgetDragRepaintQueued ||
+                               app.settingsScrollNeedsRedraw || needEmbedGroup;
+  if (needEmbedGroup) {
+    newDamage.mark_full();
+    return;
+  }
+
+  dmg_sb_sel(app, &cur.sideSelD, &cur.sideSelS);
+  {
+    const double pyL = app.pointerY + settings_scroll_px(app);
+    const int sbX = kSpacingL + 8;
+    const int sbW = kSidebarW - 16;
+    int hd = -1, hs = -1;
+    int cy = kSidebarTabBaseY;
+    for (int i = 0; i < kSidebarDefCount; ++i) {
+      const auto& def = kSidebarDefs[i];
+      if (def.id == 16 && app.monitorsTab.kind != CompositorKind::Mango) continue;
+      if (def.id == 33 && app.monitorsTab.kind != CompositorKind::Hyprland) continue;
+      if (app.pointerX >= sbX && app.pointerX < sbX + sbW && pyL >= cy && pyL < cy + kSidebarTabH) {
+        hd = i;
+        hs = -1;
+      }
+      cy += kSidebarTabPitchY;
+      const bool expanded = app.sidebarExpanded.find(def.label) != app.sidebarExpanded.end();
+      if (def.subCount > 0 && expanded) {
+        for (int j = 0; j < def.subCount; ++j) {
+          if (app.pointerX >= sbX && app.pointerX < sbX + sbW && pyL >= cy && pyL < cy + 36) {
+            hd = i;
+            hs = j;
+          }
+          cy += 36;
+        }
+      }
+    }
+    cur.sideHovD = hd;
+    cur.sideHovS = hs;
+  }
+  cur.sideExp.clear();
+  for (int i = 0; i < kSidebarDefCount; ++i) {
+    if (app.sidebarExpanded.find(kSidebarDefs[i].label) != app.sidebarExpanded.end()) {
+      cur.sideExp += kSidebarDefs[i].label;
+      cur.sideExp.push_back('\x1f');
+    }
+  }
+  cur.searchQ = app.settingsSearchQuery;
+  cur.searchFocus = app.settingsSearchFocused ? 1 : 0;
+  cur.searchHover = app.settingsSearchHoverRow;
+  cur.searchSel = app.settingsSearchSelectedRow;
+  cur.searchBarHover = app.settingsSearchBarHover ? 1 : 0;
+  if (cur.searchQ != prev.searchQ || cur.searchFocus != prev.searchFocus ||
+      cur.searchHover != prev.searchHover || cur.searchSel != prev.searchSel ||
+      cur.searchBarHover != prev.searchBarHover) {
+    dmg_emit_rect(newDamage, sideR[0], sideR[1], sideR[2], sideR[3]);
+  }
+  if (cur.sideScroll != prev.sideScroll || cur.sideExp != prev.sideExp ||
+      cur.sideSelD != prev.sideSelD || cur.sideSelS != prev.sideSelS) {
+    dmg_emit_rect(newDamage, sideR[0], sideR[1], sideR[2], sideR[3]);
+  } else {
+    if ((cur.sideHovD != prev.sideHovD || cur.sideHovS != prev.sideHovS) && cur.sideHovD >= 0) {
+      int ry = 0, rh = 0;
+      if (dmg_sb_row_y(app, cur.sideHovD, cur.sideHovS, &ry, &rh))
+        dmg_emit_rect(newDamage, kSpacingL, ry, kSidebarW, rh);
+    }
+    if ((cur.sideHovD != prev.sideHovD || cur.sideHovS != prev.sideHovS) && prev.sideHovD >= 0) {
+      int ry = 0, rh = 0;
+      if (dmg_sb_row_y(app, prev.sideHovD, prev.sideHovS, &ry, &rh))
+        dmg_emit_rect(newDamage, kSpacingL, ry, kSidebarW, rh);
+    }
+  }
+
+  if (animatedContent || mergedThumbs > 0) {
+    dmg_emit_rect(newDamage, contentR[0], contentR[1], contentR[2], contentR[3]);
+    return;
+  }
+
+  if (cur.tab != 7) {
+    if (cur.tab != prev.tab || cur.subTab != prev.subTab || cur.scrollBits != prev.scrollBits)
+      dmg_emit_rect(newDamage, contentR[0], contentR[1], contentR[2], contentR[3]);
+    return;
+  }
+
+  eh::settings_monitors_tab::MonitorsTabLayout monLay{};
+  eh::settings_monitors_tab::compute_monitors_tab_layout(contentX, contentW, kContentTop,
+                                                         settings_content_viewport_h(app), &monLay);
+  const double pyLogical = app.pointerY + settings_scroll_px(app);
+  cur.sel = app.monitorsSelectedIdx;
+  cur.dd = app.monitorsActiveDd;
+  cur.ddHover = app.monitorsDdHoverRow;
+  cur.dirty = app.monitorsTab.dirty ? 1 : 0;
+  cur.nOut = static_cast<int>(app.monitorsTab.outputs.size());
+  cur.zoomBits = dmg_dbits(app.monitorsCanvasZoom);
+  cur.panXBits = dmg_dbits(app.monitorsCanvasPanX);
+  cur.panYBits = dmg_dbits(app.monitorsCanvasPanY);
+  cur.normBits = dmg_dbits(app.settingsSliderDragNormT);
+  cur.status = app.monitorsTab.status;
+  cur.scaleDrag = app.monitorsScaleSliderDragIdx;
+  cur.hyprDrag = app.monitorsHyprExtraSlider;
+  cur.canvasDrag = app.monitorsCanvasDragIdx;
+  cur.panArmed = app.monitorsCanvasPanArmed ? 1 : 0;
+  cur.outs.clear();
+  cur.outs.reserve(app.monitorsTab.outputs.size());
+  {
+    std::string joined;
+    for (const auto& row : app.monitorsTab.outputs) {
+      dmg_out_sig(row, joined);
+      cur.outs.push_back(joined);
+    }
+  }
+
+  const bool frameStructural =
+      cur.nOut != prev.nOut || cur.sel != prev.sel || cur.tab != prev.tab ||
+      cur.subTab != prev.subTab || cur.monScroll != prev.monScroll ||
+      cur.scrollBits != prev.scrollBits;
+  const int tbY = monLay.toolbar_y;
+  const int tbH = monLay.toolbar_btn_h + 24;
+
+  MonitorsFormRows mfr{};
+  MonitorsFormGeom mfg{};
+  bool haveForm = false;
+  if (!app.monitorsTab.outputs.empty() && cur.nOut > 0) {
+    size_t six = static_cast<size_t>(std::clamp(app.monitorsSelectedIdx, 0, cur.nOut - 1));
+    if (six < app.monitorsTab.outputs.size()) {
+      const auto& srow = app.monitorsTab.outputs[six];
+      auto scit = app.monitorsTab.caps.find(srow.name);
+      const eh::settings_monitors::OutputCaps* scaps =
+          scit != app.monitorsTab.caps.end() ? &scit->second : nullptr;
+      mfr = monitors_form_rows(app, srow, scaps);
+      mfg = monitors_form_layout(monLay, contentX, contentW, mfr);
+      haveForm = true;
+    }
+  }
+  auto dmg_sec_rect = [&](const MonitorsSectionGeom& sec) {
+    dmg_emit_rect(newDamage, sec.x, sec.y, sec.w, sec.h);
+  };
+  auto dmg_canvas_rect = [&]() {
+    dmg_emit_rect(newDamage, monLay.canvas_x, monLay.canvas_y, monLay.canvas_w, monLay.canvas_h);
+  };
+  auto dmg_pills_rect = [&]() {
+    dmg_emit_rect(newDamage, monLay.canvas_x, monLay.pills_y, monLay.canvas_w, kMonPillH);
+  };
+  auto dmg_full_form = [&]() {
+    if (haveForm)
+      dmg_emit_rect(newDamage, mfg.header.x, mfg.header.y, mfg.header.w,
+                    mfg.bottom_y - mfg.header.y);
+  };
+
+  if (frameStructural) {
+    dmg_emit_rect(newDamage, contentR[0], contentR[1], contentR[2], contentR[3]);
+    return;
+  }
+  if (cur.outs != prev.outs) {
+    if (!haveForm) {
+      dmg_emit_rect(newDamage, contentR[0], contentR[1], contentR[2], contentR[3]);
+    } else {
+      const size_t selIx =
+          static_cast<size_t>(std::clamp(app.monitorsSelectedIdx, 0, cur.nOut - 1));
+      bool needCanvas = false, needPills = false, needHeader = false, needFullForm = false;
+      bool secDisp = false, secScale = false, secColor = false, secHdr = false, secLum = false;
+      bool fallbackFull = false;
+      std::vector<std::string> cf, pf;
+      for (size_t i = 0; i < cur.outs.size() && i < prev.outs.size(); ++i) {
+        if (cur.outs[i] == prev.outs[i]) continue;
+        dmg_split_fields(cur.outs[i], cf);
+        dmg_split_fields(prev.outs[i], pf);
+        if (cf.size() != pf.size() || cf.size() < 22) {
+          fallbackFull = true;
+          break;
+        }
+        const bool isSel = (i == selIx);
+        for (size_t f = 0; f < cf.size(); ++f) {
+          if (cf[f] == pf[f]) continue;
+          switch (static_cast<int>(f)) {
+            case 0:
+              needCanvas = true;
+              needPills = true;
+              if (isSel) needHeader = true;
+              break;
+            case 1:
+              needCanvas = true;
+              if (isSel) secDisp = true;
+              break;
+            case 2:
+              if (isSel) secDisp = true;
+              break;
+            case 3:
+              needCanvas = true;
+              break;
+            case 4:
+            case 5:
+              needCanvas = true;
+              if (isSel) secScale = true;
+              break;
+            case 6:
+              needCanvas = true;
+              if (isSel) {
+                needHeader = true;
+                needFullForm = true;
+              }
+              break;
+            case 7:
+              needCanvas = true;
+              if (isSel) secColor = true;
+              break;
+            case 8:
+            case 9:
+              if (isSel) secColor = true;
+              break;
+            case 10:
+              needCanvas = true;
+              if (isSel) secDisp = true;
+              break;
+            case 11:
+              if (isSel) needFullForm = true;
+              break;
+            case 12:
+            case 13:
+            case 14:
+            case 16:
+              if (isSel) secHdr = true;
+              break;
+            case 15:
+              needCanvas = true;
+              if (isSel) secHdr = true;
+              break;
+            case 17:
+            case 18:
+            case 19:
+            case 20:
+            case 21:
+              if (isSel) secLum = true;
+              break;
+            default:
+              fallbackFull = true;
+              break;
+          }
+          if (fallbackFull) break;
+        }
+        if (fallbackFull) break;
+      }
+      if (fallbackFull) {
+        dmg_emit_rect(newDamage, contentR[0], contentR[1], contentR[2], contentR[3]);
+      } else {
+        if (needCanvas) dmg_canvas_rect();
+        if (needPills) dmg_pills_rect();
+        if (needHeader) dmg_sec_rect(mfg.header);
+        if (needFullForm) {
+          dmg_full_form();
+        } else {
+          if (secDisp) dmg_sec_rect(mfg.display);
+          if (secScale) dmg_sec_rect(mfg.scale);
+          if (secColor && mfg.has_color) dmg_sec_rect(mfg.color);
+          if (secHdr && mfg.has_hdr) dmg_sec_rect(mfg.hdr);
+          if (secLum && mfg.has_luminance) dmg_sec_rect(mfg.luminance);
+        }
+      }
+    }
+  }
+
+  if (cur.dirty != prev.dirty || cur.status != prev.status)
+    dmg_emit_rect(newDamage, contentX, tbY, contentW, tbH);
+
+  cur.hovMask = 0;
+  if (point_in_rect(app.pointerX, pyLogical, monLay.toolbar_refresh_x, monLay.toolbar_y,
+                    monLay.toolbar_btn_w, monLay.toolbar_btn_h))
+    cur.hovMask |= (1ULL << 0);
+  if (point_in_rect(app.pointerX, pyLogical, monLay.toolbar_portals_x, monLay.toolbar_y,
+                    monLay.toolbar_portals_w, monLay.toolbar_btn_h))
+    cur.hovMask |= (1ULL << 1);
+  if (point_in_rect(app.pointerX, pyLogical, monLay.toolbar_apply_x, monLay.toolbar_y,
+                    monLay.toolbar_btn_w, monLay.toolbar_btn_h))
+    cur.hovMask |= (1ULL << 2);
+  if (point_in_rect(app.pointerX, pyLogical, monLay.toolbar_revert_x, monLay.toolbar_y,
+                    monLay.toolbar_btn_w, monLay.toolbar_btn_h))
+    cur.hovMask |= (1ULL << 3);
+  if (point_in_rect(app.pointerX, pyLogical, monLay.center_btn_x, monLay.aux_btn_y,
+                    monLay.aux_btn_w, monLay.aux_btn_h))
+    cur.hovMask |= (1ULL << 4);
+  if (point_in_rect(app.pointerX, pyLogical, monLay.align_top_btn_x, monLay.aux_btn_y,
+                    monLay.aux_btn_w, monLay.aux_btn_h))
+    cur.hovMask |= (1ULL << 5);
+  if (haveForm) {
+    for (int k = 0; k < 9; ++k) {
+      int cx = 0, cy = 0, cw = 0, ch = 0;
+      if (monitors_dd_combo_geom(mfr, mfg, k, &cx, &cy, &cw, &ch) &&
+          point_in_rect(app.pointerX, pyLogical, cx, cy, cw, ch))
+        cur.hovMask |= (1ULL << (6 + k));
+    }
+    {
+      int trX = 0, trY = 0, trW = 0;
+      monitors_form_scale_track_geom(app, monLay, contentX, contentW, &trX, &trY, &trW);
+      if (point_in_rect(app.pointerX, pyLogical, trX - 6, trY, trW + 12, 28))
+        cur.hovMask |= (1ULL << 15);
+    }
+    if (mfg.has_hdr) {
+      const struct {
+        int row;
+        int bit;
+      } hsDefs[] = {{mfr.h_sdr_b, 16},
+                    {mfr.h_sdr_s, 17},
+                    {mfr.l_sdr_min, 18},
+                    {mfr.l_sdr_max, 19},
+                    {mfr.l_min, 20},
+                    {mfr.l_max, 21},
+                    {mfr.l_avg, 22}};
+      for (const auto& hs : hsDefs) {
+        if (hs.row < 0) continue;
+        if (hs.bit >= 18 && !mfg.has_luminance) continue;
+        const MonitorsSectionGeom* sec = (hs.bit < 18) ? &mfg.hdr : &mfg.luminance;
+        int trX = 0, trY = 0, trW = 0;
+        monitors_form_slider_track_geom_content(sec->content_y0, sec->x, sec->w, hs.row, &trX,
+                                                &trY, &trW);
+        if (point_in_rect(app.pointerX, pyLogical, trX - 6, trY, trW + 12, 28))
+          cur.hovMask |= (1ULL << hs.bit);
+      }
+    }
+    if (mfg.has_color && mfr.c_icc >= 0 && cur.nOut > 0) {
+      size_t six = static_cast<size_t>(std::clamp(app.monitorsSelectedIdx, 0, cur.nOut - 1));
+      if (six < app.monitorsTab.outputs.size()) {
+        const auto& srow = app.monitorsTab.outputs[six];
+        const int rowY = mfg.color.content_y0 + mfr.c_icc * kMonFormRowPitch;
+        const int elY = rowY + (kMonFormRowPitch - kSettingsComboH) / 2;
+        const int valX = mfg.color.x + kMonFormLabelColW + kMonFormValRailPx;
+        const int valW = mfg.color.w - kMonFormLabelColW - kMonFormValRailPx - kCardPad;
+        const bool hasIcc = !srow.icc.empty();
+        const int pathW = valW - 80 - (hasIcc ? 64 : 0) - kSpacingM - (hasIcc ? kSpacingM : 0);
+        const int browseX = valX + pathW + kSpacingM;
+        if (point_in_rect(app.pointerX, pyLogical, browseX, elY, 80, kSettingsComboH))
+          cur.hovMask |= (1ULL << 23);
+        if (hasIcc &&
+            point_in_rect(app.pointerX, pyLogical, browseX + 80 + kSpacingM, elY, 64,
+                          kSettingsComboH))
+          cur.hovMask |= (1ULL << 24);
+      }
+    }
+  }
+  {
+    int px = monLay.canvas_x;
+    cur.pillHov = -1;
+    for (size_t i = 0; i < app.monitorsTab.outputs.size(); ++i) {
+      const std::string& nm = app.monitorsTab.outputs[i].name;
+      const int pillW = static_cast<int>(nm.size()) * 8 + 24;
+      if (point_in_rect(app.pointerX, pyLogical, px, monLay.pills_y, pillW, kMonPillH))
+        cur.pillHov = static_cast<int>(i);
+      px += pillW + 8;
+    }
+  }
+
+  const uint64_t hovChanged = cur.hovMask ^ prev.hovMask;
+  if (hovChanged) {
+    for (int b = 0; b < 25; ++b) {
+      if (!(hovChanged & (1ULL << b))) continue;
+      if (b < 4) {
+        const int xs[4] = {monLay.toolbar_refresh_x, monLay.toolbar_portals_x, monLay.toolbar_apply_x,
+                           monLay.toolbar_revert_x};
+        dmg_emit_rect(newDamage, xs[b] - 2, tbY - 2, monLay.toolbar_btn_w + 4,
+                      monLay.toolbar_btn_h + 4);
+      } else if (b < 6) {
+        const int xs[2] = {monLay.center_btn_x, monLay.align_top_btn_x};
+        dmg_emit_rect(newDamage, xs[b - 4] - 2, monLay.aux_btn_y - 2, monLay.aux_btn_w + 4,
+                      monLay.aux_btn_h + 4);
+      } else if (b < 15) {
+        if (!haveForm) continue;
+        int cx = 0, cy = 0, cw = 0, ch = 0;
+        if (monitors_dd_combo_geom(mfr, mfg, b - 6, &cx, &cy, &cw, &ch))
+          dmg_emit_rect(newDamage, cx - 2, cy - 2, cw + 4, ch + 4);
+      } else if (b == 15) {
+        if (!haveForm) continue;
+        int trX = 0, trY = 0, trW = 0;
+        monitors_form_scale_track_geom(app, monLay, contentX, contentW, &trX, &trY, &trW);
+        dmg_emit_rect(newDamage, trX - 8, trY - 14, trW + 76, 56);
+      } else if (b < 23) {
+        if (!haveForm) continue;
+        const int kind = b - 16;
+        const MonitorsSectionGeom* sec = (kind < 2) ? &mfg.hdr : &mfg.luminance;
+        int row = -1;
+        if (kind == 0) row = mfr.h_sdr_b;
+        else if (kind == 1) row = mfr.h_sdr_s;
+        else if (kind == 2) row = mfr.l_sdr_min;
+        else if (kind == 3) row = mfr.l_sdr_max;
+        else if (kind == 4) row = mfr.l_min;
+        else if (kind == 5) row = mfr.l_max;
+        else if (kind == 6) row = mfr.l_avg;
+        if (row >= 0) {
+          int trX = 0, trY = 0, trW = 0;
+          monitors_form_slider_track_geom_content(sec->content_y0, sec->x, sec->w, row, &trX,
+                                                  &trY, &trW);
+          dmg_emit_rect(newDamage, trX - 8, trY - 70, trW + 200, 130);
+        }
+      }
+    }
+  }
+  if (cur.pillHov != prev.pillHov) {
+    for (int pi : {cur.pillHov, prev.pillHov}) {
+      if (pi < 0 || static_cast<size_t>(pi) >= app.monitorsTab.outputs.size()) continue;
+      int px = monLay.canvas_x;
+      for (int i = 0; i < pi; ++i)
+        px += static_cast<int>(app.monitorsTab.outputs[static_cast<size_t>(i)].name.size()) * 8 +
+              24 + 8;
+      const int pw =
+          static_cast<int>(app.monitorsTab.outputs[static_cast<size_t>(pi)].name.size()) * 8 + 24;
+      dmg_emit_rect(newDamage, px - 2, monLay.pills_y - 2, pw + 4, kMonPillH + 4);
+    }
+  }
+
+  if (cur.zoomBits != prev.zoomBits || cur.panXBits != prev.panXBits ||
+      cur.panYBits != prev.panYBits || cur.canvasDrag != prev.canvasDrag ||
+      cur.panArmed != prev.panArmed) {
+    dmg_emit_rect(newDamage, monLay.canvas_x, monLay.canvas_y, monLay.canvas_w, monLay.canvas_h);
+  }
+
+  if (cur.dd != prev.dd || cur.ddHover != prev.ddHover) {
+    if (haveForm) {
+      for (int kk : {cur.dd, prev.dd}) {
+        if (kk < 0) continue;
+        int cx = 0, cy = 0, cw = 0, ch = 0;
+        if (!monitors_dd_combo_geom(mfr, mfg, kk, &cx, &cy, &cw, &ch)) continue;
+        dmg_emit_rect(newDamage, cx - 2, cy - 2, cw + 4, ch + 4);
+        int nrows = 0;
+        size_t six = static_cast<size_t>(std::clamp(app.monitorsSelectedIdx, 0, cur.nOut - 1));
+        if (six < app.monitorsTab.outputs.size()) {
+          const auto& srow = app.monitorsTab.outputs[six];
+          auto scit = app.monitorsTab.caps.find(srow.name);
+          const eh::settings_monitors::OutputCaps* scaps =
+              scit != app.monitorsTab.caps.end() ? &scit->second : nullptr;
+          if (kk == 0 && scaps) nrows = static_cast<int>(scaps->resolutions.size());
+          else if (kk == 1 && scaps) {
+            auto it = scaps->resolution_refresh_hz.find(srow.resolution);
+            if (it != scaps->resolution_refresh_hz.end()) nrows = static_cast<int>(it->second.size());
+          } else if (kk == 2)
+            nrows = 8;
+          else if (kk == 3)
+            nrows = 2;
+          else if (kk == 4)
+            nrows = app.monitorsTab.kind == CompositorKind::Mango ? 2 : 3;
+          else if (kk == 5)
+            nrows = kMonitorCmCount;
+          else if (kk >= 6 && kk <= 8)
+            nrows = 3;
+        }
+        if (nrows > 0) {
+          const int ly = monitors_dd_popup_list_doc_top_y(cy, ch, nrows, settings_scroll_px_int(app),
+                                                          app.height);
+          dmg_emit_rect(newDamage, cx, ly - settings_scroll_px_int(app), cw,
+                        nrows * kSettingsDdRowH + 4);
+        }
+      }
+    } else {
+      if (haveForm)
+        dmg_emit_rect(newDamage, mfg.header.x, mfg.header.y, mfg.header.w,
+                      mfg.bottom_y - mfg.header.y);
+    }
+  }
+
+  if (cur.normBits != prev.normBits || cur.scaleDrag != prev.scaleDrag ||
+      cur.hyprDrag != prev.hyprDrag) {
+    if (!haveForm) {
+    } else if (cur.hyprDrag >= 0 || prev.hyprDrag >= 0) {
+      const int k = cur.hyprDrag >= 0 ? cur.hyprDrag : prev.hyprDrag;
+      if (k < 2)
+        dmg_emit_rect(newDamage, mfg.hdr.x, mfg.hdr.y - 70, mfg.hdr.w, mfg.hdr.h + 70);
+      else
+        dmg_emit_rect(newDamage, mfg.luminance.x, mfg.luminance.y - 70, mfg.luminance.w,
+                      mfg.luminance.h + 70);
+    } else if (cur.scaleDrag >= 0 || prev.scaleDrag >= 0) {
+      dmg_emit_rect(newDamage, mfg.scale.x, mfg.scale.y - 70, mfg.scale.w, mfg.scale.h + 70);
+    } else {
+      dmg_emit_rect(newDamage, mfg.header.x, mfg.header.y, mfg.header.w,
+                    mfg.bottom_y - mfg.header.y);
+    }
+  }
+}
+}  // namespace
+
+void draw(App& app) {
+  if (!app.surface) {    debug_log("settings", "WARN draw: no surface, skipping");
+    return;
+  }
+  // Tier-1 coalescing: a draw arriving <8ms after the previous painted frame,
+  // with no intervening user input, no size change and no active
+  // animation/pending work, is deferred to the next frame callback (~5us
+  // instead of ~5ms). Input uses strict < so same-millisecond presses still
+  // paint; the deferred frame always repaints via pendingRedraw, bounding any
+  // staleness to one frame tick. Service/config/duplicate bursts collapse.
+  {
+    const std::uint64_t nowMs = eh::shell::now_mono_ms();
+    const bool animated = wallpaper_thumb_needs_followup_frame(app) ||
+                          (app.embedded && app.embedAnim.has_active()) ||
+                          app.wallpaperHoverAnim.has_active() || app.settingsScroll.animating() ||
+                          app.wifiToggle.animating() || app.settingsScrollNeedsRedraw ||
+                          app.settingsWidgetDragRepaintQueued || app.pendingRedraw;
+    if (app.lastDrawMonoMs != 0 && nowMs - app.lastDrawMonoMs < 8 &&
+        app.lastInputMonoMs < app.lastDrawMonoMs && !animated &&
+        app.width == app.lastPaintedW && app.height == app.lastPaintedH) {
+      ++app.coalescedSkips;
+      app.pendingRedraw = true;
+      schedule_settings_surface_frame(app);
+      if (app.wl.display()) (void)wl_display_flush(app.wl.display());
+      return;
+    }
   }
   eh::settings::widget_picker::destroy_caret_frame(app);
   {
@@ -746,7 +1536,8 @@ void draw(App& app) {
   if (app.defaultAppPickerLayerWlSurface || app.defaultAppPickerLayer || app.defaultAppPickerXdgWlSurface)
     default_app_picker_teardown_layer(app);
   const SettingsBenchClock::time_point t_draw_enter = SettingsBenchClock::now();
-
+  long long us_sidebar = 0;
+  unsigned sbHits = 0, sbMiss = 0;
   const bool monitors_live_drag =
       app.activeTab == 7 && app.pointerLeftDown &&
       (app.monitorsCanvasPanArmed || app.monitorsCanvasDragIdx >= 0 || app.monitorsScaleSliderDragIdx >= 0 ||
@@ -808,20 +1599,20 @@ void draw(App& app) {
     }
   }
   const SettingsBenchClock::time_point t_after_ensure = SettingsBenchClock::now();
+  app.lastDrawMonoMs = eh::shell::now_mono_ms();
+  app.lastPaintedW = app.width;
+  app.lastPaintedH = app.height;
   debug_log("settings", "draw: paint slot=%s needEmbedGroup=%d embedPresentT=%.3f", gpu_path ? "vk" : std::to_string(paintBi).c_str(), (app.embedded && app.embedPresentT < 1.0f) ? 1 : 0, app.embedPresentT);
   cairo_t* const cr = gpu_path ? app.glRaster.cairo() : app.buf[static_cast<size_t>(paintBi)].cairo();
   cairo_save(cr);
 
   const bool needEmbedGroup = app.embedded && app.embedPresentT < 1.0f;
+  // No explicit CLEAR pass: the fullscreen paint_src_bg() SOURCE fill below
+  // overwrites every pixel, so clearing first just burns a 13.9MB pass.
+  // (Groups start transparent on their own.)
+  cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
   if (needEmbedGroup) {
-    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-    cairo_paint(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
     cairo_push_group_with_content(cr, CAIRO_CONTENT_COLOR_ALPHA);
-  } else {
-    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-    cairo_paint(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
   }
   const SettingsBenchClock::time_point t_after_cairo_buf_prep = SettingsBenchClock::now();
 
@@ -884,11 +1675,6 @@ void draw(App& app) {
   // Use animated scroll position (updated each frame by the ScrollController).
   const double paintPointerYOffset = settings_scroll_px(app);
 
-  paint_src_bg(app, cr, 0.78 * glassOv);
-  cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-  cairo_paint(cr);
-  cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-
   constexpr int kHeaderH = 56;
 
   const int sidebarW = kSidebarW;
@@ -903,6 +1689,103 @@ void draw(App& app) {
   const int sidebarTabW = sidebarW - 16;
   const int sidebarViewH = app.height - kContentTop - kSpacingL;
 
+  DmgSig dmgCur;
+  eh::wayland::DamageRegion dmgNew;
+  dmg_compute_frame(app, contentX, contentW, glassOv, settingsSidebarOv, mergedThumbs, dmgCur,
+                    dmgNew);
+  eh::wayland::DamageRegion dmgNeed;
+  int dmgS = -1;
+  if (!vk_path) {
+    if (dmg_last_frame[paintBi] < 0) {
+      dmgNeed.mark_full();
+    } else {
+      dmgNeed.union_with(dmgNew);
+      for (int k = 0; k < 4; ++k) {
+        if (dmg_hist_seq[k] > dmg_last_frame[paintBi]) dmgNeed.union_with(dmg_hist[k]);
+      }
+      if (dmg_seq + 1 - dmg_last_frame[paintBi] > 4) dmgNeed.mark_full();
+    }
+  } else {
+    dmgNeed = dmgNew;
+  }
+  if (dmgNeed.empty()) {
+    ++dmg_skips;
+    app.pendingRedraw = false;
+    cairo_restore(cr);
+    return;
+  }
+  dmgS = ++dmg_seq;
+  dmg_hist[dmgS % 4] = dmgNew;
+  dmg_hist_seq[dmgS % 4] = dmgS;
+  dmgNeed.expand(2, app.width, app.height);
+  dmgNeed.clip_to(app.width, app.height);
+  if (!dmgNeed.full()) {
+    for (const auto& sp : dmgNeed.spans()) cairo_rectangle(cr, sp.x, sp.y, sp.w, sp.h);
+    cairo_clip(cr);
+  }
+
+  paint_src_bg(app, cr, 0.78 * glassOv);
+  cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+  cairo_paint(cr);
+  cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+  const auto t_sb0 = SettingsBenchClock::now();
+  // Retained sidebar: bg panel + per-row visuals are pure functions of
+  // (geometry, selection, hover, theme, scale). Same pattern as the monitors
+  // tab caches; rows keyed by item identity so expand/collapse just reuses.
+  struct SbCache {
+    eh::settings::retain::SurfEntry bg{};
+    int bgW = 0, bgH = 0;
+    uint64_t bgKey = 0;
+    std::unordered_map<uint64_t, eh::settings::retain::SurfEntry> rows;
+    unsigned long long bytes = 0;
+  };
+  static SbCache s_sbCache;
+  const double sbDs = eh::settings::retain::device_scale(cr);
+  const int sbDsQ = sbDs > 0.0 ? static_cast<int>(std::lround(sbDs * 128.0)) : 128;
+  app.paintDamageCount = 0;
+  app.paintDamageActive = false;
+  if (!dmgNeed.full()) {
+    app.paintDamageActive = true;
+    int dmgFill = 0;
+    for (const auto& sp : dmgNeed.spans()) {
+      if (dmgFill >= App::kPaintDamageMax) break;
+      app.paintDamage[dmgFill].x = sp.x;
+      app.paintDamage[dmgFill].y = sp.y;
+      app.paintDamage[dmgFill].w = sp.w;
+      app.paintDamage[dmgFill].h = sp.h;
+      ++dmgFill;
+    }
+    app.paintDamageCount = dmgFill;
+  }
+  bool sbSkip = false;
+  if (!dmgNeed.full()) {
+    sbSkip = true;
+    for (const auto& sp : dmgNeed.spans()) {
+      if (sp.x < sidebarX + sidebarW && sp.x + sp.w > sidebarX &&
+          sp.y < kContentTop + sidebarViewH && sp.y + sp.h > kContentTop) {
+        sbSkip = false;
+        break;
+      }
+    }
+  }
+  float sbAr = static_cast<float>(Theme::AccR);
+  float sbAg = static_cast<float>(Theme::AccG);
+  float sbAb = static_cast<float>(Theme::AccB);
+  if (app.drawChromeMatugen) {
+    sbAr = app.drawChrome.accentR;
+    sbAg = app.drawChrome.accentG;
+    sbAb = app.drawChrome.accentB;
+  }
+  const uint64_t sbAccQ = (static_cast<uint64_t>(eh::settings::retain::q8(sbAr)) << 16) |
+                          (static_cast<uint64_t>(eh::settings::retain::q8(sbAg)) << 8) |
+                          static_cast<uint64_t>(eh::settings::retain::q8(sbAb));
+  uint64_t sbExpMask = 0;
+  for (int ei = 0; ei < kSidebarDefCount; ++ei) {
+    if (app.sidebarExpanded.find(kSidebarDefs[ei].label) != app.sidebarExpanded.end())
+      sbExpMask |= (1ULL << ei);
+  }
+  if (!sbSkip) {
   cairo_save(cr);
 
   const double sbX = static_cast<double>(sidebarX);
@@ -920,23 +1803,54 @@ void draw(App& app) {
       bgG = static_cast<float>(Theme::BgG * 0.35);
       bgB = static_cast<float>(Theme::BgB * 0.35);
     }
-    m3::Box sbBox;
-    sbBox.setColor(bgR, bgG, bgB, static_cast<float>(0.78 * settingsSidebarOv));
-    sbBox.setRadius(18.0f);
-    sbBox.setGeometry(static_cast<float>(sbX), static_cast<float>(sbY),
-                      static_cast<float>(sbW), static_cast<float>(sbH));
-    sbBox.setGlassy(true);
-    sbBox.paint(cr);
+    const float bgA = static_cast<float>(0.78 * settingsSidebarOv);
+    uint64_t bkey = 1469598103934665603ULL;
+    bkey = eh::settings::retain::mix(bkey, static_cast<uint64_t>(static_cast<uint32_t>(sbW)));
+    bkey = eh::settings::retain::mix(bkey, static_cast<uint64_t>(static_cast<uint32_t>(sbH)));
+    bkey = eh::settings::retain::mix(bkey, static_cast<uint64_t>(static_cast<uint32_t>(sbDsQ)));
+    bkey = eh::settings::retain::mix(bkey, static_cast<uint64_t>(app.drawChromeMatugen ? 1 : 0));
+    bkey = eh::settings::retain::mix(bkey, eh::settings::retain::q8(bgR));
+    bkey = eh::settings::retain::mix(bkey, eh::settings::retain::q8(bgG));
+    bkey = eh::settings::retain::mix(bkey, eh::settings::retain::q8(bgB));
+    bkey = eh::settings::retain::mix(bkey, eh::settings::retain::q8(bgA));
+    const int bsw = std::max(1, static_cast<int>(std::ceil(sbW * sbDs)));
+    const int bsh = std::max(1, static_cast<int>(std::ceil(sbH * sbDs)));
+    if (!(s_sbCache.bg.surf && s_sbCache.bgKey == bkey && s_sbCache.bgW == static_cast<int>(sbW) &&
+          s_sbCache.bgH == static_cast<int>(sbH) && s_sbCache.bg.sw == bsw &&
+          s_sbCache.bg.sh == bsh)) {
+      eh::settings::retain::destroy(s_sbCache.bg, &s_sbCache.bytes);
+      s_sbCache.bg.sw = bsw;
+      s_sbCache.bg.sh = bsh;
+      s_sbCache.bg.key = bkey;
+      s_sbCache.bgW = static_cast<int>(sbW);
+      s_sbCache.bgH = static_cast<int>(sbH);
+      eh::settings::retain::render(s_sbCache.bg, bsw, bsh, sbDs, bkey, [&](cairo_t* t) {
+        m3::Box sbBox;
+        sbBox.setColor(bgR, bgG, bgB, bgA);
+        sbBox.setRadius(18.0f);
+        sbBox.setGeometry(0, 0, static_cast<float>(sbW), static_cast<float>(sbH));
+        sbBox.setGlassy(true);
+        sbBox.paint(t);
+      });
+      s_sbCache.bytes +=
+          static_cast<unsigned long long>(bsw) * static_cast<unsigned long long>(bsh) * 4ULL;
+      ++sbMiss;
+    } else {
+      ++sbHits;
+    }
+    eh::settings::retain::blit(cr, s_sbCache.bg, sbX, sbY, sbDs);
   }
 
   cairo_round_rect(cr, sbX, sbY, sbW, sbH, 18.0);
   cairo_clip(cr);
   cairo_translate(cr, 0.0, -static_cast<double>(app.sidebarScrollPx));
 
-  auto draw_sidebar_tab = [&](int ty, int indentX, bool sel, bool hover, const char* label, const char* glyph) {
-    const int tabX = sidebarX + 8 + indentX;
+  auto draw_sidebar_tab = [&](cairo_t* dst, int ty, int indentX, bool sel, bool hover,
+                              const char* label, const char* glyph, int ox = 0, int oy = 0) {
+    const int tabX = sidebarX + 8 + indentX + ox;
     const int tabW = sidebarW - 16 - indentX;
     const int tabH = 40;
+    const int tyy = ty + oy;
     {
       m3::Box box;
       float r, g, b, a;
@@ -954,20 +1868,22 @@ void draw(App& app) {
       else { r = 0; g = 0; b = 0; a = 0; }
       box.setColor(r, g, b, a);
       box.setRadius(8.0f);
-      box.setGeometry(static_cast<float>(tabX), static_cast<float>(ty),
+      box.setGeometry(static_cast<float>(tabX), static_cast<float>(tyy),
                       static_cast<float>(tabW), static_cast<float>(tabH));
       box.setGlassy(true);
-      box.paint(cr);
+      box.paint(dst);
     }
-    material_symbols_draw_glyph(cr, static_cast<double>(tabX + 18), static_cast<double>(ty + 20), 18.0, glyph,
+    material_symbols_draw_glyph(dst, static_cast<double>(tabX + 18), static_cast<double>(tyy + 20), 18.0, glyph,
                                Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
-    settings_show_text(cr, tabX + 44, ty + 26, label, 14, CAIRO_FONT_WEIGHT_BOLD, Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
+    settings_show_text(dst, tabX + 44, tyy + 26, label, 14, CAIRO_FONT_WEIGHT_BOLD, Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
   };
 
-  auto draw_sidebar_subtab = [&](int ty, bool sel, bool hover, const char* label, const char* glyph) {
-    const int tabX = sidebarX + kSidebarSubTabIndentX;
+  auto draw_sidebar_subtab = [&](cairo_t* dst, int ty, bool sel, bool hover, const char* label,
+                                 const char* glyph, int ox = 0, int oy = 0) {
+    const int tabX = sidebarX + kSidebarSubTabIndentX + ox;
     const int tabW = sidebarW - kSidebarSubTabIndentX - 16;
     const int tabH = 36;
+    const int tyy = ty + oy;
     {
       m3::Box box;
       float r, g, b, a;
@@ -985,15 +1901,62 @@ void draw(App& app) {
       else { r = 0; g = 0; b = 0; a = 0; }
       box.setColor(r, g, b, a);
       box.setRadius(6.0f);
-      box.setGeometry(static_cast<float>(tabX), static_cast<float>(ty),
+      box.setGeometry(static_cast<float>(tabX), static_cast<float>(tyy),
                       static_cast<float>(tabW), static_cast<float>(tabH));
       box.setGlassy(true);
-      box.paint(cr);
+      box.paint(dst);
     }
     if (glyph)
-      material_symbols_draw_glyph(cr, static_cast<double>(tabX + 14), static_cast<double>(ty + 18), 16.0, glyph,
+      material_symbols_draw_glyph(dst, static_cast<double>(tabX + 14), static_cast<double>(tyy + 18), 16.0, glyph,
                                   Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
-    settings_show_text(cr, tabX + 32, ty + 23, label, 12, CAIRO_FONT_WEIGHT_BOLD, Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
+    settings_show_text(dst, tabX + 32, tyy + 23, label, 12, CAIRO_FONT_WEIGHT_BOLD, Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
+  };
+
+  // Row key: identity + visual state + theme + scale. Position-free (blitted
+  // at the live ty), so expand/collapse and scroll reuse entries.
+  auto sb_row_key = [&](int sub, int di, int sj, bool sel, bool hov, int w, int h) -> uint64_t {
+    uint64_t k = 1469598103934665603ULL;
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(0x5B1D));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(sub));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(di));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(sj + 1));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(sel ? 1 : 0));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(hov ? 1 : 0));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(app.drawChromeMatugen ? 1 : 0));
+    k = eh::settings::retain::mix(k, (sbAccQ >> 16) & 0xFFULL);
+    k = eh::settings::retain::mix(k, (sbAccQ >> 8) & 0xFFULL);
+    k = eh::settings::retain::mix(k, sbAccQ & 0xFFULL);
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(static_cast<uint32_t>(w)));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(static_cast<uint32_t>(h)));
+    k = eh::settings::retain::mix(k, static_cast<uint64_t>(static_cast<uint32_t>(sbDsQ)));
+    return k;
+  };
+
+  auto sb_row_cached = [&](int ty, int bx, int w, int h, uint64_t key,
+                           auto&& paintAtOrigin) {
+    auto it = s_sbCache.rows.find(key);
+    const int sw = std::max(1, static_cast<int>(std::ceil(w * sbDs)));
+    const int sh = std::max(1, static_cast<int>(std::ceil(h * sbDs)));
+    if (it != s_sbCache.rows.end() && it->second.surf && it->second.sw == sw &&
+        it->second.sh == sh) {
+      // Blit at the live position (clip+scroll translate are active on cr).
+      eh::settings::retain::blit(cr, it->second, static_cast<double>(bx),
+                                 static_cast<double>(ty), sbDs);
+      ++sbHits;
+      return;
+    }
+    if (s_sbCache.rows.size() >= 128) {
+      for (auto& kv : s_sbCache.rows) eh::settings::retain::destroy(kv.second, &s_sbCache.bytes);
+      s_sbCache.rows.clear();
+    }
+    eh::settings::retain::SurfEntry e;
+    eh::settings::retain::render(e, sw, sh, sbDs, key,
+                                [&](cairo_t* t) { paintAtOrigin(t); });
+    s_sbCache.bytes +=
+        static_cast<unsigned long long>(sw) * static_cast<unsigned long long>(sh) * 4ULL;
+    eh::settings::retain::blit(cr, e, static_cast<double>(bx), static_cast<double>(ty), sbDs);
+    ++sbMiss;
+    s_sbCache.rows.emplace(key, e);
   };
 
   auto subtab_active = [&](const SidebarItemDef& def) -> bool {
@@ -1009,18 +1972,34 @@ void draw(App& app) {
            app.pointerY >= scrolledY && app.pointerY < scrolledY + h;
   };
 
+  const int sbViewTop = app.sidebarScrollPx + kContentTop;
+  const int sbViewBot = sbViewTop + sidebarViewH;
+  if (app.settingsSearchQuery.empty()) {
   int currentY = kSidebarTabBaseY;
+  auto sb_row_visible = [&](int y, int h) -> bool {
+    return y < sbViewBot && y + h > sbViewTop;
+  };
   for (int i = 0; i < kSidebarDefCount; ++i) {
     const auto& def = kSidebarDefs[i];
     if (def.id == 16 && app.monitorsTab.kind != CompositorKind::Mango) continue;
     if (def.id == 33 && app.monitorsTab.kind != CompositorKind::Hyprland) continue;
-    const bool isExpanded = app.sidebarExpanded.find(def.label) != app.sidebarExpanded.end();
+    const bool isExpanded = (sbExpMask & (1ULL << i)) != 0;
     const bool hasChildren = def.subCount > 0;
     const bool isCategory = def.isCategory;
     const bool isSelected = isCategory ? (hasChildren ? (app.activeTab == def.id || subtab_active(def)) : false)
                                         : (app.activeTab == def.id);
     const bool tabHover = sidebar_hit_test(currentY, kSidebarTabH);
-    draw_sidebar_tab(currentY, 0, isSelected, tabHover, def.label, def.glyph);
+    if (sb_row_visible(currentY, kSidebarTabH)) {
+    {
+      const int tabX = sidebarX + 8;
+      const int tabW = sidebarW - 16;
+      const uint64_t key = sb_row_key(0, i, -1, isSelected, tabHover, tabW, kSidebarTabH);
+      sb_row_cached(currentY, tabX, tabW, kSidebarTabH, key, [&](cairo_t* t) {
+        draw_sidebar_tab(t, currentY, 0, isSelected, tabHover, def.label, def.glyph, -tabX,
+                         -currentY);
+      });
+    }
+    }
     currentY += kSidebarTabPitchY;
     if (hasChildren && isExpanded) {
       for (int j = 0; j < def.subCount; ++j) {
@@ -1028,13 +2007,142 @@ void draw(App& app) {
                                           : (app.activeTab == def.id && app.activeSubTab == j);
         const bool subHover = sidebar_hit_test(currentY, 36);
         const char* subGlyph = def.subGlyphs ? def.subGlyphs[j] : nullptr;
-        draw_sidebar_subtab(currentY, subSel, subHover, def.subLabels[j], subGlyph);
+        const int subX = sidebarX + kSidebarSubTabIndentX;
+        const int subW = sidebarW - kSidebarSubTabIndentX - 16;
+        const int subTy = currentY;
+        if (sb_row_visible(subTy, 36)) {
+        const uint64_t key = sb_row_key(1, i, j, subSel, subHover, subW, 36);
+        sb_row_cached(subTy, subX, subW, 36, key, [&](cairo_t* t) {
+          draw_sidebar_subtab(t, subTy, subSel, subHover, def.subLabels[j], subGlyph, -subX,
+                              -subTy);
+        });
+        }
         currentY += 36;
       }
     }
   }
-
-  cairo_restore(cr);
+  } else {
+  // ── Search results (flat, every tab + setting) ──
+  const std::vector<int> searchRes = settings_search_collect(app.settingsSearchQuery, app.monitorsTab.kind);
+  const int resN = static_cast<int>(searchRes.size());
+  if (app.settingsSearchSelectedRow >= resN && resN > 0)
+    const_cast<App&>(app).settingsSearchSelectedRow = resN - 1;
+  if (app.settingsSearchHoverRow >= resN)
+    const_cast<App&>(app).settingsSearchHoverRow = -1;
+  if (resN == 0) {
+    settings_show_text(cr, sidebarX + 24, kSidebarTabBaseY + 30, "No matching settings",
+                       13, 700, Theme::TextR, Theme::TextG, Theme::TextB, 0.75);
+    settings_show_text(cr, sidebarX + 24, kSidebarTabBaseY + 50, "Try a different search term",
+                       11, 400, Theme::TextR, Theme::TextG, Theme::TextB, 0.45);
+  } else {
+    for (int ri = 0; ri < resN; ++ri) {
+      const SettingsSearchEntry& e = kSettingsSearchEntries[searchRes[static_cast<size_t>(ri)]];
+      const int ry = kSidebarTabBaseY + ri * kSettingsSearchResultPitch;
+      if (ry + kSettingsSearchResultH < sbViewTop || ry > sbViewBot) continue;
+      const int rx = sidebarX + 8;
+      const int rw = sidebarW - 16;
+      const bool sel = (ri == app.settingsSearchSelectedRow);
+      const bool hov = (ri == app.settingsSearchHoverRow) ||
+                       (app.settingsSearchHoverRow < 0 && ri == app.settingsSearchSelectedRow && app.settingsSearchFocused);
+      {
+        m3::Box box;
+        float r, g, b, a;
+        if (app.drawChromeMatugen) { r = app.drawChrome.accentR; g = app.drawChrome.accentG; b = app.drawChrome.accentB; }
+        else { r = static_cast<float>(Theme::AccR); g = static_cast<float>(Theme::AccG); b = static_cast<float>(Theme::AccB); }
+        if (sel || hov) a = sel ? 0.20f : 0.12f;
+        else { r = 0; g = 0; b = 0; a = 0; }
+        if (e.tab == app.activeTab && !sel && !hov) { a = 0.07f; }
+        box.setColor(r, g, b, a);
+        box.setRadius(8.0f);
+        box.setGeometry(static_cast<float>(rx), static_cast<float>(ry),
+                        static_cast<float>(rw), static_cast<float>(kSettingsSearchResultH));
+        box.setGlassy(true);
+        box.paint(cr);
+      }
+      material_symbols_draw_glyph(cr, static_cast<double>(rx + 18), static_cast<double>(ry + 24),
+                                  18.0, e.glyph && e.glyph[0] ? e.glyph : "tune",
+                                  Theme::TextR, Theme::TextG, Theme::TextB, 1.0);
+      settings_show_text(cr, rx + 42, ry + 21, e.title, 13, 700,
+                         Theme::TextR, Theme::TextG, Theme::TextB, 0.95);
+      settings_show_text(cr, rx + 42, ry + 39, e.section, 11, 400,
+                         Theme::TextR, Theme::TextG, Theme::TextB, 0.5);
+    }
+  }
+  }
+  // Undo scroll so the search bar stays fixed on top of scrolled rows.
+  cairo_translate(cr, 0.0, static_cast<double>(app.sidebarScrollPx));
+  // ── Global search bar (fixed, top-left, above the scroll region) ──
+  {
+    int sx = 0, sy = 0, sw = 0, sh = 0;
+    settings_search_bar_geom(&sx, &sy, &sw, &sh);
+    const bool sFocused = app.settingsSearchFocused;
+    const bool sHover = app.settingsSearchBarHover;
+    {
+      m3::Box box;
+      float r, g, b, a;
+      if (app.drawChromeMatugen) {
+        r = app.drawChrome.accentR; g = app.drawChrome.accentG; b = app.drawChrome.accentB;
+      } else {
+        r = static_cast<float>(Theme::AccR); g = static_cast<float>(Theme::AccG); b = static_cast<float>(Theme::AccB);
+      }
+      if (sFocused) a = 0.22f;
+      else if (sHover) a = 0.12f;
+      else { r = 1.0f; g = 1.0f; b = 1.0f; a = 0.07f; }
+      box.setColor(r, g, b, a);
+      box.setRadius(10.0f);
+      box.setGeometry(static_cast<float>(sx), static_cast<float>(sy),
+                      static_cast<float>(sw), static_cast<float>(sh));
+      box.setGlassy(true);
+      box.paint(cr);
+    }
+    material_symbols_draw_glyph(cr, static_cast<double>(sx + 18),
+                                static_cast<double>(sy) + static_cast<double>(sh) * 0.5 + 0.5,
+                                18.0, "search", Theme::TextR, Theme::TextG, Theme::TextB,
+                                app.settingsSearchQuery.empty() ? 0.45 : 0.9);
+    const int textX = sx + 44;
+    const int textBaselineY = sy + (sh + 15) / 2;
+    cairo_save(cr);
+    const int clearW = !app.settingsSearchQuery.empty() ? 30 : 0;
+    cairo_rectangle(cr, textX, sy + 5, sw - (textX - sx) - clearW - 8, sh - 10);
+    cairo_clip(cr);
+    if (app.settingsSearchQuery.empty()) {
+      settings_show_text(cr, textX, textBaselineY, "Search settings",
+                         13, 400, Theme::TextR, Theme::TextG, Theme::TextB, 0.42);
+    } else {
+      settings_show_text(cr, textX, textBaselineY, app.settingsSearchQuery.c_str(),
+                         13, 400, Theme::TextR, Theme::TextG, Theme::TextB, 0.92);
+    }
+    if (sFocused) {
+      const int tw = settings_search_text_width_px(app.settingsSearchQuery.c_str(), 13, 400);
+      const double caretX = static_cast<double>(textX + tw) + 1.5;
+      cairo_set_line_width(cr, 1.6);
+      cairo_set_source_rgba(cr, Theme::TextR, Theme::TextG, Theme::TextB, 0.85);
+      cairo_move_to(cr, caretX, static_cast<double>(sy) + 9.0);
+      cairo_line_to(cr, caretX, static_cast<double>(sy + sh) - 9.0);
+      cairo_stroke(cr);
+    }
+    cairo_restore(cr);
+    if (!app.settingsSearchQuery.empty()) {
+      const int cbS = 22;
+      const int cbX = sx + sw - cbS - 7;
+      const int cbY = sy + (sh - cbS) / 2;
+      const bool cbHover = app.pointerX >= cbX && app.pointerX < cbX + cbS &&
+                           app.pointerY >= cbY && app.pointerY < cbY + cbS;
+      m3::Box cb;
+      if (cbHover) cb.setColor(1, 1, 1, 0.16f);
+      else cb.setColor(1, 1, 1, 0.08f);
+      cb.setRadius(static_cast<float>(cbS) / 2.0f);
+      cb.setGeometry(static_cast<float>(cbX), static_cast<float>(cbY),
+                     static_cast<float>(cbS), static_cast<float>(cbS));
+      cb.setGlassy(true);
+      cb.paint(cr);
+      material_symbols_draw_glyph(cr, cbX + cbS * 0.5, cbY + cbS * 0.5 + 0.5, 14.0, "close",
+                                  Theme::TextR, Theme::TextG, Theme::TextB, 0.8);
+    }
+  }
+  }
+  if (!sbSkip) cairo_restore(cr);
+  us_sidebar = settings_bench_us(t_sb0, SettingsBenchClock::now());
 
   paint_src_glass_hi(app, cr, 0.10);
   cairo_set_line_width(cr, 1.0);
@@ -1699,7 +2807,9 @@ void draw(App& app) {
   const SettingsBenchClock::time_point t_after_cairo = SettingsBenchClock::now();
   if (vk_path) {
     bool transient = false;
-    if (!settings_present_vk_raster(app, app.width, app.height, &transient)) {
+    eh::wayland::DamageRegion dmgEffective;
+    if (!settings_present_vk_raster_damaged(app, app.width, app.height, &transient, dmgNeed,
+                                            &dmgEffective)) {
       if (transient) {
         app.settingsDeferRedraw = true;
         if (app.width > 0 && app.height > 0 && ensure_settings_shm_pair(app)) {
@@ -1720,6 +2830,11 @@ void draw(App& app) {
               wl_surface_attach(app.surface, pb.wl(), 0, 0);
               wl_surface_damage_buffer(app.surface, 0, 0, app.width, app.height);
               pb.mark_busy();
+              dmg_hist[dmgS % 4] = dmgNew;
+              dmg_hist_seq[dmgS % 4] = dmgS;
+              dmg_last_frame[fb] = dmgS;
+              dmg_committed = std::move(dmgCur);
+              dmg_have_committed = true;
               schedule_settings_surface_frame(app);
               eh::settings::widget_picker::queue_caret_frame(app);
               world_clock_popup_queue_caret_frame(app);
@@ -1747,15 +2862,34 @@ void draw(App& app) {
       return;
     }
     debug_log("settings", "draw: VK commit embedPresentT=%.3f", app.embedPresentT);
-    wl_surface_damage_buffer(app.surface, 0, 0, INT32_MAX, INT32_MAX);
+    dmg_hist[dmgS % 4] = dmgNew;
+    dmg_hist_seq[dmgS % 4] = dmgS;
+    dmg_committed = std::move(dmgCur);
+    dmg_have_committed = true;
+    if (dmgEffective.full() || dmgEffective.empty()) {
+      wl_surface_damage_buffer(app.surface, 0, 0, INT32_MAX, INT32_MAX);
+    } else {
+      for (const auto& sp : dmgEffective.spans())
+        wl_surface_damage_buffer(app.surface, sp.x, sp.y, sp.w, sp.h);
+    }
     eh::settings::widget_picker::queue_caret_frame(app);
     world_clock_popup_queue_caret_frame(app);
     wl_surface_commit(app.surface);
   } else {
     eh::wayland::ShmBuffer& pb = app.buf[static_cast<size_t>(paintBi)];
     wl_surface_attach(app.surface, pb.wl(), 0, 0);
-    wl_surface_damage_buffer(app.surface, 0, 0, app.width, app.height);
+    if (dmgNeed.full()) {
+      wl_surface_damage_buffer(app.surface, 0, 0, app.width, app.height);
+    } else {
+      for (const auto& sp : dmgNeed.spans())
+        wl_surface_damage_buffer(app.surface, sp.x, sp.y, sp.w, sp.h);
+    }
     pb.mark_busy();
+    dmg_hist[dmgS % 4] = dmgNew;
+    dmg_hist_seq[dmgS % 4] = dmgS;
+    dmg_last_frame[paintBi] = dmgS;
+    dmg_committed = std::move(dmgCur);
+    dmg_have_committed = true;
     debug_log("settings", "draw: SHM commit buf=%d embedPresentT=%.3f", paintBi, app.embedPresentT);
     {
       static bool s_dumped = false;
@@ -1796,10 +2930,12 @@ void draw(App& app) {
     eh::settings::monitors_log::MonitorsLog::instance().writef(
         "render %dx%d slot=%s shell_snapshot=%lldus sync_gpu=%lldus thumb_merge=%lldus "
         "want_vk=%lldus buffers=%lldus buf_prep=%lldus glass_alpha=%lldus cairo_body=%lldus "
-        "commit=%lldus total=%lldus fps_inst=%.1f cause=%s nOut=%zu dirty=%d",
+        "commit=%lldus total=%lldus fps_inst=%.1f cause=%s embedded=%d merged_thumbs=%d sidebar=%lldus sb=%u/%u coalesced=%llu dmgspans=%zu dmgfull=%d dmgskip=%llu nOut=%zu dirty=%d",
         app.width, app.height, vk_path ? "vk" : std::to_string(paintBi).c_str(), us_shell_snap,
         us_sync_gpu, us_thumbs, us_want_vk, us_buffers, us_buf_prep, us_glass_alpha, us_cairo_body,
         us_commit, us_total, fps_inst, eh::settings::monitors_log::mon_cause_last(),
+        app.embedded ? 1 : 0, mergedThumbs, us_sidebar, sbHits, sbMiss, app.coalescedSkips,
+        dmgNeed.span_count(), dmgNeed.full() ? 1 : 0, dmg_skips,
         app.monitorsTab.outputs.size(), app.monitorsTab.dirty ? 1 : 0);
     if (us_total >= 16000) {
       eh::settings::monitors_log::MonitorsLog::instance().writef(

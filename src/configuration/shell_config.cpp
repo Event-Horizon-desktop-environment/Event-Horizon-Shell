@@ -796,6 +796,7 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
     if (auto v = (*pw)["lid_close_action"].value<int64_t>())
       c.power.lidCloseAction = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(2)));
     if (auto v = (*pw)["show_battery_percentage"].value<bool>()) c.power.showBatteryPercentage = *v;
+    if (auto v = (*pw)["redeye_enabled"].value<bool>()) c.power.redeyeEnabled = *v;
     if (auto s = (*pw)["tuned_profile"].value<std::string>()) c.power.tunedProfile = *s;
     if (auto v = (*pw)["epp"].value<int64_t>()) c.power.epp = static_cast<int>(std::clamp(*v, INT64_C(0), INT64_C(4)));
   }

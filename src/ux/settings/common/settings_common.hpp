@@ -109,7 +109,9 @@ static constexpr int kAppearanceIconCardH = 240;
 static constexpr int kWallpaperToggleBandH = 80;
 
 static constexpr int kSidebarW          = 260;
-static constexpr int kSidebarTabBaseY   = kContentTop + kSpacingM;
+// Sidebar tabs start below the fixed global search bar
+// (search bar: y=kContentTop+8, h=36, gap=8).
+static constexpr int kSidebarTabBaseY   = kContentTop + 8 + 36 + 8;
 static constexpr int kSidebarTabPitchY  = 48;
 static constexpr int kSidebarTabH       = 40;
 

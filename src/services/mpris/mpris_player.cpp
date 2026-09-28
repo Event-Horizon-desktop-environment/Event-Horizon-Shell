@@ -1,4 +1,5 @@
 #include "services/mpris/mpris_player.hpp"
+#include "services/mpris/mpris_track_change.hpp"
 
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/notifications/diag/notification_pipeline_stats.hpp"
@@ -650,6 +651,42 @@ void DockMpris::add_player(const std::string& busName) {
             const std::string oldTrackId = cacheIt->second.snap.track_id;
             const std::string oldTitle = cacheIt->second.snap.title;
             auto metaIt = changedProps.find("Metadata");
+            // Peek the incoming track identity BEFORE merging: players
+            // (notably browsers) often send partial Metadata dicts, e.g. a
+            // title-only update on track change. Merging that over the
+            // previous track's fields yields a mixed snapshot (new title +
+            // old artist) which then emits as a bogus notification.
+            std::string incomingTrackId, incomingTitle;
+            bool hasTrackId = false, hasTitle = false;
+            if (metaIt != changedProps.end()) {
+              const auto metaPeek = get_variant_map_from_variant(metaIt->second);
+              auto idIt = metaPeek.find("mpris:trackid");
+              if (idIt != metaPeek.end()) {
+                incomingTrackId = variant_as_string(idIt->second);
+                hasTrackId = true;
+              }
+              auto titleIt = metaPeek.find("xesam:title");
+              if (titleIt != metaPeek.end()) {
+                incomingTitle = variant_as_string(titleIt->second);
+                hasTitle = true;
+              }
+            }
+            bool trackChanged = eh::mpris::track_changed(oldTrackId, oldTitle, hasTrackId,
+                                                           incomingTrackId, hasTitle,
+                                                           incomingTitle);
+            if (trackChanged) {
+              // New track: drop identity fields the partial update doesn't
+              // carry so nothing from the previous track can mix in. Keys
+              // present below are refilled by the merge that follows.
+              auto& s = cacheIt->second.snap;
+              s.title.clear();
+              s.artist.clear();
+              s.album.clear();
+              s.art_url_raw.clear();
+              s.track_url_raw.clear();
+              s.track_id.clear();
+              s.duration_us = 0;
+            }
             if (metaIt != changedProps.end()) {
               const auto meta = get_variant_map_from_variant(metaIt->second);
               auto it = meta.find("xesam:title");
@@ -666,14 +703,6 @@ void DockMpris::add_player(const std::string& busName) {
               if (it != meta.end()) cacheIt->second.snap.track_id = variant_as_string(it->second);
               it = meta.find("mpris:length");
               if (it != meta.end()) cacheIt->second.snap.duration_us = get_int64_from_variant(it->second);
-            }
-            const std::string& newTrackId = cacheIt->second.snap.track_id;
-            const std::string& newTitle = cacheIt->second.snap.title;
-            bool trackChanged = false;
-            if (!newTrackId.empty() || !oldTrackId.empty()) {
-              trackChanged = (newTrackId != oldTrackId);
-            } else {
-              trackChanged = (newTitle != oldTitle);
             }
             if (trackChanged && freshPos < 0) {
               cacheIt->second.snap.position_us = 0;

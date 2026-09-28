@@ -1,6 +1,7 @@
 #include "desktop_shell/controlcenter/paint/control_center_pear_paint.hpp"
 
 #include "desktop_shell/common/glyph/material_glyph.hpp"
+#include "services/redeye/redeye_service.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_pear_layout.hpp"
 #include "desktop_shell/controlcenter/paint/control_center_paint_utils.hpp"
 #include "desktop_shell/controlcenter/state/control_center_pear_config.hpp"
@@ -254,6 +255,7 @@ void pear_center_paint(ccl::ControlCenterState& state, cairo_t* cr, int popupW,
                       state.hoverTarget == CcHT::NightColorCard ||
                       state.hoverTarget == CcHT::ColorSchemeCard ||
                       state.hoverTarget == CcHT::CameraCard ||
+                      state.hoverTarget == CcHT::RedeyeCard ||
                       state.hoverTarget == CcHT::CmdCard1 ||
                       state.hoverTarget == CcHT::CmdCard2) &&
                      state.hoverRowIdx == static_cast<int>(i);
@@ -274,6 +276,12 @@ void pear_center_paint(ccl::ControlCenterState& state, cairo_t* cr, int popupW,
       case ccl::PearToggle::Camera:
         card_button(tx, L.togY, L.togW, L.togH, "photo_camera", "Camera", false, hov);
         break;
+      case ccl::PearToggle::Redeye: {
+        const bool eyeOn = eh::redeye::RedeyeService::instance().isEnabled();
+        card_button(tx, L.togY, L.togW, L.togH, eyeOn ? "visibility" : "visibility_off",
+                    "Redeye", eyeOn, hov);
+        break;
+      }
       case ccl::PearToggle::Cmd1:
         card_button(tx, L.togY, L.togW, L.togH,
                     cfg.cmdIcon1.empty() ? "terminal" : cfg.cmdIcon1.c_str(),

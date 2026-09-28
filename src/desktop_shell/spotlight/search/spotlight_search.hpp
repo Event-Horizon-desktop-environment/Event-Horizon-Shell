@@ -11,6 +11,7 @@ struct SpotlightHit {
 
   std::string comment;
   std::string exec;
+  std::string seekerAction;
   std::string iconKey;
   std::string categories;
   int score = 0;

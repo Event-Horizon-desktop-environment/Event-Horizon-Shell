@@ -240,6 +240,9 @@ void dock_bind_deferred_globals(DockApp& app) {
     } else if (iface == ext_idle_notifier_v1_interface.name) {
       app.idleNotifier = static_cast<ext_idle_notifier_v1*>(
           wl_registry_bind(app.registry, d.name, &ext_idle_notifier_v1_interface, 1));
+    } else if (iface == zwp_idle_inhibit_manager_v1_interface.name) {
+      app.idleInhibitMgr = static_cast<zwp_idle_inhibit_manager_v1*>(
+          wl_registry_bind(app.registry, d.name, &zwp_idle_inhibit_manager_v1_interface, 1));
     } else if (iface == ext_session_lock_manager_v1_interface.name) {
       app.sessionLockMgr = static_cast<ext_session_lock_manager_v1*>(
           wl_registry_bind(app.registry, d.name, &ext_session_lock_manager_v1_interface, 1));

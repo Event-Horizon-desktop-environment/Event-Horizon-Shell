@@ -47,6 +47,7 @@ enum class CcHoverTarget : uint8_t {
   NightColorCard,   // Night Color quick toggle -> toggle night light
   ColorSchemeCard,  // Theme quick toggle (icon only) -> swap light/dark scheme
   CameraCard,       // Camera quick toggle -> screenshot region selection
+  RedeyeCard,       // Redeye quick toggle -> inhibit idle sleep
   CmdCard1,         // CommandRun 1 -> spawn custom shell command
   CmdCard2,         // CommandRun 2 -> spawn custom shell command
   VolumeCard,       // Volume slider card (mute on icon, drag value)

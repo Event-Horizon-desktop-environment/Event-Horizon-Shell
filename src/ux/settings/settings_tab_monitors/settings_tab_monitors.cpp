@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ux/settings/common/settings_common.hpp"
+#include "ux/settings/common/retain/retained_surface.hpp"
 #include "ux/settings/settings_tab_monitors/monitors_log.hpp"
 #include "ux/settings/settings_tab_monitors/settings_tab_monitors.hpp"
 #include "ux/settings/utils/helpers/material_glyphs.hpp"
@@ -148,15 +149,82 @@ struct MonPaintCanvasCache {
   double sf = 1;
 };
 
+static double g_monFitFzMinX = 0.0, g_monFitFzMinY = 0.0, g_monFitFzSf = 0.0;
+static double g_monFitFzZoom = 0.0;
+static int g_monFitFzW = -1, g_monFitFzH = -1, g_monFitFzN = -1;
+static bool g_monFitFzValid = false;
+
+static bool monitors_canvas_frozen_ok(const App& app, int canvas_w, int canvas_h) {
+  const size_t dragIx = app.monitorsCanvasDragIdx >= 0
+                            ? static_cast<size_t>(app.monitorsCanvasDragIdx)
+                            : static_cast<size_t>(-1);
+  return dragIx < app.monitorsTab.outputs.size() && g_monFitFzValid &&
+         g_monFitFzW == canvas_w && g_monFitFzH == canvas_h &&
+         g_monFitFzN == static_cast<int>(app.monitorsTab.outputs.size()) &&
+         g_monFitFzZoom == app.monitorsCanvasZoom;
+}
+
+bool monitors_canvas_drag_fit(const App& app, int canvas_w, int canvas_h, double* min_x,
+                              double* min_y, double* sf) {
+  if (!monitors_canvas_frozen_ok(app, canvas_w, canvas_h)) return false;
+  if (min_x) *min_x = g_monFitFzMinX;
+  if (min_y) *min_y = g_monFitFzMinY;
+  if (sf) *sf = g_monFitFzSf;
+  return true;
+}
+
 static MonPaintCanvasCache monitors_paint_canvas_cache_build(
     const App& app, const eh::settings_monitors_tab::MonitorsTabLayout& lay) {
   MonPaintCanvasCache c;
   eh::settings_monitors_tab::layout_rects_from_outputs(app.monitorsTab.outputs,
                                                        app.monitorsTab.caps, &c.rects);
-  double span_w = 1, span_h = 1, fit_scale = 1;
-  eh::settings_monitors_tab::compute_canvas_fit(c.rects, lay.canvas_w, lay.canvas_h, 0.1,
-                                                &c.min_x, &c.min_y, &span_w, &span_h, &fit_scale);
-  c.sf = fit_scale * app.monitorsCanvasZoom;
+  const size_t dragIx = app.monitorsCanvasDragIdx >= 0
+                            ? static_cast<size_t>(app.monitorsCanvasDragIdx)
+                            : static_cast<size_t>(-1);
+  const bool posDrag = dragIx < app.monitorsTab.outputs.size() &&
+                       dragIx < c.rects.size() &&
+                       !app.monitorsTab.outputs[dragIx].disabled;
+  bool useFrozen = false;
+  if (posDrag && monitors_canvas_frozen_ok(app, lay.canvas_w, lay.canvas_h)) {
+    const auto& dr = c.rects[dragIx];
+    if (dr.w > 0 && dr.h > 0) {
+      const double fsx = static_cast<double>(lay.canvas_x) + app.monitorsCanvasPanX +
+                         (static_cast<double>(dr.x) - g_monFitFzMinX) * g_monFitFzSf;
+      const double fsy = static_cast<double>(lay.canvas_y) + app.monitorsCanvasPanY +
+                         (static_cast<double>(dr.y) - g_monFitFzMinY) * g_monFitFzSf;
+      const double fsw = static_cast<double>(dr.w) * g_monFitFzSf;
+      const double fsh = static_cast<double>(dr.h) * g_monFitFzSf;
+      constexpr double kDragMargin = 64.0;
+      if (fsx + fsw > static_cast<double>(lay.canvas_x) - kDragMargin &&
+          fsx < static_cast<double>(lay.canvas_x + lay.canvas_w) + kDragMargin &&
+          fsy + fsh > static_cast<double>(lay.canvas_y) - kDragMargin &&
+          fsy < static_cast<double>(lay.canvas_y + lay.canvas_h) + kDragMargin) {
+        useFrozen = true;
+      }
+    }
+  }
+  if (useFrozen) {
+    c.min_x = g_monFitFzMinX;
+    c.min_y = g_monFitFzMinY;
+    c.sf = g_monFitFzSf;
+  } else {
+    double span_w = 1, span_h = 1, fit_scale = 1;
+    eh::settings_monitors_tab::compute_canvas_fit(c.rects, lay.canvas_w, lay.canvas_h, 0.1,
+                                                  &c.min_x, &c.min_y, &span_w, &span_h, &fit_scale);
+    c.sf = fit_scale * app.monitorsCanvasZoom;
+    if (posDrag) {
+      g_monFitFzMinX = c.min_x;
+      g_monFitFzMinY = c.min_y;
+      g_monFitFzSf = c.sf;
+      g_monFitFzZoom = app.monitorsCanvasZoom;
+      g_monFitFzW = lay.canvas_w;
+      g_monFitFzH = lay.canvas_h;
+      g_monFitFzN = static_cast<int>(app.monitorsTab.outputs.size());
+      g_monFitFzValid = true;
+    } else {
+      g_monFitFzValid = false;
+    }
+  }
   c.caps_for_idx.resize(app.monitorsTab.outputs.size(), nullptr);
   for (size_t i = 0; i < app.monitorsTab.outputs.size(); ++i) {
     auto it = app.monitorsTab.caps.find(app.monitorsTab.outputs[i].name);
@@ -181,34 +249,25 @@ static inline bool monitors_paint_screen_rect_cached(
   return *sw > 1 && *sh > 1;
 }
 
-// Shared retained-surface bits (used by MonTextCtx below and the card cache).
-struct MonSurfEntry {
-  cairo_surface_t* surf = nullptr;
-  int sw = 0, sh = 0;  // device px
-  uint64_t key = 0;
-};
+// Shared retained-surface bits (thin local aliases over retain:: so the
+// ~40 existing call sites stay untouched).
+using MonSurfEntry = eh::settings::retain::SurfEntry;
 
-static uint64_t mon_q8(float v) {
-  const int q = static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f));
-  return static_cast<uint64_t>(static_cast<unsigned>(q));
-}
+static uint64_t mon_q8(float v) { return eh::settings::retain::q8(v); }
 
-static uint64_t mon_ret_mix(uint64_t h, uint64_t v) {
-  h ^= v;
-  h *= 1099511628211ULL;
-  return h;
-}
+static uint64_t mon_ret_mix(uint64_t h, uint64_t v) { return eh::settings::retain::mix(h, v); }
 
-// Blit a device-resolution retained surface 1:1 onto cr at user (x, y).
 static void mon_ret_blit(cairo_t* cr, const MonSurfEntry& e, double x, double y, double ds) {
-  cairo_save(cr);
-  cairo_translate(cr, x, y);
-  cairo_scale(cr, 1.0 / ds, 1.0 / ds);
-  cairo_set_source_surface(cr, e.surf, 0, 0);
-  cairo_rectangle(cr, 0, 0, e.sw, e.sh);
-  cairo_fill(cr);
-  cairo_restore(cr);
+  eh::settings::retain::blit(cr, e, x, y, ds);
 }
+
+template <typename PaintFn>
+static void mon_ret_render(MonSurfEntry& e, int sw, int sh, double ds, uint64_t key,
+                           PaintFn&& paint) {
+  eh::settings::retain::render(e, sw, sh, ds, key, std::forward<PaintFn>(paint));
+}
+
+static double mon_device_scale(cairo_t* cr) { return eh::settings::retain::device_scale(cr); }
 
 // Per-paint shared Pango layout for monitors text. settings_show_text() and
 // settings_draw_trimmed_text_line() each create+destroy a layout and font
@@ -242,12 +301,14 @@ struct MonTextCtx {
             float g, float b, float a) {
     if (!text || !text[0]) return;
     ++nText;
+    const auto t0 = std::chrono::steady_clock::now();
     int ph = 0;
     const uint64_t key = text_key(text, fontSize, fontWeight, r, g, b, a);
     auto it = surfs.find(key);
     if (it != surfs.end() && it->second.e.surf) {
       ++tHits;
       mon_ret_blit(cr, it->second.e, x, y - it->second.ph + 2.0, devScale);
+      usText += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
       return;
     }
     ++tMiss;
@@ -258,6 +319,7 @@ struct MonTextCtx {
     (void)pw;
     render_text(r, g, b, a, key, ph);
     mon_ret_blit(cr, surfs[key].e, x, y - ph + 2.0, devScale);
+    usText += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
   }
 
   void trimmed(const std::string& text, double x, double baselineY, size_t approxMaxChars,
@@ -280,12 +342,14 @@ struct MonTextCtx {
                float g, float b, float a, int* out_h = nullptr) {
     if (!text || !text[0]) return;
     ++nText;
+    const auto t0 = std::chrono::steady_clock::now();
     const uint64_t key = text_key(text, fontSize, fontWeight, r, g, b, a);
     auto it = surfs.find(key);
     if (it != surfs.end() && it->second.e.surf) {
       ++tHits;
       mon_ret_blit(cr, it->second.e, x, y, devScale);
       if (out_h) *out_h = it->second.ph;
+      usText += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
       return;
     }
     ++tMiss;
@@ -296,6 +360,7 @@ struct MonTextCtx {
     if (out_h) *out_h = ph;
     render_text(r, g, b, a, key, ph);
     mon_ret_blit(cr, surfs[key].e, x, y, devScale);
+    usText += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
   }
 
   void measure(const char* text, float fontSize, int fontWeight, int* tw, int* th) {
@@ -365,6 +430,7 @@ struct MonTextCtx {
   PangoLayout* layout = nullptr;
   unsigned nText = 0;  // texts painted this frame (element census)
   unsigned tHits = 0, tMiss = 0;
+  long long usText = 0;  // all text (lookup+render+blit) this frame
   struct TextSurf {
     MonSurfEntry e;
     int ph = 0;  // user-unit height (baseline adjust)
@@ -402,110 +468,108 @@ enum MonRetCard : uint64_t {
 };
 
 struct MonRetainedCache {
-  struct Entry {
-    cairo_surface_t* surf = nullptr;
-    int sw = 0, sh = 0;  // device px
-    uint64_t key = 0;
-  };
+  using Entry = MonSurfEntry;
   std::array<Entry, static_cast<size_t>(kRetCardCount)> cards{};
-  std::unordered_map<uint64_t, Entry> widgets;  // toolbar buttons, bounded
-  unsigned ch = 0, cm = 0;                      // per-frame card hits/misses
-  unsigned wh = 0, wm = 0;                      // per-frame widget hits/misses
+  std::unordered_map<uint64_t, Entry> widgets;
+  std::unordered_map<uint64_t, Entry> canvas;
+  unsigned ch = 0, cm = 0;
+  unsigned wh = 0, wm = 0;
   unsigned long long bytes = 0;
   ~MonRetainedCache() {
     for (auto& e : cards)
       if (e.surf) cairo_surface_destroy(e.surf);
     for (auto& kv : widgets)
       if (kv.second.surf) cairo_surface_destroy(kv.second.surf);
+    for (auto& kv : canvas)
+      if (kv.second.surf) cairo_surface_destroy(kv.second.surf);
   }
   void frame_reset() { ch = cm = wh = wm = 0; }
   void drop_bytes(unsigned long long n) { bytes -= std::min(bytes, n); }
 };
 
-static double mon_device_scale(cairo_t* cr) {
-  cairo_matrix_t m;
-  cairo_get_matrix(cr, &m);
-  double ds = std::hypot(m.xx, m.xy);
-  if (!(ds > 0.0) || !std::isfinite(ds)) ds = 1.0;
-  return ds;
-}
-
-template <typename PaintFn>
-static void mon_ret_render(MonRetainedCache::Entry& e, int sw, int sh, double ds, uint64_t key,
-                           PaintFn&& paint) {
-  if (e.surf) cairo_surface_destroy(e.surf);
-  e.surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, sw, sh);
-  e.sw = sw;
-  e.sh = sh;
-  e.key = key;
-  cairo_t* tmp = cairo_create(e.surf);
-  cairo_set_operator(tmp, CAIRO_OPERATOR_CLEAR);
-  cairo_paint(tmp);
-  cairo_set_operator(tmp, CAIRO_OPERATOR_OVER);
-  cairo_scale(tmp, ds, ds);
-  paint(tmp);
-  cairo_destroy(tmp);
-}
-
-static void mon_ret_blit(cairo_t* cr, const MonRetainedCache::Entry& e, double x, double y,
-                         double ds) {
-  cairo_save(cr);
-  cairo_translate(cr, x, y);
-  cairo_scale(cr, 1.0 / ds, 1.0 / ds);
-  cairo_set_source_surface(cr, e.surf, 0, 0);
-  cairo_rectangle(cr, 0, 0, e.sw, e.sh);
-  cairo_fill(cr);
-  cairo_restore(cr);
-}
-
 // Fixed-slot card/canvas entry. Colors must match settings_card()/canvas-box.
 template <typename PaintFn>
 static bool mon_ret_card(cairo_t* cr, MonRetainedCache& c, MonRetCard id, double x, double y, int w,
-                         int h, uint64_t key, double ds, PaintFn&& paint) {
+                         int h, uint64_t key, double ds, PaintFn&& paint,
+                         long long* blitUs = nullptr, double pad = 0.0) {
   if (w <= 0 || h <= 0) return false;
-  const int sw = std::max(1, static_cast<int>(std::ceil(w * ds)));
-  const int sh = std::max(1, static_cast<int>(std::ceil(h * ds)));
+  const int sw = std::max(1, static_cast<int>(std::ceil((w + 2.0 * pad) * ds)));
+  const int sh = std::max(1, static_cast<int>(std::ceil((h + 2.0 * pad) * ds)));
   auto& e = c.cards[static_cast<size_t>(id)];
   if (e.surf && e.key == key && e.sw == sw && e.sh == sh) {
-    mon_ret_blit(cr, e, x, y, ds);
+    const auto t0 = std::chrono::steady_clock::now();
+    mon_ret_blit(cr, e, x - pad, y - pad, ds);
+    if (blitUs) *blitUs += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
     ++c.ch;
     return true;
   }
   c.drop_bytes(static_cast<unsigned long long>(e.sw) * static_cast<unsigned long long>(e.sh) * 4ULL);
   mon_ret_render(e, sw, sh, ds, key, std::forward<PaintFn>(paint));
   c.bytes += static_cast<unsigned long long>(sw) * static_cast<unsigned long long>(sh) * 4ULL;
-  mon_ret_blit(cr, e, x, y, ds);
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    mon_ret_blit(cr, e, x - pad, y - pad, ds);
+    if (blitUs) *blitUs += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
+  }
   ++c.cm;
   return false;
 }
 
 // Bounded map entry for small widgets (toolbar buttons).
 template <typename PaintFn>
-static bool mon_ret_widget(cairo_t* cr, MonRetainedCache& c, uint64_t key, double x, double y, int w,
-                           int h, double ds, PaintFn&& paint, double pad = 0.0) {
+static bool mon_ret_map(cairo_t* cr, MonRetainedCache& c,
+                        std::unordered_map<uint64_t, MonRetainedCache::Entry>& map, uint64_t key,
+                        double x, double y, int w, int h, double ds, PaintFn&& paint, double pad,
+                        long long* blitUs, long long* missUs) {
   if (w <= 0 || h <= 0) return false;
   const int sw = std::max(1, static_cast<int>(std::ceil((w + 2.0 * pad) * ds)));
   const int sh = std::max(1, static_cast<int>(std::ceil((h + 2.0 * pad) * ds)));
-  auto it = c.widgets.find(key);
-  if (it != c.widgets.end() && it->second.surf && it->second.sw == sw && it->second.sh == sh) {
+  auto it = map.find(key);
+  if (it != map.end() && it->second.surf && it->second.sw == sw && it->second.sh == sh) {
+    const auto t0 = std::chrono::steady_clock::now();
     mon_ret_blit(cr, it->second, x - pad, y - pad, ds);
+    if (blitUs) *blitUs += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
     ++c.wh;
     return true;
   }
-  if (c.widgets.size() >= 64) {
-    for (auto& kv : c.widgets)
+  if (map.size() >= 64) {
+    for (auto& kv : map)
       if (kv.second.surf) cairo_surface_destroy(kv.second.surf);
-    c.widgets.clear();
+    map.clear();
     c.bytes = 0;
   }
   MonRetainedCache::Entry e;
-  mon_ret_render(e, sw, sh, ds, key, std::forward<PaintFn>(paint));
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    mon_ret_render(e, sw, sh, ds, key, std::forward<PaintFn>(paint));
+    if (missUs) *missUs += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
+  }
   c.bytes += static_cast<unsigned long long>(sw) * static_cast<unsigned long long>(sh) * 4ULL;
-  mon_ret_blit(cr, e, x - pad, y - pad, ds);
+  {
+    const auto t0 = std::chrono::steady_clock::now();
+    mon_ret_blit(cr, e, x - pad, y - pad, ds);
+    if (blitUs) *blitUs += eh::settings::monitors_log::mon_us(t0, std::chrono::steady_clock::now());
+  }
   ++c.wm;
-  auto res = c.widgets.emplace(key, e);
+  auto res = map.emplace(key, e);
   (void)res;
   return false;
+}
+
+template <typename PaintFn>
+static bool mon_ret_widget(cairo_t* cr, MonRetainedCache& c, uint64_t key, double x, double y, int w,
+                           int h, double ds, PaintFn&& paint, double pad = 0.0,
+                           long long* blitUs = nullptr) {
+  return mon_ret_map(cr, c, c.widgets, key, x, y, w, h, ds, std::forward<PaintFn>(paint), pad,
+                     blitUs, nullptr);
+}
+
+template <typename PaintFn>
+static bool mon_ret_canvas(cairo_t* cr, MonRetainedCache& c, uint64_t key, double x, double y, int w,
+                           int h, double ds, PaintFn&& paint, double pad = 0.0,
+                           long long* blitUs = nullptr, long long* missUs = nullptr) {
+  return mon_ret_map(cr, c, c.canvas, key, x, y, w, h, ds, std::forward<PaintFn>(paint), pad,
+                     blitUs, missUs);
 }
 
 // settings_card() colors, factored out so paint and cache key agree.
@@ -837,9 +901,39 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
   const int monDsQ = monDs > 0.0 ? static_cast<int>(std::lround(monDs * 128.0)) : 128;
   // Shared text layout for all monitors-tab text (1 layout vs ~30 create/destroy).
   MonTextCtx monTx(cr, monDs);
+  // Viewport culling: paint runs under a scroll translate + clip, so sections
+  // fully outside the visible document range contribute zero pixels.
+  // Skipping them is exact (hit-testing is independent of paint).
+  const double monViewTop = paintPointerYOffset + kContentTop;
+  const double monViewBot =
+      paintPointerYOffset + static_cast<double>(app.height - kContentTop - kSpacingL);
+  auto mon_visible = [&](int y, int h) -> bool {
+    return static_cast<double>(y) < monViewBot && static_cast<double>(y + h) > monViewTop;
+  };
+  auto mon_damaged = [&](int x, int y, int w, int h) -> bool {
+    if (!app.paintDamageActive || app.paintDamageCount <= 0) return true;
+    const double sy = static_cast<double>(y) - paintPointerYOffset;
+    for (int i = 0; i < app.paintDamageCount; ++i) {
+      const auto& r = app.paintDamage[i];
+      if (static_cast<double>(x) < static_cast<double>(r.x + r.w) &&
+          static_cast<double>(x + w) > static_cast<double>(r.x) && sy < static_cast<double>(r.y + r.h) &&
+          sy + static_cast<double>(h) > static_cast<double>(r.y))
+        return true;
+    }
+    return false;
+  };
+  unsigned nCulled = 0;
+  // Accumulated settings_slider() paint cost this frame.
+  long long us_sliders = 0;
+  // Micro-split: per-category blit/compute times for pinpointing.
+  long long usCardBlit = 0, usBtnBlit = 0, usComboBlit = 0, usRectBlit = 0;
+  long long usPillBlit = 0, usTogBlit = 0, usCbgBlit = 0;
+  long long usGlyph = 0, usToggle = 0, usCbgStroke = 0, usRectStroke = 0;
+  // Element census for the paint line (combos/sliders/glyphs/cards/texts).
+  unsigned nCombos = 0, nSliders = 0, nGlyphs = 0;
+  int nCards = 0;
   // Cached section card: identical pixels to settings_card().
-  auto mon_card = [&](MonRetCard id, double x, double y, int w, int h) {
-    float r, g, b, a;
+  auto mon_card = [&](MonRetCard id, double x, double y, int w, int h) {    float r, g, b, a;
     mon_card_colors(app, glassOv, &r, &g, &b, &a);
     const uint64_t key = mon_ret_cardkey(id, w, h, monDsQ, r, g, b, a);
     mon_ret_card(cr, s_monCache, id, x, y, w, h, key, monDs, [=](cairo_t* t) {
@@ -849,7 +943,7 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
       box.setGeometry(0, 0, static_cast<float>(w), static_cast<float>(h));
       box.setGlassy(true);
       box.paint(t);
-    });
+    }, &usCardBlit);
   };
 
   settings_label(cr, cardX + kCardPad,
@@ -861,34 +955,104 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
 
   // Button ids for the retained cache (labels are static per id).
   // 0=Refresh 1=Restart portals 2=Apply 3=Revert 4=Center view 5=Align top 6=Browse 7=Clear
+  struct BtnMemoKey {
+    int idx, bw, bh, hov, en;
+    uint32_t acc, out;
+    bool operator==(const BtnMemoKey& o) const noexcept {
+      return idx == o.idx && bw == o.bw && bh == o.bh && hov == o.hov && en == o.en &&
+             acc == o.acc && out == o.out;
+    }
+  };
+  struct BtnMemoHash {
+    size_t operator()(const BtnMemoKey& k) const noexcept {
+      uint64_t h = 1469598103934665603ULL;
+      h ^= static_cast<uint64_t>(k.idx); h *= 1099511628211ULL;
+      h ^= static_cast<uint64_t>(k.bw); h *= 1099511628211ULL;
+      h ^= static_cast<uint64_t>(k.bh); h *= 1099511628211ULL;
+      h ^= static_cast<uint64_t>(k.hov); h *= 1099511628211ULL;
+      h ^= static_cast<uint64_t>(k.en); h *= 1099511628211ULL;
+      h ^= k.acc; h *= 1099511628211ULL;
+      h ^= k.out; h *= 1099511628211ULL;
+      return static_cast<size_t>(h);
+    }
+  };
+  struct BtnMemoVal {
+    uint64_t key;
+    float dx, dy, fw, fh;
+  };
+  static std::unordered_map<BtnMemoKey, BtnMemoVal, BtnMemoHash> s_btnMemo;
   auto paint_mon_small_btn = [&](int bx, int by, int bw, int bh, int idx, const char* label,
                                  bool hot, float alphaScale) {
     const int en = alphaScale > 0.5f ? 1 : 0;
     const int hov = hot ? 1 : 0;
-    // Resolve final geometry first (m3 may widen+recenter for long labels);
-    // the cached bitmap holds the button at origin, blitted at the resolved spot.
-    m3::Button gb;
-    gb.setMinSize(0, 0);
-    gb.setLabel(label);
-    gb.setGeometry(0, 0, static_cast<float>(bw), static_cast<float>(bh));
-    gb.setStyle(m3::Button::Style::Outlined);
-    gb.setSize(m3::Button::Size::XS);
-    gb.setEnabled(en != 0);
-    gb.setAccentColor(a_r, a_g, a_b);
-    gb.setOutlineColor(o_r, o_g, o_b);
-    gb.setHovered(hov != 0);
-    gb.setPressed(false);
-    const float gdx = gb.x(), gdy = gb.y();
-    const int fw = std::max(1, static_cast<int>(std::lround(gb.width())));
-    const int fh = std::max(1, static_cast<int>(std::lround(gb.height())));
-    const uint64_t key =
-        mon_ret_btnkey(idx, fw, fh, monDsQ, hov, en, a_r, a_g, a_b, o_r, o_g, o_b);
-    gb.setGeometry(-gdx, -gdy, static_cast<float>(bw), static_cast<float>(bh));
-    mon_ret_widget(cr, s_monCache, key, bx + gdx, by + gdy, fw, fh, monDs,
-                   [&](cairo_t* t) { gb.paint(t); });
+    const uint32_t acc =
+        (static_cast<uint32_t>(mon_q8(a_r)) << 16) | (static_cast<uint32_t>(mon_q8(a_g)) << 8) |
+        static_cast<uint32_t>(mon_q8(a_b));
+    const uint32_t oul =
+        (static_cast<uint32_t>(mon_q8(o_r)) << 16) | (static_cast<uint32_t>(mon_q8(o_g)) << 8) |
+        static_cast<uint32_t>(mon_q8(o_b));
+    const BtnMemoKey mk{idx, bw, bh, hov, en, acc, oul};
+    uint64_t key;
+    float gdx, gdy, fw, fh;
+    const auto mit = s_btnMemo.find(mk);
+    if (mit != s_btnMemo.end()) {
+      key = mit->second.key;
+      gdx = mit->second.dx;
+      gdy = mit->second.dy;
+      fw = mit->second.fw;
+      fh = mit->second.fh;
+    } else {
+      // Resolve final geometry first (m3 may widen+recenter for long labels).
+      m3::Button gb;
+      gb.setMinSize(0, 0);
+      gb.setLabel(label);
+      gb.setGeometry(0, 0, static_cast<float>(bw), static_cast<float>(bh));
+      gb.setStyle(m3::Button::Style::Outlined);
+      gb.setSize(m3::Button::Size::XS);
+      gb.setEnabled(en != 0);
+      gb.setAccentColor(a_r, a_g, a_b);
+      gb.setOutlineColor(o_r, o_g, o_b);
+      gb.setHovered(hov != 0);
+      gb.setPressed(false);
+      gdx = gb.x();
+      gdy = gb.y();
+      fw = gb.width();
+      fh = gb.height();
+      const int iw = std::max(1, static_cast<int>(std::lround(fw)));
+      const int ih = std::max(1, static_cast<int>(std::lround(fh)));
+      key = mon_ret_btnkey(idx, iw, ih, monDsQ, hov, en, a_r, a_g, a_b, o_r, o_g, o_b);
+      if (s_btnMemo.size() >= 128) s_btnMemo.clear();
+      s_btnMemo.emplace(mk, BtnMemoVal{key, gdx, gdy, fw, fh});
+    }
+    const int iw = std::max(1, static_cast<int>(std::lround(fw)));
+    const int ih = std::max(1, static_cast<int>(std::lround(fh)));
+    // The cached bitmap holds the button at origin, blitted at the resolved spot.
+    // gb is built only on a widget-cache miss (i.e. almost never after warmup).
+    mon_ret_widget(cr, s_monCache, key, bx + gdx, by + gdy, iw, ih, monDs,
+                   [&](cairo_t* t) {
+                     m3::Button gb;
+                     gb.setMinSize(0, 0);
+                     gb.setLabel(label);
+                     gb.setStyle(m3::Button::Style::Outlined);
+                     gb.setSize(m3::Button::Size::XS);
+                     gb.setEnabled(en != 0);
+                     gb.setAccentColor(a_r, a_g, a_b);
+                     gb.setOutlineColor(o_r, o_g, o_b);
+                     gb.setHovered(hov != 0);
+                     gb.setPressed(false);
+                     gb.setGeometry(-gdx, -gdy, static_cast<float>(bw), static_cast<float>(bh));
+                     gb.paint(t);
+                   },
+                   0.0, &usBtnBlit);
   };
 
   const bool dirtyMon = app.monitorsTab.dirty;
+  const bool toolbarVisible = mon_visible(monLay.toolbar_y, monLay.toolbar_btn_h + 24);
+  const bool toolbarDamaged =
+      mon_damaged(contentX, monLay.toolbar_y, contentW, monLay.toolbar_btn_h) ||
+      mon_damaged(contentX, monLay.aux_btn_y, contentW, monLay.aux_btn_h);
+  if (!toolbarVisible || !toolbarDamaged) ++nCulled;
+  if (toolbarVisible && toolbarDamaged) {
   const bool hRef = point_in_rect(app.pointerX, pyH, monLay.toolbar_refresh_x, monLay.toolbar_y,
                                   monLay.toolbar_btn_w, monLay.toolbar_btn_h);
   const bool hPortals = point_in_rect(app.pointerX, pyH, monLay.toolbar_portals_x, monLay.toolbar_y,
@@ -914,6 +1078,7 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
                       4, "Center view", hCent, 1.f);
   paint_mon_small_btn(monLay.align_top_btn_x, monLay.aux_btn_y, monLay.aux_btn_w,
                       monLay.aux_btn_h, 5, "Align top", hAlign, 1.f);
+  }  // toolbarVisible
   const auto t_after_toolbar = MC::now();
 
   if (!app.monitorsTab.status.empty()) {
@@ -925,6 +1090,12 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
                   0.82 * glassOv, 11.f, 400);
   }
 
+  const bool canvasVisible = mon_visible(monLay.canvas_y, monLay.canvas_h);
+  if (!canvasVisible ||
+      !mon_damaged(monLay.canvas_x, monLay.canvas_y, monLay.canvas_w, monLay.canvas_h))
+    ++nCulled;
+  if (canvasVisible &&
+      mon_damaged(monLay.canvas_x, monLay.canvas_y, monLay.canvas_w, monLay.canvas_h)) {
   {
     float r, g, b;
     if (app.drawChromeMatugen) {
@@ -937,11 +1108,15 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
       b = static_cast<float>(Theme::BgB);
     }
     const float a = static_cast<float>(0.55 * glassOv);
-    const uint64_t key = mon_ret_cardkey(kRetCanvasBg, monLay.canvas_w, monLay.canvas_h, monDsQ,
-                                         r, g, b, a);
+    uint64_t key = mon_ret_cardkey(kRetCanvasBg, monLay.canvas_w, monLay.canvas_h, monDsQ,
+                                   r, g, b, a);
+    key = mon_ret_mix(key, mon_q8(o_r));
+    key = mon_ret_mix(key, mon_q8(o_g));
+    key = mon_ret_mix(key, mon_q8(o_b));
     mon_ret_card(cr, s_monCache, kRetCanvasBg, static_cast<double>(monLay.canvas_x),
                  static_cast<double>(monLay.canvas_y), monLay.canvas_w, monLay.canvas_h, key,
-                 monDs, [=](cairo_t* t) {
+                 monDs, [&](cairo_t* t) {
+                   cairo_translate(t, 1.0, 1.0);
                    m3::Box box;
                    box.setColor(r, g, b, a);
                    box.setRadius(10.f);
@@ -949,18 +1124,21 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
                                    static_cast<float>(monLay.canvas_h));
                    box.setGlassy(true);
                    box.paint(t);
-                 });
+                   cairo_round_rect(t, 0, 0, monLay.canvas_w, monLay.canvas_h, 10.0);
+                   paint_src_glass_hi(app, t, 0.10 * glassOv);
+                   cairo_set_line_width(t, 1.0);
+                   cairo_stroke(t);
+                 }, &usCbgBlit, 1.0);
   }
-  cairo_round_rect(cr, static_cast<double>(monLay.canvas_x),
-                   static_cast<double>(monLay.canvas_y),
-                   static_cast<double>(monLay.canvas_w),
-                   static_cast<double>(monLay.canvas_h), 10.0);
-  paint_src_glass_hi(app, cr, 0.10 * glassOv);
-  cairo_set_line_width(cr, 1.0);
-  cairo_stroke(cr);
+  }  // canvasVisible (backdrop)
   const auto t_after_canvas_bg = MC::now();
 
   const int nMon = static_cast<int>(app.monitorsTab.outputs.size());
+  if (!canvasVisible ||
+      !mon_damaged(monLay.canvas_x, monLay.canvas_y, monLay.canvas_w, monLay.canvas_h))
+    ++nCulled;
+  if (canvasVisible &&
+      mon_damaged(monLay.canvas_x, monLay.canvas_y, monLay.canvas_w, monLay.canvas_h)) {
   cairo_save(cr);
   cairo_round_rect(cr, static_cast<double>(monLay.canvas_x),
                    static_cast<double>(monLay.canvas_y),
@@ -1016,14 +1194,21 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
       rprobe.setRadius(6.f);
       rprobe.setGeometry(0, 0, static_cast<float>(sw), static_cast<float>(sh));
       rprobe.setGlassy(true);
-      mon_ret_widget(cr, s_monCache, rkey, sx, sy, iw, ih, monDs,
-                     [&](cairo_t* t) { rprobe.paint(t); });
+      const float sa = static_cast<float>((sel ? 0.55 : 0.22) * glassOv);
+      const float slw = sel ? 2.0f : 1.0f;
+      rkey = mon_ret_mix(rkey, mon_q8(sa));
+      rkey = mon_ret_mix(rkey, static_cast<uint64_t>(sel ? 1 : 0));
+      mon_ret_canvas(cr, s_monCache, rkey, sx, sy, iw, ih, monDs,
+                     [&](cairo_t* t) {
+                       cairo_translate(t, 1.0, 1.0);
+                       rprobe.paint(t);
+                       cairo_round_rect(t, 0, 0, sw, sh, 6.0);
+                       cairo_set_source_rgba(t, Theme::AccR, Theme::AccG, Theme::AccB, sa);
+                       cairo_set_line_width(t, slw);
+                       cairo_stroke(t);
+                     },
+                     1.0, &usRectBlit, &usRectStroke);
     }
-    cairo_round_rect(cr, sx, sy, sw, sh, 6.0);
-    cairo_set_source_rgba(cr, Theme::AccR, Theme::AccG, Theme::AccB,
-                          sel ? 0.55 * glassOv : 0.22 * glassOv);
-    cairo_set_line_width(cr, sel ? 2.0 : 1.0);
-    cairo_stroke(cr);
 
     monTx.show(row.name.c_str(), sx + 8, sy + 18, 11, 700, Theme::TextR, Theme::TextG, Theme::TextB,
                  row.disabled ? 0.35f * static_cast<float>(glassOv) : 0.9f * static_cast<float>(glassOv));
@@ -1065,10 +1250,15 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
     }
   }
   cairo_restore(cr);
+  }  // canvasVisible
   const auto t_after_canvas_mon = MC::now();
 
   // Pills
-  {
+  const bool pillsVisible = mon_visible(monLay.pills_y, kMonPillH);
+  if (!pillsVisible || !mon_damaged(monLay.canvas_x, monLay.pills_y, monLay.canvas_w, kMonPillH))
+    ++nCulled;
+  if (pillsVisible &&
+      mon_damaged(monLay.canvas_x, monLay.pills_y, monLay.canvas_w, kMonPillH)) {
     int pillX = monLay.canvas_x;
     const int pillY = monLay.pills_y;
     for (int ii = 0; ii < nMon; ++ii) {
@@ -1102,12 +1292,12 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
         pprobe.setGeometry(0, 0, static_cast<float>(pillW), static_cast<float>(kMonPillH));
         pprobe.setGlassy(true);
         mon_ret_widget(cr, s_monCache, pkey, pillX, pillY, pillW, kMonPillH, monDs,
-                       [&](cairo_t* t) { pprobe.paint(t); });
+                       [&](cairo_t* t) { pprobe.paint(t); }, 0.0, &usPillBlit);
       }
       monTx.show(nm.c_str(), pillX + 12, pillY + 19, 11, psel ? 700 : 400, Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
       pillX += pillW + 8;
     }
-  }
+  }  // pillsVisible
   const auto t_after_pills = MC::now();
   // Form-section split (assigned inside the form block; default to pills when empty).
   auto t_form_header = t_after_pills;
@@ -1116,12 +1306,6 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
   auto t_form_color = t_after_pills;
   auto t_form_hdr = t_after_pills;
   auto t_form_lum = t_after_pills;
-  // Accumulated settings_slider() paint cost this frame (reported as dragsl=
-  // while a slider drag is active).
-  long long us_sliders = 0;
-  // Element census for the paint line (combos/sliders/glyphs/cards/texts).
-  unsigned nCombos = 0, nSliders = 0, nGlyphs = 0;
-  int nCards = 0;
 
   // Form cards
   if (!app.monitorsTab.outputs.empty()) {
@@ -1198,19 +1382,25 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
                          cairo_set_line_width(t, 1.0);
                          cairo_stroke(t);
                        },
-                       1.0);
+                       1.0, &usComboBlit);
       }
       cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
       cairo_set_font_size(cr, 12);
       const size_t valChars = static_cast<size_t>(std::clamp((cw - 40) / 7, 16, 52));
       monTx.trimmed(valueText, cx + 12.0, cy + 19.0, valChars,
                     0.88 * glassOv, 12.f, 400);
-      material_symbols_draw_glyph(cr, cx + cw - 12.0, cy + 14.0, 12.0,
-          expanded ? "arrow_drop_up" : "arrow_drop_down",
-          Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
+      {
+        const auto t_g0 = MC::now();
+        material_symbols_draw_glyph(cr, cx + cw - 12.0, cy + 14.0, 12.0,
+                                    expanded ? "arrow_drop_up" : "arrow_drop_down",
+                                    Theme::TextR, Theme::TextG, Theme::TextB, 1.0 * glassOv);
+        usGlyph += eh::settings::monitors_log::mon_us(t_g0, MC::now());
+      }
     };
 
     // Header card (cached background; name+toggle painted below)
+    if (mon_visible(fg.header.y, fg.header.h) &&
+        mon_damaged(fg.header.x, fg.header.y, fg.header.w, fg.header.h)) {
     mon_card(kRetCardHeader, static_cast<double>(fg.header.x), static_cast<double>(fg.header.y),
              fg.header.w, fg.header.h);
     monTx.show(srow.name.c_str(), fg.header.x + kCardPad, fg.header.y + 32, 13, 700, Theme::TextR,
@@ -1245,14 +1435,21 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
       tprobe.setTextColor(t_r, t_g, t_b);
       tprobe.setOutlineColor(o_r, o_g, o_b);
       tprobe.setHovered(false);
+      const auto t_t0 = MC::now();
       mon_ret_widget(cr, s_monCache, tkey, swX, swY, kSwW, kSwH, monDs,
-                     [&](cairo_t* t) { tprobe.paint(t); });
+                     [&](cairo_t* t) { tprobe.paint(t); }, 0.0, &usTogBlit);
+      usToggle += eh::settings::monitors_log::mon_us(t_t0, MC::now());
+    }
+    } else {
+      ++nCulled;
     }
     t_form_header = MC::now();
 
     const bool dimForm = srow.disabled;
 
     // Display section
+    if (mon_visible(fg.display.y, fg.display.h) &&
+        mon_damaged(fg.display.x, fg.display.y, fg.display.w, fg.display.h)) {
     mon_card(kRetCardDisplay, static_cast<double>(fg.display.x),
              static_cast<double>(fg.display.y), fg.display.w, fg.display.h);
     paint_sec_heading(fg.display, "Display");
@@ -1275,9 +1472,14 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
         paint_mon_combo_at_row(fg.display, fr.d_vrr, "VRR", vrTxt, app.monitorsActiveDd == 4);
       }
     }
+    } else {
+      ++nCulled;
+    }
     t_form_display = MC::now();
 
     // Scale & transform section
+    if (mon_visible(fg.scale.y, fg.scale.h) &&
+        mon_damaged(fg.scale.x, fg.scale.y, fg.scale.w, fg.scale.h)) {
     mon_card(kRetCardScale, static_cast<double>(fg.scale.x), static_cast<double>(fg.scale.y),
              fg.scale.w, fg.scale.h);
     paint_sec_heading(fg.scale, "Scale & transform");
@@ -1307,10 +1509,15 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
                              kMonitorTfLabels[static_cast<size_t>(ti)],
                              app.monitorsActiveDd == 2);
     }
+    } else {
+      ++nCulled;
+    }
     t_form_scale = MC::now();
 
     // Color section
     if (fg.has_color) {
+      if (mon_visible(fg.color.y, fg.color.h) &&
+          mon_damaged(fg.color.x, fg.color.y, fg.color.w, fg.color.h)) {
       mon_card(kRetCardColor, static_cast<double>(fg.color.x), static_cast<double>(fg.color.y),
                fg.color.w, fg.color.h);
       paint_sec_heading(fg.color, "Color");
@@ -1343,7 +1550,6 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
           const int clearGap = hasIcc ? kGap : 0;
           const int pathW = valW - browseW - clearW - kGap - clearGap;
           {
-            m3::Box box;
             float br, bg, bb;
             if (app.drawChromeMatugen) {
               br = app.drawChrome.panelFillR;
@@ -1354,11 +1560,29 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
               bg = static_cast<float>(Theme::BgG);
               bb = static_cast<float>(Theme::BgB);
             }
-            box.setColor(br, bg, bb, 0.88f * static_cast<float>(glassOv));
-            box.setRadius(9.f);
-            box.setGeometry(static_cast<float>(valX), static_cast<float>(elY),
-                            static_cast<float>(pathW), static_cast<float>(kSettingsComboH));
-            box.paint(cr);
+            const float ba = 0.88f * static_cast<float>(glassOv);
+            uint64_t iccKey = 1469598103934665603ULL;
+            iccKey = mon_ret_mix(iccKey, static_cast<uint64_t>(67));
+            iccKey = mon_ret_mix(iccKey, static_cast<uint64_t>(static_cast<uint32_t>(pathW)));
+            iccKey = mon_ret_mix(
+                iccKey, static_cast<uint64_t>(static_cast<uint32_t>(kSettingsComboH)));
+            iccKey = mon_ret_mix(iccKey, static_cast<uint64_t>(static_cast<uint32_t>(monDsQ)));
+            iccKey = mon_ret_mix(iccKey, static_cast<uint64_t>(app.drawChromeMatugen ? 1 : 0));
+            iccKey = mon_ret_mix(iccKey, mon_q8(br));
+            iccKey = mon_ret_mix(iccKey, mon_q8(bg));
+            iccKey = mon_ret_mix(iccKey, mon_q8(bb));
+            iccKey = mon_ret_mix(iccKey, mon_q8(ba));
+            m3::Box iccBox;
+            iccBox.setColor(br, bg, bb, ba);
+            iccBox.setRadius(9.f);
+            mon_ret_widget(cr, s_monCache, iccKey, static_cast<double>(valX),
+                           static_cast<double>(elY), pathW, kSettingsComboH, monDs,
+                           [&](cairo_t* t) {
+                             iccBox.setGeometry(0, 0, static_cast<float>(pathW),
+                                                static_cast<float>(kSettingsComboH));
+                             iccBox.paint(t);
+                           },
+                           0.0, &usCardBlit);
           }
           std::string pathDisp;
           if (hasIcc) {
@@ -1385,11 +1609,16 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
           }
         }
       }
+      } else {
+        ++nCulled;
+      }
     }
     t_form_color = MC::now();
 
     // HDR section
     if (fg.has_hdr) {
+      if (mon_visible(fg.hdr.y, fg.hdr.h) &&
+          mon_damaged(fg.hdr.x, fg.hdr.y, fg.hdr.w, fg.hdr.h)) {
       mon_card(kRetCardHdr, static_cast<double>(fg.hdr.x), static_cast<double>(fg.hdr.y),
                fg.hdr.w, fg.hdr.h);
       paint_sec_heading(fg.hdr, "HDR");
@@ -1438,10 +1667,15 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
           paint_mon_hypr_slider_at_row(fg.hdr, fr.h_sdr_s, "SDR saturation", 1);
         }
       }
+      } else {
+        ++nCulled;
+      }
       t_form_hdr = MC::now();
 
       // Luminance section
       if (fg.has_luminance) {
+        if (mon_visible(fg.luminance.y, fg.luminance.h) &&
+            mon_damaged(fg.luminance.x, fg.luminance.y, fg.luminance.w, fg.luminance.h)) {
         mon_card(kRetCardLum, static_cast<double>(fg.luminance.x),
                  static_cast<double>(fg.luminance.y), fg.luminance.w, fg.luminance.h);
         paint_sec_heading(fg.luminance, "Luminance");
@@ -1475,6 +1709,9 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
           paint_mon_hypr_slider_at_row(fg.luminance, fr.l_min, "Min luminance (HDR)", 4);
           paint_mon_hypr_slider_at_row(fg.luminance, fr.l_max, "Max luminance", 5);
           paint_mon_hypr_slider_at_row(fg.luminance, fr.l_avg, "Max average luminance", 6);
+        }
+        } else {
+          ++nCulled;
         }
       }
       t_form_lum = MC::now();
@@ -1517,15 +1754,17 @@ void paint_monitors_tab(App& app, cairo_t* cr, int contentX, int contentW,
     ML::instance().writef(
         "paint#%u total=%lldus layout=%lldus cache=%lldus toolbar=%lldus canvas_bg=%lldus "
         "canvas_mon=%lldus pills=%lldus form=%lldus fhead=%lldus fdisp=%lldus fscale=%lldus "
-        "fcolor=%lldus fhdr=%lldus flum=%lldus dragsl=%lldus cause=%s els=C%u/S%u/T%u/G%u/D%d dd=%d retC=%u/%u retW=%u/%u retKB=%llu tx=%u/%u txKB=%llu nMon=%d sel=%d(%s) dirty=%d "
+        "fcolor=%lldus fhdr=%lldus flum=%lldus sl=%lldus cause=%s els=C%u/S%u/T%u/G%u/D%d dd=%d retC=%u/%u retW=%u/%u retKB=%llu tx=%u/%u txKB=%llu culled=%u micro=txT%lld/gl%lld/cdB%lld/cbB%lld/rtB%lld/plB%lld/btB%lld/tgB%lld/cbgB%lld/cbgS%lld/rctS%lld/tog%lld nMon=%d sel=%d(%s) dirty=%d "
         "zoom=%.2f pan=%.0f,%.0f canvas=%dx%d glass=%.2f avg=%lldus max=%lldus",
         s_mon_paint_n, us_total, us_layout, us_cache, us_toolbar, us_canvas_bg,
         us_canvas_mon, us_pills, us_form, us_f_head, us_f_disp, us_f_scale,
-        us_f_color, us_f_hdr, us_f_lum, dragActive ? us_sliders : 0,
+        us_f_color, us_f_hdr, us_f_lum, us_sliders,
         eh::settings::monitors_log::mon_cause_take(), nCombos, nSliders, monTx.nText, nGlyphs,
         nCards, app.monitorsActiveDd, s_monCache.ch, s_monCache.cm, s_monCache.wh, s_monCache.wm,
         s_monCache.bytes / 1024ULL, monTx.tHits, monTx.tMiss,
-        MonTextCtx::textBytes / 1024ULL, nMon, sel, selName,
+        MonTextCtx::textBytes / 1024ULL, nCulled, monTx.usText, usGlyph, usCardBlit, usComboBlit,
+        usRectBlit, usPillBlit, usBtnBlit, usTogBlit, usCbgBlit, usCbgStroke, usRectStroke,
+        usToggle, nMon, sel, selName,
         app.monitorsTab.dirty ? 1 : 0, app.monitorsCanvasZoom, app.monitorsCanvasPanX,
         app.monitorsCanvasPanY, monLay.canvas_w, monLay.canvas_h, glassOv, avg,
         s_mon_paint_max_us);

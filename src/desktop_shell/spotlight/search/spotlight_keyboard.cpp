@@ -7,8 +7,42 @@
 #include "desktop_shell/spotlight/search/spotlight_query.hpp"
 #include "desktop_shell/spotlight/paint/spotlight_paint.hpp"
 #include "desktop_shell/common/fs/string_util.hpp"
+#include "desktop_shell/widgets/app_drawer/power/app_drawer_power_exec.hpp"
 
 using eh::shell::str::utf8_pop_back;
+
+namespace {
+
+bool try_seeker_action(DockApp& app, const SpotlightHit& hit) {
+  const std::string& a = hit.seekerAction;
+  if (a.size() == 7 && a.compare(0, 6, "power:") == 0 && a[6] >= '0' && a[6] <= '3') {
+    eh::shell::dock::app_drawer::app_drawer_power_exec(app.compositorKind, a[6] - '0');
+    popup_close(app);
+    if (app.display) wl_display_flush(app.display);
+    return true;
+  }
+  if (a.compare(0, 7, "window:") == 0) {
+    std::uint64_t serial = 0;
+    try {
+      serial = std::stoull(a.substr(7));
+    } catch (...) {
+      return false;
+    }
+    for (const auto& tl : app.toplevels.list()) {
+      if (tl.serial == serial && tl.handle) {
+        zwlr_foreign_toplevel_handle_v1_activate(tl.handle, app.seat);
+        if (app.display) wl_display_flush(app.display);
+        break;
+      }
+    }
+    popup_close(app);
+    if (app.display) wl_display_flush(app.display);
+    return true;
+  }
+  return false;
+}
+
+}
 
 namespace eh::shell::dock::spotlight {
 
@@ -48,8 +82,10 @@ bool spotlight_handle_keyboard(DockApp& app, xkb_keysym_t sym, uint32_t keycode,
   }
   if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
     if (app.spotlightSel >= 0 && app.spotlightSel < static_cast<int>(app.spotlightHits.size())) {
-      launch_exec_command(app.spotlightHits[static_cast<size_t>(app.spotlightSel)].exec);
-      dock_start_launch_bounce(app, app.spotlightHits[static_cast<size_t>(app.spotlightSel)].path, true);
+      const auto& hit = app.spotlightHits[static_cast<size_t>(app.spotlightSel)];
+      if (try_seeker_action(app, hit)) return true;
+      launch_exec_command(hit.exec);
+      dock_start_launch_bounce(app, hit.path, true);
       popup_close(app);
       wl_display_flush(app.display);
       return true;
@@ -79,8 +115,10 @@ bool spotlight_handle_click(DockApp& app) {
   if (app.popupKind != DockApp::PopupKind::Spotlight) return false;
   const int row = spotlight_pick_row_index(app, app.pointerX, app.pointerY);
   if (row >= 0 && row < static_cast<int>(app.spotlightHits.size())) {
-    launch_exec_command(app.spotlightHits[static_cast<size_t>(row)].exec);
-    dock_start_launch_bounce(app, app.spotlightHits[static_cast<size_t>(row)].path, true);
+    const auto& hit = app.spotlightHits[static_cast<size_t>(row)];
+    if (try_seeker_action(app, hit)) return true;
+    launch_exec_command(hit.exec);
+    dock_start_launch_bounce(app, hit.path, true);
     popup_close(app);
     wl_display_flush(app.display);
   }
