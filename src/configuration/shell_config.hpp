@@ -266,6 +266,18 @@ struct NightLightSettings {
   int scheduleEndMin = 6 * 60;     // 06:00 in minutes from midnight
 };
 
+struct NotificationRule {
+  std::string name;
+  std::string match;
+  bool showToast = true;
+  bool saveHistory = true;
+  bool playSound = false;
+  bool bypassDnd = false;
+  bool allowLow = true;
+  bool allowNormal = true;
+  bool allowCritical = true;
+};
+
 struct ShellNotificationsSettings {
 
   bool dbusEnabled = true;
@@ -557,6 +569,7 @@ void shell_config_restore_matugen_palette(const ShellAppearance& ap);
 [[nodiscard]] const ShellConfig& shell_config_snapshot_skip_matugen();
 [[nodiscard]] std::uint64_t shell_config_generation();
 void shell_config_trigger_async_matugen();
+[[nodiscard]] const std::vector<NotificationRule>& notification_rules();
 
 using ShellConfigDragPreviewPatchFn = void (*)(ShellConfig& sc, void* user);
 void shell_config_set_settings_drag_preview(const ShellConfig& ui_overlay, ShellConfigDragPreviewPatchFn patch,

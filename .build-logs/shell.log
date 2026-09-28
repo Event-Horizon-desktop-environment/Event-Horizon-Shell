@@ -1,0 +1,7 @@
+meson compile -C build-release
+
+ERROR: Current directory is not a meson build directory: `/home/matt/Documents/Event-Horizon-Shell/build-release`.
+Please specify a valid build dir or change the working directory to it.
+It is also possible that the build directory was generated with an old
+meson version. Please regenerate it in this case.
+error: recipe `build-release` failed on line 36 with exit code 1

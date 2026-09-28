@@ -519,6 +519,7 @@ struct PanelTabM3State {
     const int tabHit = hitChildTab(px, py, contentX, contentW);
     if (tabHit >= 0 && tabHit != activeChildTab_) {
       activeChildTab_ = tabHit;
+      app.lastInputMonoMs = app.lastDrawMonoMs;
       activeSlider_ = -1;
       app.panelWidthModeDropdownOpen = false;
       app.panelDisplayDd.close();

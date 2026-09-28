@@ -85,7 +85,8 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
                                                 std::optional<std::string> icon,
                                                 std::optional<NotificationImageData> image_data,
                                                 std::optional<std::string> category,
-                                                std::optional<std::string> desktop_entry) {
+                                                std::optional<std::string> desktop_entry, bool silent,
+                                                bool transient) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
   const auto now = Clock::now();
 
@@ -109,6 +110,8 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
       n.imageData = std::move(image_data);
       n.category = std::move(category);
       n.desktopEntry = std::move(desktop_entry);
+      n.silent = silent;
+      n.transient = transient;
       // Identical re-pushes (e.g. the same track re-emitted by a second
       // mpris host) are true no-ops: the expiry clock must NOT restart, or
       // the toast's progress bar visibly jumps backwards (flicker).
@@ -195,6 +198,8 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
       .desktopEntry = std::move(desktop_entry),
       .receivedTime = now,
       .expiryTime = schedule_expiry(now, timeout),
+      .silent = silent,
+      .transient = transient,
   });
   id_to_index_.emplace(id, notifications_.size() - 1);
 

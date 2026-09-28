@@ -904,6 +904,7 @@ struct TaskbarTabM3State {
     const int tabHit = hitChildTab(px, py, contentX, contentW);
     if (tabHit >= 0 && tabHit != activeChildTab_) {
       activeChildTab_ = tabHit;
+      app.lastInputMonoMs = app.lastDrawMonoMs;
       activeSlider_ = -1;
       app.taskbarWidthModeDropdownOpen = false;
       app.taskbarThumbThresholdDropdownOpen = false;

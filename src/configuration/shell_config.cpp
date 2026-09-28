@@ -101,6 +101,7 @@ namespace {
 
 std::mutex g_mu;
 std::atomic<std::uint64_t> g_load_gen{0};
+std::vector<NotificationRule> g_notification_rules;
 
 std::optional<ShellConfig> g_cache;
 std::optional<ShellConfig> g_cache_no_matugen;
@@ -529,6 +530,34 @@ void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
       }
       if (auto s = (*toast)["position"].value<std::string>()) {
         c.notifications.toast.position = *s;
+      }
+    }
+    if (const auto* rules = (*nt)["rules"].as_table()) {
+      for (const auto& [rname, rnode] : *rules) {
+        const auto* rt = rnode.as_table();
+        if (!rt) continue;
+        NotificationRule r;
+        r.name = std::string(rname.str());
+        if (auto s = (*rt)["match"].value<std::string>()) r.match = *s;
+        if (auto v = (*rt)["show_toast"].value<bool>()) r.showToast = *v;
+        if (auto v = (*rt)["save_history"].value<bool>()) r.saveHistory = *v;
+        if (auto v = (*rt)["play_sound"].value<bool>()) r.playSound = *v;
+        if (auto v = (*rt)["bypass_dnd"].value<bool>()) r.bypassDnd = *v;
+        if (const auto* au = (*rt)["allowed_urgencies"].as_array()) {
+          r.allowLow = r.allowNormal = r.allowCritical = false;
+          for (const auto& uv : *au) {
+            if (auto us = uv.value<std::string>()) {
+              std::string u = *us;
+              for (char& c : u) {
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+              }
+              if (u == "low") r.allowLow = true;
+              else if (u == "normal") r.allowNormal = true;
+              else if (u == "critical") r.allowCritical = true;
+            }
+          }
+        }
+        if (!r.match.empty()) g_notification_rules.push_back(std::move(r));
       }
     }
   }
@@ -1097,6 +1126,7 @@ ShellConfig load_uncached(bool skip_matugen = false) {
   debug_log("config", "load_uncached: BEGIN skip_matugen=%d", skip_matugen);
   const auto t0 = std::chrono::steady_clock::now();
   ShellConfig c;
+  g_notification_rules.clear();
   apply_dock_defaults_if_needed(c);
   apply_taskbar_defaults_if_needed(c);
   apply_panel_defaults_if_needed(c);
@@ -2442,6 +2472,10 @@ const ShellConfig& shell_config_snapshot_skip_matugen() {
     g_cache_no_matugen = load_uncached(true);
   }
   return *g_cache_no_matugen;
+}
+
+const std::vector<NotificationRule>& notification_rules() {
+  return g_notification_rules;
 }
 
 std::uint64_t shell_config_generation() {

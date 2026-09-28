@@ -1,5 +1,6 @@
 #include "services/notifications/notification_dbus_service.hpp"
 
+#include "configuration/shell_config.hpp"
 #include "desktop_shell/common/log/shell_diag_log.hpp"
 
 #include <algorithm>
@@ -358,7 +359,46 @@ std::uint32_t NotificationDbusService::onNotify(const std::string& app_name, std
 
   std::optional<NotificationImageData> image_data = decode_image_hint(hints);
 
-  if (manager_.doNotDisturb()) {
+  const eh::config::NotificationRule* rule = nullptr;
+  {
+    const auto& rules = eh::config::notification_rules();
+    std::string appLower = app_name;
+    for (char& c : appLower) {
+      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    }
+    std::string entryLower;
+    if (desktop_entry) {
+      entryLower = *desktop_entry;
+      for (char& c : entryLower) {
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+      }
+    }
+    for (const auto& r : rules) {
+      if (r.match.empty()) continue;
+      std::string m = r.match;
+      for (char& c : m) {
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+      }
+      if (appLower.find(m) != std::string::npos ||
+          (!entryLower.empty() && entryLower.find(m) != std::string::npos)) {
+        rule = &r;
+        break;
+      }
+    }
+  }
+  bool silent = false;
+  bool transient = false;
+  if (rule) {
+    bool urgencyOk = false;
+    if (urgency == Urgency::Low) urgencyOk = rule->allowLow;
+    else if (urgency == Urgency::Critical) urgencyOk = rule->allowCritical;
+    else urgencyOk = rule->allowNormal;
+    if (!urgencyOk) silent = true;
+    if (!rule->showToast) silent = true;
+    if (!rule->saveHistory) transient = true;
+  }
+
+  if (manager_.doNotDisturb() && !(rule && rule->bypassDnd)) {
     eh::shell_log::notifications("dnd active — silenced id=", replaces_id ? replaces_id : 0, " app=\"", app_name,
                                  "\" urgency=", static_cast<int>(urgency));
     return 0;
@@ -369,7 +409,7 @@ std::uint32_t NotificationDbusService::onNotify(const std::string& app_name, std
 
   return manager_.addOrReplace(replaces_id, clamp_str(app_name), sanitize_markup(clamp_str(summary)),
                                sanitize_markup(clamp_str(body)), urgency, timeout, NotificationOrigin::External,
-                               sanitized_actions, icon, image_data, category, desktop_entry);
+                               sanitized_actions, icon, image_data, category, desktop_entry, silent, transient);
 }
 
 std::vector<std::string> NotificationDbusService::onGetCapabilities() { return {"body", "actions"}; }

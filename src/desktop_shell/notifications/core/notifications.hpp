@@ -31,7 +31,8 @@ public:
                                            std::optional<std::string> icon = std::nullopt,
                                            std::optional<NotificationImageData> image_data = std::nullopt,
                                            std::optional<std::string> category = std::nullopt,
-                                           std::optional<std::string> desktop_entry = std::nullopt);
+                                           std::optional<std::string> desktop_entry = std::nullopt,
+                                           bool silent = false, bool transient = false);
 
   [[nodiscard]] std::uint32_t addInternal(std::string app_name, std::string summary, std::string body,
                                             Urgency urgency = Urgency::Normal,

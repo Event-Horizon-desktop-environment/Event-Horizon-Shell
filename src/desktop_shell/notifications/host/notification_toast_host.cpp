@@ -359,6 +359,7 @@ void NotificationToastHost::on_notifications_changed() {
   std::unordered_set<std::string> seen_content;
   for (auto it = all.rbegin(); it != all.rend(); ++it) {
     if (dnd) continue;
+    if (it->silent) continue;
     if (static_cast<int>(cards_.size()) >= kMaxCards) break;
     if (it->imageData) img_count++;
     if (!seen_apps.insert(it->appName).second) continue;

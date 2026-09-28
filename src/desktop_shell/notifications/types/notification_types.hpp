@@ -62,6 +62,8 @@ struct Notification {
   std::optional<std::string> desktopEntry;
   TimePoint receivedTime{};
   std::optional<TimePoint> expiryTime;
+  bool silent = false;
+  bool transient = false;
 };
 
 struct NotificationHistoryEntry {

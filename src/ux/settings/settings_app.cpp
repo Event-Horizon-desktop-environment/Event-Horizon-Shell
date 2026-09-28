@@ -1041,9 +1041,17 @@ void dmg_compute_frame(App& app, int contentX, int contentW, double glassOv, dou
     return;
   }
 
+  // Non-monitors tabs: content depends on far more than (tab, subTab, scroll).
+  // Child tabs live outside DmgSig (dock/panel/taskbar M3 singletons, plus
+  // launcherChildTab, soundChildTab, appearanceChildTab, powerChildTab,
+  // hyprlandChildTab, themesSubTab, wallpaperUiSubTab, ...), and so do all
+  // Settings values (toggles/sliders/dropdowns) and header hover. Tracking
+  // everything is fragile — any omission freezes the UI until resize (e.g.
+  // dock Settings -> Widgets switch produced empty damage and skipped the
+  // commit). Degrade to full damage here; keep fine-grained tracking only
+  // for the monitors tab.
   if (cur.tab != 7) {
-    if (cur.tab != prev.tab || cur.subTab != prev.subTab || cur.scrollBits != prev.scrollBits)
-      dmg_emit_rect(newDamage, contentR[0], contentR[1], contentR[2], contentR[3]);
+    newDamage.mark_full();
     return;
   }
 
