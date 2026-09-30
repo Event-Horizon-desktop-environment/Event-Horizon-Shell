@@ -1258,7 +1258,10 @@ void apply_external_matugen_templates(const eh::config::ShellConfig& config) {
   });
   maybe_append(T.emacs, "emacs.toml", [&] { return exe_on_path("emacs"); });
   maybe_append(T.dgop, "dgop.toml", [&] { return exe_on_path("dgop"); });
-  maybe_append(T.ptyxis, "ptyxis.toml", [&] { return exe_on_path("ptyxis"); });
+  // Ptyxis palette is always generated when the toggle is on (wallpaper-driven):
+  // never gate on the binary so the Event-Horizon palette exists even for
+  // flatpak installs or before Ptyxis is first launched.
+  maybe_append(T.ptyxis, "ptyxis.toml", [&] { return true; });
   maybe_append(T.obs, "obs.toml", [&] {
     return exe_on_path("obs") || exe_on_path("obs-studio") ||
            fs::exists(fs::path(home) / ".var/app/com.obsproject.Studio/config/obs-studio");
@@ -1388,6 +1391,17 @@ void apply_external_matugen_templates(const eh::config::ShellConfig& config) {
 
   if (matugen_ok) {
     matugen_trace("post-matugen hooks: matugen_ok=1\n");
+    if (T.ptyxis) {
+      // Migrate legacy Ptyxis palette name: Event-Horizon.palette is canonical now.
+      std::error_code ec_pty;
+      const fs::path pal_dir = fs::path(home) / ".local" / "share" / "org.gnome.Ptyxis" / "palettes";
+      const fs::path legacy = pal_dir / "eh-ptyxis.palette";
+      const fs::path canonical = pal_dir / "Event-Horizon.palette";
+      if (fs::is_regular_file(canonical, ec_pty) && fs::is_regular_file(legacy, ec_pty)) {
+        fs::remove(legacy, ec_pty);
+        matugen_trace("ptyxis: removed legacy eh-ptyxis.palette\n");
+      }
+    }
     if (T.otterTerm) sync_otter_term_after_matugen(cfg_main, home);
     if (T.horizonFiles) sync_horizon_files_after_matugen(cfg_main);
     if (T.horizonPhoto) sync_horizon_photo_after_matugen(cfg_main);

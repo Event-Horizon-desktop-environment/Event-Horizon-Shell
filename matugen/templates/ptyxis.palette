@@ -1,10 +1,10 @@
 [Palette]
-Name=Matugen Dynamic
+Name=Event-Horizon
 Primary=true
 
 [Light]
 Foreground={{colors.on_background.light.hex}}
-Background={{colors.background.light.hex}}
+Background={{colors.background.light.hex}}BF
 Cursor={{colors.primary.light.hex}}
 
 Color0={{colors.surface_variant.light.hex}}
@@ -27,7 +27,7 @@ Color15={{colors.background.light.hex}}
 
 [Dark]
 Foreground={{colors.on_background.dark.hex}}
-Background={{colors.background.dark.hex}}
+Background={{colors.background.dark.hex}}BF
 Cursor={{colors.primary.dark.hex}}
 
 Color0={{colors.surface_variant.dark.hex}}

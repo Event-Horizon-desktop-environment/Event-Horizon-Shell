@@ -446,7 +446,10 @@ std::string hex_from_argb(eh::color::Argb c) {
   return std::string(buf);
 }
 
-// Replace all {{ namespace.token.mode.hex }} placeholders
+// Replace all {{ namespace.token.mode.hex }} placeholders.
+// The lookup sees each placeholder's own resolved mode ("default" follows the
+// current is_dark), so dual-scheme templates (e.g. Ptyxis [Light]/[Dark]) render
+// both sides instead of leaving the inactive mode as raw {{...}} text.
 void replace_namespace_placeholders(std::string& content, const std::string& ns,
                                     auto lookup_fn, bool is_dark) {
   // Handle both "{{ns." and "{{ ns." (with/without space) spacing
@@ -495,14 +498,23 @@ void replace_namespace_placeholders(std::string& content, const std::string& ns,
     mode = main_part.substr(second_last_dot + 1, last_dot - second_last_dot - 1);
     token_name = main_part.substr(0, second_last_dot);
 
-    // Accept "dark", "light", or "default" as mode; "default" uses current is_dark
+    // Accept "dark", "light", or "default" as mode; "default" uses current is_dark.
+    // Explicit light/dark placeholders resolve against their own mode's palette
+    // so dual-scheme templates render completely in a single pass.
+    bool token_is_dark = is_dark;
     if (mode == "default") {
       mode = is_dark ? "dark" : "light";
+    } else if (mode == "dark") {
+      token_is_dark = true;
+    } else if (mode == "light") {
+      token_is_dark = false;
+    } else {
+      pos = end_close + 2;
+      continue;
     }
 
-    // Only replace if mode matches current is_dark
-    if ((is_dark && mode == "dark") || (!is_dark && mode == "light")) {
-      eh::color::Argb color = lookup_fn(token_name);
+    {
+      eh::color::Argb color = lookup_fn(token_name, token_is_dark);
       if (has_filter) {
         color = lighten_argb(color, filter_amount);
       }
@@ -531,24 +543,29 @@ void replace_namespace_placeholders(std::string& content, const std::string& ns,
       pos += replacement.size();
       continue;
     }
-
-    pos = end_close + 2;
   }
   } // for open pattern
 }
 
-void process_template(std::string& content, const std::unordered_map<uint8_t, eh::color::Argb>& roles,
-                      const Base16Palette& base16, eh::color::Argb source_color, bool is_dark) {
-  // {{ colors.X.dark.hex }}
+void process_template(std::string& content,
+                      const std::unordered_map<uint8_t, eh::color::Argb>& roles_dark,
+                      const Base16Palette& base16_dark,
+                      const std::unordered_map<uint8_t, eh::color::Argb>& roles_light,
+                      const Base16Palette& base16_light,
+                      eh::color::Argb source_color, bool is_dark) {
+  // {{ colors.X.<mode>.hex }} — explicit light/dark resolve against their own
+  // mode's roles; "default" follows the current is_dark.
   replace_namespace_placeholders(content, "colors",
-    [&](const std::string& name) -> eh::color::Argb {
+    [&](const std::string& name, bool token_is_dark) -> eh::color::Argb {
       if (name == "source_color") return source_color;
-      return resolve_color_token(roles, name, is_dark);
+      return token_is_dark ? resolve_color_token(roles_dark, name, true)
+                           : resolve_color_token(roles_light, name, false);
     }, is_dark);
 
-  // {{ base16.XX.dark.hex }}
+  // {{ base16.XX.<mode>.hex }}
   replace_namespace_placeholders(content, "base16",
-    [&](const std::string& name) -> eh::color::Argb {
+    [&](const std::string& name, bool token_is_dark) -> eh::color::Argb {
+      const Base16Palette& b = token_is_dark ? base16_dark : base16_light;
       if (name.size() == 6 && name.substr(0, 4) == "base") {
         int idx = -1;
         const std::string hex = name.substr(4);
@@ -563,19 +580,20 @@ void process_template(std::string& content, const std::unordered_map<uint8_t, eh
           const int lo = digit(hex[1]);
           if (hi >= 0 && lo >= 0) idx = hi * 16 + lo;
         }
-        if (idx >= 0 && idx < 16) return base16.colors[idx];
+        if (idx >= 0 && idx < 16) return b.colors[idx];
       }
       return 0;
     }, is_dark);
 
-  // {{ event16.colorN.dark.hex }} — legacy, same as base16 with mapping
+  // {{ event16.colorN.<mode>.hex }} — legacy, same as base16 with mapping
   static constexpr int kEvent16Map[] = {0, 8, 11, 10, 13, 14, 12, 5, 3, 8, 11, 10, 13, 14, 12, 7};
   replace_namespace_placeholders(content, "event16",
-    [&](const std::string& name) -> eh::color::Argb {
+    [&](const std::string& name, bool token_is_dark) -> eh::color::Argb {
+      const Base16Palette& b = token_is_dark ? base16_dark : base16_light;
       if (name.size() >= 5 && name.substr(0, 5) == "color") {
         int idx = -1;
         try { idx = std::stoi(name.substr(5)); } catch (...) {}
-        if (idx >= 0 && idx < 16) return base16.colors[kEvent16Map[idx]];
+        if (idx >= 0 && idx < 16) return b.colors[kEvent16Map[idx]];
       }
       return 0;
     }, is_dark);
@@ -1428,7 +1446,10 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
   });
   maybe_append(T.emacs, "emacs.toml", [&] { return exe_on_path("emacs"); });
   maybe_append(T.dgop, "dgop.toml", [&] { return exe_on_path("dgop"); });
-  maybe_append(T.ptyxis, "ptyxis.toml", [&] { return exe_on_path("ptyxis"); });
+  // Ptyxis palette is always generated when the toggle is on (wallpaper-driven
+  // color engine): never gate on the binary so the Event-Horizon palette exists
+  // even for flatpak installs or before Ptyxis is first launched.
+  maybe_append(T.ptyxis, "ptyxis.toml", [&] { return true; });
   maybe_append(T.obs, "obs.toml", [&] {
     return exe_on_path("obs") || exe_on_path("obs-studio") ||
            fs::exists(fs::path(home) / ".var/app/com.obsproject.Studio/config/obs-studio");
@@ -1486,9 +1507,34 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
                  e.name.c_str(), e.input_path.c_str(), e.output_path.c_str());
   }
 
-  // Build role map
+  // Build role maps for both modes. Dual-scheme templates (Ptyxis, Zed,
+  // Firefox, Vesktop) carry explicit .light. and .dark. placeholders, so the
+  // opposite mode's palette is generated too — but only when some merged
+  // template actually needs it. The seed is shared via the image cache, so the
+  // second build is just a deterministic scheme rebuild.
   auto roles = palette.roles;
   auto base16 = generate_base16(roles, is_dark);
+  std::unordered_map<uint8_t, eh::color::Argb> roles_other = roles;
+  Base16Palette base16_other = base16;
+  {
+    const bool need_other = is_dark ? (body.find(".light.") != std::string::npos)
+                                    : (body.find(".dark.") != std::string::npos);
+    if (need_other) {
+      const eh::color::PaletteResult other =
+          eh::color::generate_palette_from_image_cached(wp, eh::color::scheme_variant_from_name(scheme), !is_dark);
+      if (other.ok && !other.roles.empty()) {
+        roles_other = other.roles;
+        base16_other = generate_base16(roles_other, !is_dark);
+        debug_log("hc_palette", "opposite-mode palette OK for dual-scheme templates");
+      } else {
+        debug_log("hc_palette", "opposite-mode palette failed; dual-scheme templates fall back to current mode");
+      }
+    }
+  }
+  const auto& roles_dark = is_dark ? roles : roles_other;
+  const auto& roles_light = is_dark ? roles_other : roles;
+  const Base16Palette& base16_dark = is_dark ? base16 : base16_other;
+  const Base16Palette& base16_light = is_dark ? base16_other : base16;
 
   // Process each template
   int processed = 0;
@@ -1509,7 +1555,8 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
     }
     std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
-    process_template(content, roles, base16, palette.sourceColorArgb, is_dark);
+    process_template(content, roles_dark, base16_dark, roles_light, base16_light,
+                       palette.sourceColorArgb, is_dark);
 
     std::error_code ec;
     fs::create_directories(output.parent_path(), ec);
@@ -1523,6 +1570,20 @@ void apply_native_templates(const eh::config::ShellConfig& config) {
     debug_log("hc_palette", "WROTE %s (%zu bytes)", output.string().c_str(), content.size());
   }
   debug_log("hc_palette", "processed %d/%zu templates", processed, entries.size());
+
+  // Migrate legacy Ptyxis palette name: Event-Horizon.palette is the canonical
+  // wallpaper-driven output now; drop the old eh-ptyxis.palette so Ptyxis only
+  // lists the Event-Horizon theme.
+  if (T.ptyxis) {
+    std::error_code ec_pty;
+    const fs::path pal_dir = fs::path(home) / ".local" / "share" / "org.gnome.Ptyxis" / "palettes";
+    const fs::path legacy = pal_dir / "eh-ptyxis.palette";
+    const fs::path canonical = pal_dir / "Event-Horizon.palette";
+    if (fs::is_regular_file(canonical, ec_pty) && fs::is_regular_file(legacy, ec_pty)) {
+      fs::remove(legacy, ec_pty);
+      debug_log("hc_palette", "ptyxis: removed legacy eh-ptyxis.palette");
+    }
+  }
 
   // Run post-hooks
   debug_log("hc_palette", "post-hooks: otter=%d btop=%d vesktop=%d vscode=%d",
