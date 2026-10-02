@@ -522,7 +522,7 @@ TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
     const std::string impl = eh::config::widget_implementation_type(w);
     return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" ||
            impl == "control_center" || impl == "notifications" || impl == "volume_mixer" ||
-           impl == "app_drawer";
+           impl == "app_drawer" || impl == "overview";
   };
 
   auto slot_width = [&](const Slot& s) -> double {
@@ -590,6 +590,7 @@ TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
     else if (eh::config::widget_implementation_type(wid) == "bluetooth") { Slot bts; bts.kind = Slot::Kind::Bluetooth; bts.key = wid; out.push_back(std::move(bts)); }
     else if (eh::config::widget_implementation_type(wid) == "vpn") { Slot vs; vs.kind = Slot::Kind::Vpn; vs.key = wid; out.push_back(std::move(vs)); }
     else if (eh::config::widget_implementation_type(wid) == "world_clock") { Slot wcs; wcs.kind = Slot::Kind::WorldClock; wcs.key = wid; out.push_back(std::move(wcs)); }
+    else if (eh::config::widget_implementation_type(wid) == "overview") { Slot ov; ov.kind = Slot::Kind::Overview; ov.key = wid; out.push_back(std::move(ov)); }
   };
 
   auto build_section = [&](const std::vector<std::string>& widgets) {
@@ -876,7 +877,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     const std::string impl = eh::config::widget_implementation_type(w);
     return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" ||
            impl == "control_center" || impl == "notifications" || impl == "volume_mixer" ||
-           impl == "app_drawer";
+           impl == "app_drawer" || impl == "overview";
   };
 
   auto append_widget = [&](std::vector<Slot>& out, const std::string& wid) {
@@ -935,6 +936,8 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       Slot vs; vs.kind = Slot::Kind::Vpn; vs.key = wid; out.push_back(std::move(vs));
     } else if (eh::config::widget_implementation_type(wid) == "world_clock") {
       Slot wcs; wcs.kind = Slot::Kind::WorldClock; wcs.key = wid; out.push_back(std::move(wcs));
+    } else if (eh::config::widget_implementation_type(wid) == "overview") {
+      Slot ov; ov.kind = Slot::Kind::Overview; ov.key = wid; out.push_back(std::move(ov));
     }
   };
 
@@ -1244,7 +1247,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
           slots[idx].kind != Slot::Kind::Trash && slots[idx].kind != Slot::Kind::AppMenu &&
           slots[idx].kind != Slot::Kind::Tray && slots[idx].kind != Slot::Kind::Workspaces &&
           slots[idx].kind != Slot::Kind::VolumeMixer && slots[idx].kind != Slot::Kind::Vpn &&
-          slots[idx].kind != Slot::Kind::Battery &&
+          slots[idx].kind != Slot::Kind::Battery && slots[idx].kind != Slot::Kind::Overview &&
           slots[idx].kind != Slot::Kind::Bluetooth) ly -= taskbarHoverLiftPx;
       if (gIdx == taskbarPressedSlot && slots[idx].kind == Slot::Kind::App) ly -= kPressLiftPx;
       // Launch feedback: the launching/activating app slot hops (damped sine,
@@ -1533,6 +1536,16 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       } else if (s.kind == Slot::Kind::Bluetooth) {
         eh::shell::dock_slot_hooks::paint_bluetooth_slot(cr, sc, s.key, ix, iconY + liftY, slotW, icon, icon, false, false);
         if (hovered) hover_overlay();
+        drew = true;
+      } else if (s.kind == Slot::Kind::Overview) {
+        eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY + liftY, slotW, icon);
+        if (hovered) hover_overlay();
+        const double gx = ix + icon * 0.5;
+        const double gy = iconY + liftY + icon * 0.5;
+        if (matugen)
+          eh::shell::draw_material_glyph(cr, gx, gy, icon * 0.52, "dashboard", mc.accentR, mc.accentG, mc.accentB, 1.0);
+        else
+          eh::shell::draw_material_glyph(cr, gx, gy, icon * 0.52, "dashboard", 1.0, 1.0, 1.0, 1.0);
         drew = true;
       } else if (s.kind == Slot::Kind::VolumeMixer) {
         {

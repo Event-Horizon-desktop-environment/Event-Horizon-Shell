@@ -256,6 +256,11 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       wcs.kind = Slot::Kind::WorldClock;
       wcs.key = wid;
       out.push_back(std::move(wcs));
+    } else if (eh::config::widget_implementation_type(wid) == "overview") {
+      Slot ov;
+      ov.kind = Slot::Kind::Overview;
+      ov.key = wid;
+      out.push_back(std::move(ov));
     }
   };
 
@@ -414,6 +419,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         case Slot::Kind::Battery: r.kind = "battery"; break;
         case Slot::Kind::Bluetooth: r.kind = "bluetooth"; break;
         case Slot::Kind::WorldClock: r.kind = "world_clock"; break;
+        case Slot::Kind::Overview: r.kind = "overview"; break;
         case Slot::Kind::Separator: r.kind = "separator"; break;
       }
       return r;
@@ -578,7 +584,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           s.kind != Slot::Kind::Bluetooth &&          s.kind != Slot::Kind::Settings &&
           s.kind != Slot::Kind::Spotlight && s.kind != Slot::Kind::AppDrawer &&
           s.kind != Slot::Kind::Smenu &&
-          s.kind != Slot::Kind::Trash &&
+          s.kind != Slot::Kind::Trash && s.kind != Slot::Kind::Overview &&
           s.kind != Slot::Kind::AppMenu && s.kind != Slot::Kind::Tray &&
           effective_press_match(globalIdx);
       double liftY = (app.pinDragging && isDraggedPin) ? -4.0 : 0.0;
@@ -588,7 +594,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           s.kind != Slot::Kind::Bluetooth &&          s.kind != Slot::Kind::ControlCenter &&
           s.kind != Slot::Kind::Settings && s.kind != Slot::Kind::Spotlight &&
           s.kind != Slot::Kind::AppDrawer && s.kind != Slot::Kind::Smenu &&
-          s.kind != Slot::Kind::Trash && s.kind != Slot::Kind::AppMenu &&
+          s.kind != Slot::Kind::Trash && s.kind != Slot::Kind::Overview && s.kind != Slot::Kind::AppMenu &&
           s.kind != Slot::Kind::Tray)
         liftY -= effective_hover_lift(globalIdx);
       if (slotPressed && !isDraggedPin) liftY -= kDockPressLiftPx;
@@ -876,6 +882,16 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       } else if (s.kind == Slot::Kind::Bluetooth) {
         eh::shell::dock_slot_hooks::paint_bluetooth_slot(cr, scPaint, s.key, ix, iconY + liftY, slotW, icon, icon, false, false);
         if (cellHovered) hover_overlay();
+        drew = true;
+      } else if (s.kind == Slot::Kind::Overview) {
+        eh::widgets::slot_pill_style::paint_pill(cr, ix, iconY + liftY, slotW, icon);
+        if (cellHovered) hover_overlay();
+        const double gx = ix + icon * 0.5;
+        const double gy = iconY + liftY + icon * 0.5;
+        if (dockBarMatugen)
+          eh::shell::draw_material_glyph(cr, gx, gy, icon * 0.52, "dashboard", mcDockBar.accentR, mcDockBar.accentG, mcDockBar.accentB, 1.0);
+        else
+          eh::shell::draw_material_glyph(cr, gx, gy, icon * 0.52, "dashboard", 1.0, 1.0, 1.0, 1.0);
         drew = true;
       } else if (s.kind == Slot::Kind::App) {
         if (app.settings.dockPinnedAppsTrayPill && s.isPinned) {

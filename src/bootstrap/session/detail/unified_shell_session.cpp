@@ -1339,6 +1339,14 @@ void UnifiedShellSession::sync_widget_registry() {
             },
             component);
       }
+      // Overview button: activating it toggles the overview via the stage.
+      if (type == "overview") {
+        widget_registry_.add(type,
+            [this]() {
+              if (ipc_service_) ipc_service_->publish("command.request", "overview.toggle");
+            },
+            component);
+      }
     }
   };
 

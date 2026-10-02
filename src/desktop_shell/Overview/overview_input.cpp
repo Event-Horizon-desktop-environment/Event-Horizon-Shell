@@ -166,6 +166,7 @@ void Input::handle_pointer_leave() {
   drag_auto_scroll_dir = 0;
   press_win = -1;
   press_app_idx = -1;
+  press_app_modal = false;
   drop_target_ws = -1;
   drop_target_win = -1;
   drop_target_add = false;
@@ -254,6 +255,12 @@ void Input::update_hover_from_pointer() {
   }
 
   {
+    // Bottom pill button exists in both modes ("Show all apps" vs "Back").
+    const bool inBtn = pick_apps_button_at(layout, sx, sy);
+    if (inBtn != hovered_apps_btn) { hovered_apps_btn = inBtn; changed = true; }
+  }
+
+  {
     int newQs = pick_quick_select_at(layout.qs, layout, workspaces, sx, sy);
     if (newQs < 0 && pick_quick_select_add_at(layout.qs, sx, sy))
       newQs = kQuickSelectAddIdx;
@@ -262,8 +269,8 @@ void Input::update_hover_from_pointer() {
 
   if (host_.show_apps()) {
     const int newApp =
-        pick_app_at(layout.appGrid, sx, sy, static_cast<int>(host_.apps().size()),
-                    host_.app_scroll_pos());
+        pick_app_at(host_.active_grid(), sx, sy, host_.active_count(),
+                    host_.active_scroll_pos());
     if (newApp != hovered_app) { hovered_app = newApp; changed = true; }
     if (hovered_ws != -1) { hovered_ws = -1; changed = true; }
     if (hovered_win != -1) { hovered_win = -1; changed = true; }
@@ -326,12 +333,19 @@ void Input::handle_pointer_button(uint32_t button, uint32_t state) {
       }
     }
 
+    // "Show all apps" pill (workspace view only).
+    if (!host_.show_apps() && pick_apps_button_at(layout, ptr_x_, ptr_y_)) {
+      host_.toggle_apps_mode();
+      return;
+    }
+
     if (host_.show_apps()) {
-      press_app_idx = pick_app_at(layout.appGrid, ptr_x_, ptr_y_,
-                                  static_cast<int>(host_.apps().size()),
-                                  host_.app_scroll_pos());
+      press_app_idx = pick_app_at(host_.active_grid(), ptr_x_, ptr_y_,
+                                  host_.active_count(),
+                                  host_.active_scroll_pos());
       if (press_app_idx >= 0) {
         button_pressed = true;
+        press_app_modal = host_.folder_open();
         press_x = ptr_x_;
         press_y = ptr_y_;
         drag_active = false;
@@ -339,6 +353,8 @@ void Input::handle_pointer_button(uint32_t button, uint32_t state) {
         drop_target_ws = -1;
         return;
       }
+      // Backdrop click closes an open folder; otherwise nothing to do.
+      if (host_.folder_open()) host_.close_folder();
       return;
     }
 
@@ -371,9 +387,25 @@ void Input::handle_pointer_button(uint32_t button, uint32_t state) {
       drag_active = false;
       drag_auto_scroll_dir = 0;
       if (host_.show_apps() && press_app_idx >= 0) {
-        if (press_app_idx < static_cast<int>(host_.apps().size())) {
-          launch_exec_command(host_.apps()[static_cast<size_t>(press_app_idx)].exec);
-          host_.close();
+        if (press_app_modal) {
+          // Folder-modal drag: releasing outside the modal box removes the
+          // app from the folder (GNOME drag-out); releasing inside cancels.
+          if (host_.folder_open()) {
+            const OverviewCardRect mbox = modal_card_rect(host_.layout());
+            if (ptr_x_ < mbox.x || ptr_x_ > mbox.x + mbox.w ||
+                ptr_y_ < mbox.y || ptr_y_ > mbox.y + mbox.h) {
+              const std::string p = host_.modal_item_path(press_app_idx);
+              if (!p.empty()) host_.remove_app_from_open_folder(p);
+            }
+          }
+        } else {
+          // Main-grid drag: a drop onto another cell creates a folder
+          // (app onto app) or moves into a folder; anywhere else cancels
+          // (clicks launch, drags never do).
+          const int dst = pick_app_at(host_.layout().appGrid, ptr_x_, ptr_y_,
+                                      static_cast<int>(host_.grid_items().size()),
+                                      host_.app_scroll_pos());
+          if (dst >= 0 && dst != press_app_idx) host_.drop_grid_item(press_app_idx, dst);
         }
       } else if (press_win >= 0) {
         if (drop_target_add) {
@@ -389,21 +421,20 @@ void Input::handle_pointer_button(uint32_t button, uint32_t state) {
       press_ws = -1;
       press_win = -1;
       press_app_idx = -1;
+      press_app_modal = false;
       drop_target_ws = -1;
       drop_target_win = -1;
       drop_target_add = false;
     } else {
       if (host_.show_apps() && press_app_idx >= 0) {
-        if (press_app_idx < static_cast<int>(host_.apps().size())) {
-          launch_exec_command(host_.apps()[static_cast<size_t>(press_app_idx)].exec);
-          host_.close();
-        }
+        host_.activate_grid_item(press_app_idx);
       } else if (press_win >= 0) {
         host_.activate_window(press_win);
       }
       press_ws = -1;
       press_win = -1;
       press_app_idx = -1;
+      press_app_modal = false;
     }
   }
 }
@@ -412,7 +443,7 @@ void Input::handle_axis_discrete(uint32_t axis, int32_t discrete) {
   if (!host_.open() || !pointer_focus_) return;
   if (axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
   if (host_.show_apps()) {
-    const double cellH = host_.layout().appGrid.cellH;
+    const double cellH = host_.active_grid().cellH;
     if (discrete == 0 || cellH <= 0.0) return;
     host_.scroll_app_grid(static_cast<double>(discrete) * cellH);
     return;
@@ -452,7 +483,11 @@ void Input::handle_key(uint32_t key, uint32_t state) {
   const xkb_keysym_t sym = xkb_state_key_get_one_sym(xkbState_, key + 8);
 
   if (sym == XKB_KEY_Escape) {
-    if (!host_.search_query().empty()) {
+    if (host_.folder_open()) {
+      host_.close_folder();
+      hovered_app = -1;
+      if (!host_.has_frame_cb()) host_.schedule_frame();
+    } else if (!host_.search_query().empty()) {
       host_.search_query().clear();
       host_.set_show_apps(false);
       host_.refresh_app_list();
@@ -483,11 +518,10 @@ void Input::handle_key(uint32_t key, uint32_t state) {
   }
 
   if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
-    if (host_.show_apps() && !host_.apps().empty()) {
-      const int idx = (hovered_app >= 0 && hovered_app < static_cast<int>(host_.apps().size()))
-                          ? hovered_app : 0;
-      launch_exec_command(host_.apps()[static_cast<size_t>(idx)].exec);
-      host_.close();
+    if (host_.show_apps() && host_.active_count() > 0) {
+      const int n = host_.active_count();
+      const int idx = (hovered_app >= 0 && hovered_app < n) ? hovered_app : 0;
+      host_.activate_grid_item(idx);
     } else if (hovered_win >= 0 && hovered_win < static_cast<int>(host_.nav_windows().size())) {
       host_.activate_window(hovered_win);
     } else if (host_.selected_index() >= 0 &&
@@ -497,8 +531,8 @@ void Input::handle_key(uint32_t key, uint32_t state) {
     return;
   }
 
-  if (host_.show_apps() && !host_.apps().empty()) {
-    const int nApps = static_cast<int>(host_.apps().size());
+  if (host_.show_apps() && host_.active_count() > 0) {
+    const int nApps = host_.active_count();
     if (sym == XKB_KEY_Right || sym == XKB_KEY_Tab) {
       int sel = std::max(0, hovered_app);
       sel = (sel + 1) % nApps;
@@ -517,7 +551,7 @@ void Input::handle_key(uint32_t key, uint32_t state) {
     }
     if (sym == XKB_KEY_Down || sym == XKB_KEY_Page_Down ||
         sym == XKB_KEY_Up || sym == XKB_KEY_Page_Up) {
-      const auto& grid = host_.layout().appGrid;
+      const auto& grid = host_.active_grid();
       const bool down = (sym == XKB_KEY_Down || sym == XKB_KEY_Page_Down);
       const bool page = (sym == XKB_KEY_Page_Down || sym == XKB_KEY_Page_Up);
       int step = std::max(grid.cols, 1);

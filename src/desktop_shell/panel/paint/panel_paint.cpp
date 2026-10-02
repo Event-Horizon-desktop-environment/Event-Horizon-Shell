@@ -87,7 +87,8 @@ bool panel_widget_blocked(const PanelApp& app, const eh::config::ShellConfig& sc
   const std::string impl = eh::config::widget_implementation_type(w);
   return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" ||
          impl == "workspaces" || impl == "control_center" || impl == "notifications" ||
-         impl == "volume_mixer" || impl == "battery" || impl == "bluetooth" || impl == "vpn";
+         impl == "volume_mixer" || impl == "battery" || impl == "bluetooth" || impl == "vpn" ||
+         impl == "overview";
 }
 
 Kind panel_kind_for_token(const std::string& wid) {
@@ -103,6 +104,7 @@ Kind panel_kind_for_token(const std::string& wid) {
   if (impl == "world_clock") return Kind::WorldClock;
   if (impl == "volume_mixer") return Kind::VolumeMixer;
   if (impl == "vpn") return Kind::Vpn;
+  if (impl == "overview") return Kind::Overview;
   if (impl == "smenu") return Kind::Smenu;
   if (impl == "trash") return Kind::Trash;
   if (impl == "app_drawer") return Kind::AppDrawer;
@@ -563,12 +565,14 @@ void panel_paint_widget_bar(PanelApp& app, cairo_t* cr, double x, double y, doub
         }
       } else {
         // Generic indicator slot: pill + glyph. Covers settings_button,
-        // smenu/app_menu, volume_mixer, vpn, notifications, trash, etc.
+        // smenu/app_menu, volume_mixer, vpn, notifications, trash, overview, etc.
         eh::widgets::slot_pill_style::paint_pill(cr, ix, slotY, slotW, icon);
         if (hovered) hover_overlay(ix, slotY, slotW);
         const char* glyph = "circle";
         if (s.kind == Kind::Settings)
           glyph = "settings";
+        else if (s.kind == Kind::Overview)
+          glyph = "dashboard";
         else if (s.kind == Kind::Smenu)
           glyph = "apps";
         else if (s.kind == Kind::AppMenu)

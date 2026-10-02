@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "desktop_shell/common/workspace/workspace_strip_types.hpp"
+#include "desktop_shell/spotlight/search/spotlight_search.hpp"
 #include "desktop_shell/unified/compositor_kind.hpp"
 
 struct wl_seat;
@@ -70,6 +71,21 @@ struct OverviewCardRect {
   double x = 0, y = 0, w = 0, h = 0;
 };
 
+// GNOME-style app folder: a named bucket of apps shown as one tile in the
+// launchpad grid. Auto-built from freedesktop categories (see tahoe buckets);
+// single-app buckets stay loose so the grid never shows one-item folders.
+struct AppFolder {
+  std::string id;
+  std::string name;
+  std::vector<SpotlightHit> apps;
+};
+
+// One visible cell of the launchpad grid: either a folder tile or an app.
+struct GridItem {
+  bool folder = false;
+  size_t index = 0; // into Host folders_ (folder) or apps_ (app)
+};
+
 struct AppGridLayout {
   double startX = 0, startY = 0;
   double cellW = 0, cellH = 0;
@@ -113,7 +129,15 @@ struct OverviewLayout {
 
   double searchY = 20, searchW = 420, searchH = 40;
 
+  // "Show all apps" pill (workspace view only). Positioned by
+  // compute_overview_layout: just above the quick-select strip when the
+  // strip is at the bottom, bottom-centered when the strip is on the left.
+  OverviewCardRect appsBtn{};
+
   AppGridLayout appGrid{};
+  // Folder modal grid (open folder popup): fixed 4 columns, up to 4 visible
+  // rows, own scroll. Computed only while a folder is open.
+  AppGridLayout modalGrid{};
   QuickSelectLayout qs{};
 };
 
@@ -167,5 +191,12 @@ struct ShellCtx {
 
 // Gap kept above the dock bar by the overview grid (dock-reserve unit).
 inline constexpr double kDockSpacingPx = 25.0;
+
+// "Show all apps" pill metrics (logical px, scaled by uiScale). In horizontal
+// mode the quick-select strip is lifted by the full reserve so the pill sits
+// below it, exactly like the approved HTML mock.
+inline constexpr double kAppsBtnHPx = 38.0;
+inline constexpr double kAppsBtnGapPx = 10.0;
+inline constexpr double kAppsBtnBottomPx = 12.0;
 
 } // namespace eh::shell::overview

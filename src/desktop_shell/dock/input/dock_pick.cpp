@@ -84,7 +84,7 @@ double dock_gap_after_pick(const DockSettings& st, const std::vector<PickSlot>& 
     return false;
   const std::string impl = eh::config::widget_implementation_type(widgetToken);
   return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" || impl == "control_center" ||
-         impl == "notifications" || impl == "volume_mixer" || impl == "app_drawer";
+         impl == "notifications" || impl == "volume_mixer" || impl == "app_drawer" || impl == "overview";
 }
 
 void dock_fill_pick_result_slots(DockApp& app, const eh::shell::shared::RunningSnapshot& hitSnap,
@@ -236,6 +236,11 @@ void dock_fill_pick_result_slots(DockApp& app, const eh::shell::shared::RunningS
       wcs.kind = PickSlot::Kind::WorldClock;
       wcs.key = w;
       out.push_back(std::move(wcs));
+    } else if (eh::config::widget_implementation_type(w) == "overview") {
+      PickSlot ov;
+      ov.kind = PickSlot::Kind::Overview;
+      ov.key = w;
+      out.push_back(std::move(ov));
     }
   };
 

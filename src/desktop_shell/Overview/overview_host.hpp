@@ -12,9 +12,12 @@
 #include "wl/core/connection.hpp"
 
 #include <cstdint>
+
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -121,6 +124,43 @@ public:
   [[nodiscard]] std::string& search_query() noexcept { return search_query_; }
   [[nodiscard]] const std::string& search_query() const noexcept { return search_query_; }
   [[nodiscard]] const std::vector<SpotlightHit>& apps() const noexcept { return apps_; }
+  // Launchpad grid model: folders + loose apps when the query is empty,
+  // flat app matches while searching. Indices are stable for hover/pick.
+  [[nodiscard]] const std::vector<GridItem>& grid_items() const noexcept { return grid_items_; }
+  [[nodiscard]] const std::vector<AppFolder>& folders() const noexcept { return folders_; }
+  [[nodiscard]] int folder_open_idx() const noexcept { return open_folder_; }
+  [[nodiscard]] bool folder_open() const noexcept {
+    return open_folder_ >= 0 && open_folder_ < static_cast<int>(folders_.size());
+  }
+  [[nodiscard]] std::string folder_title() const {
+    return folder_open() ? folders_[static_cast<size_t>(open_folder_)].name : std::string{};
+  }
+  // Grid being interacted with: the folder modal when open, else the main grid.
+  [[nodiscard]] const AppGridLayout& active_grid() const noexcept {
+    return folder_open() ? layout_.modalGrid : layout_.appGrid;
+  }
+  [[nodiscard]] int active_count() const noexcept {
+    return folder_open() ? static_cast<int>(modal_items_.size())
+                         : static_cast<int>(grid_items_.size());
+  }
+  [[nodiscard]] double active_scroll_pos() const noexcept {
+    return folder_open() ? modal_scroll_pos_ : app_scroll_pos_;
+  }
+  // Activate a grid cell: opens folders, launches apps (and closes).
+  void activate_grid_item(int idx);
+  void open_folder(int folderIdx);
+  void close_folder();
+  // GNOME-style folder editing (drag and drop). Paths are .desktop absolute
+  // paths (SpotlightHit::path). Each persists and rebuilds the grid.
+  void create_manual_folder(const std::string& pathA, const std::string& pathB);
+  void move_app_into_folder(const std::string& appPath, const std::string& folderId);
+  void remove_app_from_open_folder(const std::string& appPath);
+  // Grid-item app path for DnD bookkeeping (-1/invalid -> empty).
+  [[nodiscard]] std::string grid_item_path(int idx) const;
+  [[nodiscard]] std::string modal_item_path(int idx) const;
+  // Drop a main-grid cell onto another (drag release). Handles folder
+  // creation (app onto app) and moving into a folder. No-op on clicks.
+  void drop_grid_item(int srcIdx, int dstIdx);
   [[nodiscard]] ShellCtx& ctx() noexcept { return ctx_; }
   [[nodiscard]] const std::unique_ptr<eh::wayland::WaylandConnection>& wl() const noexcept { return wl_; }
   [[nodiscard]] bool open() const noexcept { return open_; }
@@ -165,6 +205,11 @@ public:
     zwlr_layer_surface_v1* backdrop_layer = nullptr;
     wp_viewport* backdrop_viewport = nullptr;
     eh::wayland::ShmBuffer backdrop_buf{};
+    // Per-output background surface (same namespace, compositor blurs each).
+    wl_surface* bg_surface = nullptr;
+    zwlr_layer_surface_v1* bg_layer = nullptr;
+    wp_viewport* bg_viewport = nullptr;
+    eh::wayland::ShmBuffer bg_buf{};
     // CPU fallback presentation buffer (used when Vulkan is unavailable).
     eh::wayland::ShmBuffer cpu_buf{};
     int w = 0;
@@ -183,6 +228,12 @@ public:
 
 private:
   void refresh_workspace_data_impl();
+  void rebuild_grid_items();
+  void load_folder_state();
+  void save_folder_state() const;
+  [[nodiscard]] static std::string overview_folders_path();
+  [[nodiscard]] const SpotlightHit* find_app_by_path(const std::string& path) const;
+  void after_folder_edit();
   bool refresh_from_hyprland();
   void refresh_from_dock();
   void update_scroll(double dt);
@@ -192,6 +243,12 @@ private:
   void paint_backdrop();
   void paint_content();
   void paint_extra_content(OverviewOutput& e, bool use_vk);
+  // Fullscreen background layer: decodes the configured wallpaper on path
+  // change (capped resolution) and paints it opaque cover-fit into the
+  // background surface(s). Painted on demand via bg_dirty_, never per frame.
+  void ensure_wallpaper_bg();
+  void paint_background_surface();
+  void free_wallpaper_bg();
   void repaint_all();
   [[nodiscard]] bool vulkan_enabled() const;
   [[nodiscard]] bool ensure_vk_context();
@@ -213,6 +270,14 @@ private:
   zwlr_layer_surface_v1* backdrop_layer_ = nullptr;
   wp_viewport* backdrop_viewport_ = nullptr;
   eh::wayland::ShmBuffer backdrop_buf_{};
+
+  // Dedicated fullscreen background layer (wallpaper, opaque). Sits below
+  // backdrop + content; the compositor blurs it via its namespace.
+  wl_surface* bg_surface_ = nullptr;
+  zwlr_layer_surface_v1* bg_layer_ = nullptr;
+  wp_viewport* bg_viewport_ = nullptr;
+  eh::wayland::ShmBuffer bg_buf_{};
+  bool bg_dirty_ = true;
 
   wl_surface* surface_ = nullptr;
   zwlr_layer_surface_v1* layer_ = nullptr;
@@ -270,6 +335,11 @@ private:
   bool cards_invalidated_ = false;
   uint64_t prefetch_start_ms_ = 0;
 
+  // Fullscreen wallpaper background (decoded once per path, cover-fit each
+  // frame with a dim overlay). Same image behind workspaces and app grid.
+  cairo_surface_t* bg_wallpaper_ = nullptr;
+  std::string bg_wallpaper_path_;
+
   struct MonitorGeom {
     double x = 0, y = 0, w = 0, h = 0;
   };
@@ -280,6 +350,7 @@ private:
   std::vector<float> ws_hover_lifts_{};
   std::vector<float> win_hover_lifts_{};
   float search_hover_lift_ = 0.f;
+  float apps_btn_hover_lift_ = 0.f;
 
   double app_scroll_pos_ = 0.0;
   double app_scroll_target_ = 0.0;
@@ -293,6 +364,25 @@ private:
   bool show_apps_ = false;
   std::string search_query_{};
   std::vector<SpotlightHit> apps_{};
+  // Launchpad folders (auto-grouped by category when the query is empty) and
+  // the visible main-grid items. modal_items_ lists one open folder's apps
+  // for the folder popup. open_folder_ is an index into folders_ (-1 = none).
+  std::vector<AppFolder> folders_{};
+  std::vector<GridItem> grid_items_{};
+  std::vector<GridItem> modal_items_{};
+  int open_folder_ = -1;
+  double modal_scroll_pos_ = 0.0;
+  double modal_scroll_target_ = 0.0;
+  // User folder overrides (persisted to overview_folders.toml):
+  // - manual_folders_: user-created folders (drag app onto app).
+  // - removed_apps_: desktop paths excluded from their auto folder
+  //   (dragged out, or folded into a manual folder).
+  // - added_apps_: auto folder id ("bucket-N") -> extra desktop paths
+  //   dropped in by the user.
+  std::vector<AppFolder> manual_folders_{};
+  std::unordered_set<std::string> removed_apps_{};
+  std::map<std::string, std::vector<std::string>> added_apps_{};
+  bool folders_loaded_ = false;
 };
 
 } // namespace eh::shell::overview

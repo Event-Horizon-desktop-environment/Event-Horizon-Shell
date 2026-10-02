@@ -518,9 +518,26 @@ void compute_overview_layout(OverviewLayout& layout, double w, double h, int nWo
     layout.stripCenterX = (w + layout.qs.stripW) * 0.5;
     layout.stripCenterY = h * 0.5;
   } else {
-    // Strip at the bottom: shift main center upward
+    // Strip lifted above the bottom pill: center the cards in the space
+    // above strip + pill so the row stays visually centered.
+    const double reserve =
+        (kAppsBtnHPx + kAppsBtnGapPx + kAppsBtnBottomPx) * uiScale;
     layout.stripCenterX = w * 0.5;
-    layout.stripCenterY = (h - layout.qs.stripH) * 0.5;
+    layout.stripCenterY = (h - layout.qs.stripH - reserve) * 0.5;
+  }
+
+  // Icon-only pill (same look as the dock overview widget): square,
+  // centered on the output itself, never on the card strip.
+  {
+    const double btnH = kAppsBtnHPx * uiScale;
+    const double btnW = btnH;
+    layout.appsBtn.w = btnW;
+    layout.appsBtn.h = btnH;
+    layout.appsBtn.x = w * 0.5 - btnW * 0.5;
+    if (axis == OverviewAxis::Horizontal)
+      layout.appsBtn.y = h - kAppsBtnBottomPx * uiScale - btnH;
+    else
+      layout.appsBtn.y = h - btnH - 12.0 * uiScale;
   }
 }
 
@@ -595,6 +612,62 @@ void paint_search_bar(cairo_t* cr, const OverviewColors& colors, const OverviewL
     cairo_move_to(cr, x + 42 * layout.uiScale, y + layout.searchH * 0.66);
     cairo_show_text(cr, query.c_str());
   }
+}
+
+void paint_apps_button(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
+                       float hoverLift, float progress) {
+  const float alpha = std::clamp(progress, 0.0f, 1.0f);
+  if (alpha <= 0.0f) return;
+  const double us = layout.uiScale;
+  const double x = layout.appsBtn.x;
+  const double y = layout.appsBtn.y;
+  const double w = layout.appsBtn.w;
+  const double h = layout.appsBtn.h;
+  if (w <= 0.0 || h <= 0.0) return;
+  const double liftPx = static_cast<double>(hoverLift) * 5.0 * us;
+  const double by = y - liftPx;
+
+  if (hoverLift > 0.01f) {
+    const double shAlpha = static_cast<double>(hoverLift) * 0.25;
+    cairo_set_source_rgba(cr, 0, 0, 0, shAlpha * alpha);
+    rounded_rect(cr, x + 3 * us, by + 4 * us, w, h, h * 0.5);
+    cairo_fill(cr);
+  }
+
+  // Glassy UX pill (same recipe as the folder modal box).
+  {
+    m3::Box box;
+    box.setColor(static_cast<float>(colors.searchBgR), static_cast<float>(colors.searchBgG),
+                 static_cast<float>(colors.searchBgB), alpha);
+    box.setRadius(static_cast<float>(h * 0.5));
+    box.setGeometry(static_cast<float>(x), static_cast<float>(by),
+                    static_cast<float>(w), static_cast<float>(h));
+    box.setGlassy(true);
+    box.paint(cr);
+  }
+  // Hairline outline, accent-tinted on hover.
+  {
+    const double hl = static_cast<double>(hoverLift);
+    if (hl > 0.01) {
+      cairo_set_source_rgba(cr, colors.accentR, colors.accentG, colors.accentB,
+                            (0.25 + 0.35 * hl) * alpha);
+    } else {
+      cairo_set_source_rgba(cr, 1, 1, 1, 0.14 * alpha);
+    }
+    cairo_set_line_width(cr, 1.0 * us);
+    rounded_rect(cr, x + 0.5, by + 0.5, w - 1.0, h - 1.0, h * 0.5);
+    cairo_stroke(cr);
+  }
+
+  // Center the dashboard glyph (same icon as the dock overview widget).
+  draw_material_glyph(cr, x + w * 0.5, by + h * 0.5, h * 0.52, "dashboard",
+                      colors.fgR, colors.fgG, colors.fgB, alpha);
+}
+
+bool pick_apps_button_at(const OverviewLayout& layout, double mx, double my) {
+  const auto& b = layout.appsBtn;
+  if (b.w <= 0.0 || b.h <= 0.0) return false;
+  return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
 }
 
 // Real workspace capture drawn fitted into the card without cropping.
@@ -1132,21 +1205,43 @@ std::string ellipsize_label(cairo_t* cr, const std::string& text, double maxW) {
   return kDots;
 }
 
+// Centered strip rows count the add-workspace slot as part of the group:
+// n thumbs + 1 slot with a gap between each neighbor. Otherwise the row
+// (and the button below it) would sit half a thumb off the true center.
+inline double strip_row_total_w(const QuickSelectLayout& qs, int n) {
+  return static_cast<double>(n + 1) * qs.thumbW + static_cast<double>(n) * qs.thumbGap;
+}
+inline double strip_row_total_h(const QuickSelectLayout& qs, int n) {
+  return static_cast<double>(n + 1) * qs.thumbH + static_cast<double>(n) * qs.thumbGap;
+}
 } // namespace
 
+// Resolution scale for the launchpad grid: the base design targets ~1080p,
+// so 1440p/4K outputs get proportionally bigger, more readable cells while
+// smaller outputs stay at base size. Applied on top of the shell UI scale.
+static double grid_res_scale(double w, double h) {
+  if (w <= 0.0 || h <= 0.0) return 1.0;
+  return std::clamp(std::min(w, h) / 900.0, 1.0, 1.75);
+}
+
 void compute_app_grid_layout(AppGridLayout& grid, double w, double h, double searchY,
-                             double uiScale, int nApps) {
-  const double topY = searchY + 50 * uiScale;
-  const double bottomY = h - 60 * uiScale;
+                             double uiScale, int nApps, double bottomReservePx) {
+  const double s = uiScale * grid_res_scale(w, h);
+  const double topY = searchY + 50 * s;
+  const double bottomY = h - (60.0 + bottomReservePx) * s;
   const double availH = bottomY - topY;
   grid.scrollMax = 0.0;
   if (availH <= 0) return;
 
-  grid.iconSize = 56 * uiScale;
-  grid.fontSize = 12 * uiScale;
-  grid.cellW = grid.iconSize + 20 * uiScale;
-  grid.cellH = grid.iconSize + grid.fontSize + 24 * uiScale;
-  grid.cols = std::max(1, static_cast<int>((w - 40 * uiScale) / grid.cellW));
+  // Matches the approved HTML mock: 64px icons, ~120px columns, grid capped
+  // at 1060px so ultrawide screens don't stretch into a thin strip.
+  // Everything scales with the output resolution via s (bigger on 1440p/4K).
+  grid.iconSize = 64 * s;
+  grid.fontSize = 12.5 * s;
+  grid.cellW = grid.iconSize + 56 * s;
+  grid.cellH = grid.iconSize + grid.fontSize + 24 * s;
+  const double maxW = std::min(w - 80 * s, 1060.0 * s);
+  grid.cols = std::max(1, static_cast<int>(maxW / grid.cellW));
   grid.rows = std::max(1, static_cast<int>(availH / grid.cellH));
   if (grid.cols < 4) grid.cols = 4;
 
@@ -1162,9 +1257,30 @@ void compute_app_grid_layout(AppGridLayout& grid, double w, double h, double sea
   grid.startY = topY + (availH - totalH) * 0.5;
 }
 
+void compute_modal_grid(AppGridLayout& modal, double w, double h, double uiScale, int nApps) {
+  const double s = uiScale * grid_res_scale(w, h);
+  modal.scrollMax = 0.0;
+  modal.iconSize = 64 * s;
+  modal.fontSize = 12.5 * s;
+  modal.cellW = modal.iconSize + 56 * s;
+  modal.cellH = modal.iconSize + modal.fontSize + 24 * s;
+  modal.cols = 4;
+  const int needed = (std::max(nApps, 1) + modal.cols - 1) / modal.cols;
+  const int visRows = std::clamp(needed, 1, 4);
+  modal.rows = visRows;
+  if (needed > visRows)
+    modal.scrollMax = static_cast<double>(needed - visRows) * modal.cellH;
+  const double gridW = static_cast<double>(modal.cols) * modal.cellW;
+  const double gridH = static_cast<double>(visRows) * modal.cellH;
+  modal.startX = (w - gridW) * 0.5;
+  modal.startY = (h - gridH) * 0.5 + 12.0 * s; // breathing room for the title
+}
+
 void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                     const OverviewLayout& layout,
+                    const std::vector<GridItem>& items,
                     const std::vector<SpotlightHit>& apps,
+                    const std::vector<AppFolder>& folders,
                     int hoveredIdx, float hoverLift, float progress,
                     double scrollPos) {
   const float alpha = std::clamp(progress, 0.0f, 1.0f);
@@ -1175,18 +1291,8 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
 
   cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
 
-  // Empty state: keep the card up and say why it's empty.
-  if (apps.empty()) {
-    m3::Box box;
-    box.setColor(static_cast<float>(colors.glassBgR), static_cast<float>(colors.glassBgG),
-                 static_cast<float>(colors.glassBgB), static_cast<float>(0.78 * alpha));
-    box.setRadius(static_cast<float>(24.0 * layout.uiScale));
-    box.setGeometry(static_cast<float>(layout.w * 0.5 - 220.0 * layout.uiScale),
-                    static_cast<float>(grid.startY),
-                    static_cast<float>(440.0 * layout.uiScale),
-                    static_cast<float>(160.0 * layout.uiScale));
-    box.setGlassy(true);
-    box.paint(cr);
+  // Empty state: plain centered text, like the mock (no card).
+  if (items.empty()) {
     cairo_set_source_rgba(cr, colors.dimFgR, colors.dimFgG, colors.dimFgB, 0.9 * alpha);
     cairo_set_font_size(cr, 15.0 * layout.uiScale);
     cairo_text_extents_t ex{};
@@ -1198,31 +1304,19 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
     return;
   }
 
+  // Borderless floating grid (approved mock): icons sit directly on the
+  // dimmed background. Clip to the viewport so scrolled rows never bleed.
   const double us = layout.uiScale;
-  const double cardX = grid.startX - 16.0 * us;
-  const double cardY = grid.startY - 16.0 * us;
-  const double cardW = static_cast<double>(grid.cols) * grid.cellW + 32.0 * us;
-  const double cardH = static_cast<double>(grid.rows) * grid.cellH + 32.0 * us;
+  const double viewX = grid.startX;
+  const double viewY = grid.startY;
+  const double viewW = static_cast<double>(grid.cols) * grid.cellW;
+  const double viewH = static_cast<double>(grid.rows) * grid.cellH;
 
-  // Glassy settings-style card behind the app grid
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(colors.glassBgR), static_cast<float>(colors.glassBgG),
-                 static_cast<float>(colors.glassBgB), static_cast<float>(0.78 * alpha));
-    box.setRadius(static_cast<float>(24.0 * us));
-    box.setGeometry(static_cast<float>(cardX), static_cast<float>(cardY),
-                    static_cast<float>(cardW), static_cast<float>(cardH));
-    box.setGlassy(true);
-    box.paint(cr);
-  }
-
-  // Clip to the card so scrolled rows never bleed outside it.
   cairo_save(cr);
-  rounded_rect(cr, cardX, cardY, cardW, cardH, 24.0 * us);
+  cairo_rectangle(cr, viewX, viewY, viewW, viewH);
   cairo_clip(cr);
 
-  const int nApps = static_cast<int>(apps.size());
-  const double viewH = static_cast<double>(grid.rows) * grid.cellH;
+  const int nApps = static_cast<int>(items.size());
   const double scroll = std::clamp(scrollPos, 0.0, std::max(0.0, grid.scrollMax));
   const int totalRows = (nApps + grid.cols - 1) / grid.cols;
   const int firstRow = std::max(0, static_cast<int>(scroll / grid.cellH));
@@ -1239,27 +1333,74 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
     const double lift = hovered ? static_cast<double>(hoverLift) : 0.0;
     const double liftPx = lift * 6.0 * us;
 
-    // Rounded pill highlight behind the whole cell (icon + label).
+    // Flat hover wash behind the whole cell, like the mock (no border).
     if (lift > 0.01f) {
-      cairo_set_source_rgba(cr, colors.accentR, colors.accentG, colors.accentB,
-                            0.16 * alpha * lift);
+      cairo_set_source_rgba(cr, 1, 1, 1, 0.07 * alpha * lift);
       rounded_rect(cr, cellX + 6.0 * us, cellY + 4.0 * us - liftPx,
                    grid.cellW - 12.0 * us, grid.cellH - 8.0 * us, 14.0 * us);
       cairo_fill(cr);
-      cairo_set_source_rgba(cr, colors.accentR, colors.accentG, colors.accentB,
-                            0.35 * alpha * lift);
-      cairo_set_line_width(cr, 1.2 * us);
-      rounded_rect(cr, cellX + 6.0 * us, cellY + 4.0 * us - liftPx,
-                   grid.cellW - 12.0 * us, grid.cellH - 8.0 * us, 14.0 * us);
-      cairo_stroke(cr);
     }
 
     const double cx = cellX + grid.cellW * 0.5;
     const double iconX = cx - grid.iconSize * 0.5;
     const double iconY = cellY + 10.0 * us - liftPx;
-    const std::string& iconKey = apps[static_cast<size_t>(i)].iconKey;
-    const std::string& name = apps[static_cast<size_t>(i)].name;
 
+    // Resolve the cell: folder tiles show a 2x2 mini-icon stack, apps show
+    // their own icon. Out-of-range items (stale hover after refresh) paint
+    // nothing but keep their slot so indices stay stable.
+    const GridItem& git = items[static_cast<size_t>(i)];
+    const bool isFolder = git.folder;
+    const AppFolder* folder = (isFolder && git.index < folders.size())
+                                  ? &folders[git.index]
+                                  : nullptr;
+    std::string iconKey;
+    std::string name;
+    if (isFolder) {
+      if (folder == nullptr) continue;
+      name = folder->name;
+    } else {
+      if (git.index >= apps.size()) continue;
+      iconKey = apps[git.index].iconKey;
+      name = apps[git.index].name;
+    }
+
+    if (isFolder && folder != nullptr) {
+      // Folder tile: subtle tile with up to 4 mini app icons (mock style).
+      cairo_set_source_rgba(cr, 1, 1, 1, 0.11 * alpha);
+      rounded_rect(cr, iconX, iconY, grid.iconSize, grid.iconSize, grid.iconSize * 0.28);
+      cairo_fill(cr);
+      const double pad = 5.0 * us;
+      const double q = (grid.iconSize - pad * 3.0) * 0.5;
+      size_t shown = 0;
+      for (size_t k = 0; k < folder->apps.size() && shown < 4; ++k) {
+        const int mPx = std::max(16, static_cast<int>(std::ceil(q * us)));
+        const eh::icons::IconEntry* mic = ctx.icons->tray_icon(folder->apps[k].iconKey, mPx);
+        if (!mic || !mic->surface) continue;
+        const double qx = iconX + pad + static_cast<double>(shown % 2) * (q + pad);
+        const double qy = iconY + pad + static_cast<double>(shown / 2) * (q + pad);
+        const double mw = static_cast<double>(mic->width);
+        const double mh = static_cast<double>(mic->height);
+        const double msc = q / std::max(1.0, std::max(mw, mh));
+        cairo_save(cr);
+        cairo_translate(cr, qx + (q - mw * msc) * 0.5, qy + (q - mh * msc) * 0.5);
+        cairo_scale(cr, msc, msc);
+        cairo_set_source_surface(cr, mic->surface, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+        cairo_paint_with_alpha(cr, alpha);
+        cairo_restore(cr);
+        ++shown;
+      }
+      if (shown == 0 && !name.empty()) {
+        cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, alpha);
+        cairo_set_font_size(cr, grid.fontSize * 1.8);
+        cairo_text_extents_t fex;
+        const std::string ch = name.substr(0, 1);
+        cairo_text_extents(cr, ch.c_str(), &fex);
+        cairo_move_to(cr, cx - fex.x_advance * 0.5 - fex.x_bearing,
+                      iconY + grid.iconSize * 0.5 + fex.height * 0.5);
+        cairo_show_text(cr, ch.c_str());
+      }
+    } else {
     // iconKey here is a themed icon name (desktop Icon= key), not an appId:
     // tray_icon() is the correct resolver and avoids the appId desktop-file
     // scan that app_icon() would trigger on every miss. The size-aware
@@ -1304,6 +1445,8 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
       }
     }
 
+    } // folder tile vs app icon
+
     if (!name.empty()) {
       cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, alpha);
       cairo_set_font_size(cr, grid.fontSize);
@@ -1319,22 +1462,101 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
   }
 
   cairo_restore(cr);
+} // end paint_app_grid (no scrollbar: page dots below the grid show position)
 
-  // Scrollbar along the card's right edge when content overflows.
-  if (grid.scrollMax > 0.0) {
-    const double trackH = cardH - 20.0 * us;
-    const double thumbH = std::max(24.0 * us,
-        trackH * viewH / (viewH + grid.scrollMax));
-    const double maxTravel = std::max(0.0, trackH - thumbH);
-    const double frac = scroll / grid.scrollMax;
-    const double thumbY = cardY + 10.0 * us + frac * maxTravel;
-    const double sbX = cardX + cardW - 8.0 * us;
-    cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, 0.10 * alpha);
-    rounded_rect(cr, sbX, cardY + 10.0 * us, 4.0 * us, trackH, 2.0 * us);
+OverviewCardRect modal_card_rect(const OverviewLayout& layout) {
+  const double us = layout.uiScale;
+  const auto& grid = layout.modalGrid;
+  OverviewCardRect r;
+  r.w = static_cast<double>(grid.cols) * grid.cellW + 32.0 * us;
+  r.h = static_cast<double>(grid.rows) * grid.cellH + 32.0 * us;
+  r.x = grid.startX - 16.0 * us;
+  r.y = grid.startY - 16.0 * us;
+  return r;
+}
+
+void paint_folder_modal(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
+                        const OverviewLayout& layout,
+                        const std::vector<GridItem>& modalItems,
+                        const std::vector<SpotlightHit>& apps,
+                        const std::vector<AppFolder>& folders,
+                        int hoveredIdx, float hoverLift, float progress,
+                        double scrollPos, const std::string& title) {
+  const float alpha = std::clamp(progress, 0.0f, 1.0f);
+  if (alpha <= 0.0f) return;
+  const double us = layout.uiScale;
+  const auto& grid = layout.modalGrid;
+  if (grid.cols <= 0 || grid.cellW <= 0.0) return;
+
+  // Dim the launchpad behind the modal; a click outside closes it.
+  cairo_set_source_rgba(cr, 0, 0, 0, 0.55 * alpha);
+  cairo_rectangle(cr, 0, 0, layout.w, layout.h);
+  cairo_fill(cr);
+
+  // Folder title centered above the box.
+  const OverviewCardRect mbox = modal_card_rect(layout);
+  const double cardX = mbox.x;
+  const double cardY = mbox.y;
+  const double cardW = mbox.w;
+  const double cardH = mbox.h;
+  cairo_set_font_size(cr, 17.0 * us);
+  cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, alpha);
+  cairo_text_extents_t tex;
+  cairo_text_extents(cr, title.c_str(), &tex);
+  cairo_move_to(cr, layout.w * 0.5 - tex.x_advance * 0.5, cardY - 14.0 * us);
+  cairo_show_text(cr, title.c_str());
+
+  // Modal box behind the folder grid (the main grid is borderless).
+  {
+    m3::Box box;
+    box.setColor(static_cast<float>(colors.glassBgR), static_cast<float>(colors.glassBgG),
+                 static_cast<float>(colors.glassBgB), static_cast<float>(0.96 * alpha));
+    box.setRadius(static_cast<float>(24.0 * us));
+    box.setGeometry(static_cast<float>(cardX), static_cast<float>(cardY),
+                    static_cast<float>(cardW), static_cast<float>(cardH));
+    box.setGlassy(true);
+    box.paint(cr);
+  }
+
+  OverviewLayout box = layout;
+  box.appGrid = grid;
+  paint_app_grid(cr, ctx, colors, box, modalItems, apps, folders,
+                 hoveredIdx, hoverLift, progress, scrollPos);
+}
+
+void paint_page_dots(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
+                     double scrollPos, float progress) {
+  const float alpha = std::clamp(progress, 0.0f, 1.0f);
+  if (alpha <= 0.0f) return;
+  const double us = layout.uiScale;
+  const auto& grid = layout.appGrid;
+  if (grid.cols <= 0 || grid.rows <= 0 || grid.cellH <= 0.0) return;
+  const double viewH = static_cast<double>(grid.rows) * grid.cellH;
+  if (viewH <= 0.0) return;
+  const int pages = std::max(1, static_cast<int>(
+      std::ceil((viewH + std::max(0.0, grid.scrollMax)) / viewH)));
+  if (pages < 2) return;
+  const double scroll = std::clamp(scrollPos, 0.0, std::max(0.0, grid.scrollMax));
+  const int active = grid.scrollMax > 0.0
+                         ? std::clamp(static_cast<int>(std::lround(
+                               scroll / grid.scrollMax * static_cast<double>(pages - 1))),
+                               0, pages - 1)
+                         : 0;
+  // Below the borderless viewport (no card anymore).
+  const double viewBottom = grid.startY + viewH;
+  const double r = 4.0 * us;
+  const double gap = 10.0 * us;
+  const double totalW = static_cast<double>(pages) * r * 2.0 +
+                        static_cast<double>(pages - 1) * gap;
+  double dx = layout.w * 0.5 - totalW * 0.5;
+  const double dy = viewBottom + 12.0 * us;
+  for (int i = 0; i < pages; ++i) {
+    const bool on = (i == active);
+    cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB,
+                          (on ? 0.9 : 0.35) * alpha);
+    cairo_arc(cr, dx + r, dy, r, 0, 2 * M_PI);
     cairo_fill(cr);
-    cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, 0.35 * alpha);
-    rounded_rect(cr, sbX, thumbY, 4.0 * us, thumbH, 2.0 * us);
-    cairo_fill(cr);
+    dx += r * 2.0 + gap;
   }
 }
 
@@ -1369,10 +1591,13 @@ void compute_quick_select_layout(QuickSelectLayout& qs, OverviewAxis axis, doubl
   qs.thumbH = std::max(30.0, cardH * 0.25);
 
   if (qs.horizontal) {
-    // Strip at bottom: thumbnails side by side
+    // Strip above the "Show all apps" pill: the pill sits below the strip
+    // with a gap and a bottom margin (approved HTML mock).
+    const double reserve =
+        (kAppsBtnHPx + kAppsBtnGapPx + kAppsBtnBottomPx) * uiScale;
     const double stripContentH = qs.thumbH + qs.padY * 2.0;
     qs.stripX = 0;
-    qs.stripY = h - stripContentH;
+    qs.stripY = h - stripContentH - reserve;
     qs.stripW = w;
     qs.stripH = stripContentH;
   } else {
@@ -1384,19 +1609,18 @@ void compute_quick_select_layout(QuickSelectLayout& qs, OverviewAxis axis, doubl
     qs.stripH = h;
   }
 
-  // The add-workspace slot sits right after the last thumbnail.
+  // The add-workspace slot sits right after the last thumbnail; the row is
+  // centered with the slot counted so thumbs + slot align to true center.
   const int n = std::max(1, nWorkspaces);
   if (qs.horizontal) {
-    const double totalW = static_cast<double>(n) * qs.thumbW +
-                          static_cast<double>(std::max(0, n - 1)) * qs.thumbGap;
+    const double totalW = strip_row_total_w(qs, n);
     qs.addRect.w = qs.thumbW;
     qs.addRect.h = qs.thumbH;
     qs.addRect.x = qs.stripX + (qs.stripW - totalW) * 0.5 +
                    static_cast<double>(n) * (qs.thumbW + qs.thumbGap);
     qs.addRect.y = qs.stripY + qs.padY;
   } else {
-    const double totalH = static_cast<double>(n) * qs.thumbH +
-                          static_cast<double>(std::max(0, n - 1)) * qs.thumbGap;
+    const double totalH = strip_row_total_h(qs, n);
     qs.addRect.w = qs.thumbW;
     qs.addRect.h = qs.thumbH;
     qs.addRect.x = qs.stripX + qs.padX;
@@ -1412,32 +1636,17 @@ void paint_strip_contents(cairo_t* cr, const OverviewColors& colors,
   const double us = layout.uiScale;
   const int nWs = static_cast<int>(workspaces.size());
 
-  {
-    m3::Box box;
-    box.setColor(static_cast<float>(colors.glassBgR), static_cast<float>(colors.glassBgG),
-                 static_cast<float>(colors.glassBgB), static_cast<float>(0.55 * alpha));
-    box.setRadius(static_cast<float>(qs.thumbRadius * 2.0));
-    box.setGeometry(static_cast<float>(qs.stripX + 4.0 * us),
-                    static_cast<float>(qs.stripY + 4.0 * us),
-                    static_cast<float>(qs.stripW - 8.0 * us),
-                    static_cast<float>(qs.stripH - 8.0 * us));
-    box.setGlassy(true);
-    box.paint(cr);
-  }
-
   for (int i = 0; i < nWs; ++i) {
     const auto& ws = workspaces[static_cast<size_t>(i)];
 
     double tx = 0, ty = 0;
     if (qs.horizontal) {
-      const double totalW = static_cast<double>(nWs) * qs.thumbW +
-                            static_cast<double>(std::max(0, nWs - 1)) * qs.thumbGap;
+      const double totalW = strip_row_total_w(qs, nWs);
       tx = qs.stripX + (qs.stripW - totalW) * 0.5 +
            static_cast<double>(i) * (qs.thumbW + qs.thumbGap);
       ty = qs.stripY + qs.padY;
     } else {
-      const double totalH = static_cast<double>(nWs) * qs.thumbH +
-                            static_cast<double>(std::max(0, nWs - 1)) * qs.thumbGap;
+      const double totalH = strip_row_total_h(qs, nWs);
       tx = qs.stripX + qs.padX;
       ty = qs.stripY + (qs.stripH - totalH) * 0.5 +
            static_cast<double>(i) * (qs.thumbH + qs.thumbGap);
@@ -1727,14 +1936,12 @@ int pick_quick_select_at(const QuickSelectLayout& qs, const OverviewLayout& layo
   for (int i = 0; i < nWs; ++i) {
     double tx = 0, ty = 0;
     if (qs.horizontal) {
-      const double totalW = static_cast<double>(nWs) * qs.thumbW +
-                            static_cast<double>(std::max(0, nWs - 1)) * qs.thumbGap;
+      const double totalW = strip_row_total_w(qs, nWs);
       tx = qs.stripX + (qs.stripW - totalW) * 0.5 +
            static_cast<double>(i) * (qs.thumbW + qs.thumbGap);
       ty = qs.stripY + qs.padY;
     } else {
-      const double totalH = static_cast<double>(nWs) * qs.thumbH +
-                            static_cast<double>(std::max(0, nWs - 1)) * qs.thumbGap;
+      const double totalH = strip_row_total_h(qs, nWs);
       tx = qs.stripX + qs.padX;
       ty = qs.stripY + (qs.stripH - totalH) * 0.5 +
            static_cast<double>(i) * (qs.thumbH + qs.thumbGap);

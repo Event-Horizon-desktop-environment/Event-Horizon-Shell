@@ -54,6 +54,10 @@ constexpr const char* kTaskbarNamespace = "event-horizon-taskbar";
 
 constexpr const char* kOverviewNamespace = "event-horizon-overview";
 constexpr const char* kOverviewBackdropNamespace = "event-horizon-overview-backdrop";
+// Fullscreen wallpaper surface below the overview content. Opaque wallpaper
+// pixels live here (never in the content buffer) so the compositor can match
+// blur/background-effects on this namespace.
+constexpr const char* kOverviewBackgroundNamespace = "event-horizon-overview-background";
 
 // Slot key constants — used as widget/feature identifiers in slot dispatch
 constexpr const char* kSlotKeySettings = "__settings__";

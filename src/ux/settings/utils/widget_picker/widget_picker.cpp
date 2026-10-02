@@ -106,6 +106,8 @@ static const char* widget_display_desc(const std::string& id) {
     return "PearCenter quick settings (network, audio, display, media); optional [widget.pear_center] pear_* booleans";
   if (id == "notifications")
     return "Bell opens PearCenter notifications; right-click toggles do-not-disturb";
+  if (id == "overview" || eh::config::widget_implementation_type(id) == "overview")
+    return "Button that opens the Overview (workspaces + windows)";
   if (id == "spacer" || eh::config::widget_implementation_type(id) == "spacer")
     return "Empty slot one icon wide; use between dock groups instead of automatic gaps";
   if (id == "trash" || eh::config::widget_implementation_type(id) == "trash")

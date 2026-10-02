@@ -60,6 +60,9 @@ public:
   int press_ws = -1;
   int press_win = -1;
   int press_app_idx = -1;
+  // True when the app press started inside the open folder modal (main grid
+  // and modal share the press_app_idx slot; this disambiguates release).
+  bool press_app_modal = false;
   bool drag_active = false;
   int drop_target_ws = -1;
   int drop_target_win = -1;
@@ -72,6 +75,7 @@ public:
 
   int hovered_app = -1;
   float app_hover_lift = 0.f;
+  bool hovered_apps_btn = false;
   uint64_t trackpad_settle_until_ms_ = 0;
 
   bool owns_surface(const wl_surface* s) const noexcept;

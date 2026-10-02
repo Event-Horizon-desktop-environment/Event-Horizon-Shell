@@ -48,6 +48,7 @@ std::string widget_display_title(const std::string& id) {
   if (id == "control_center") return "Control Center";
   if (id == "pear_center") return "PearCenter";
   if (id == "notifications") return "Notifications";
+  if (id == "overview") return "Overview";
   if (id == "spacer" || eh::config::widget_implementation_type(id) == "spacer") return "Spacer";
   if (id == "trash" || eh::config::widget_implementation_type(id) == "trash") return "Trash";
   if (id == "volume_mixer" || eh::config::widget_implementation_type(id) == "volume_mixer") return "Volume Mixer";

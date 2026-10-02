@@ -1114,7 +1114,7 @@ static bool dock_widget_token_warrants_app_icon_heat(const std::string& w, const
     return false;
   const std::string impl = eh::config::widget_implementation_type(w);
   if (impl == "clock" || impl == "weather" || impl == "media" || impl == "workspaces" || impl == "control_center" ||
-      impl == "app_drawer" || impl == "battery")
+      impl == "app_drawer" || impl == "battery" || impl == "overview")
     return false;
   return true;
 }

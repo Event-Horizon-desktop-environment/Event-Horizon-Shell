@@ -26,6 +26,7 @@ enum class SlotKind : uint8_t {
   Vpn,
   Smenu,
   WorldClock,
+  Overview,
 };
 
 }

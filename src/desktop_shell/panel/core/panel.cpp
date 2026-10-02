@@ -962,6 +962,8 @@ std::string panel_tooltip_text_for(const PanelApp& app, int slotIdx) {
       return "Media";
     case PanelPaintSlot::Kind::Workspaces:
       return "Workspaces";
+    case PanelPaintSlot::Kind::Overview:
+      return "Overview";
     case PanelPaintSlot::Kind::ControlCenter:
       return "Control Center";
     case PanelPaintSlot::Kind::Battery:
@@ -1408,6 +1410,7 @@ void panel_open_popup_for_slot(PanelApp& app, const PanelWidgetHit& hit, PanelPa
     case PanelPaintSlot::Kind::Settings:
     case PanelPaintSlot::Kind::Media:
     case PanelPaintSlot::Kind::Workspaces:
+    case PanelPaintSlot::Kind::Overview:
     case PanelPaintSlot::Kind::Trash:
     case PanelPaintSlot::Kind::Smenu:
     case PanelPaintSlot::Kind::AppMenu:
@@ -1429,6 +1432,12 @@ void panel_dispatch_slot_click(PanelApp& app, int slotIdx) {
   const auto kind = static_cast<PanelPaintSlot::Kind>(hit.slotKind);
   debug_log("panel-layout", "click #%d %s kind=%d button=0x%x", slotIdx, hit.widgetId.c_str(), (int)kind,
             app.pressButton);
+
+  if (kind == PanelPaintSlot::Kind::Overview) {
+    panel_request_overview_toggle();
+    if (app.display) wl_display_flush(app.display);
+    return;
+  }
 
   if (kind == PanelPaintSlot::Kind::Workspaces) {
     // Middle-click opens the overview (GNOME parity); left-click switches.

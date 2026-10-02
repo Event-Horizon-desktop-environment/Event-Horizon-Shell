@@ -27,7 +27,8 @@ struct PickSlot {
     Battery,
     Bluetooth,
     Smenu,
-    WorldClock
+    WorldClock,
+    Overview
   } kind = Kind::App;
   std::string key;
   std::uint64_t chosenSerial = 0;

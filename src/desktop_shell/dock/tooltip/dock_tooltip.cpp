@@ -72,6 +72,7 @@ std::string resolve_text_for_slot(const PickSlot& slot, const DockPickResult& pr
       return "Control Center";
     }
     case PickSlot::Kind::Workspaces:      return "Workspaces";
+    case PickSlot::Kind::Overview:       return "Overview";
     case PickSlot::Kind::VolumeMixer:     return "Volume";
     default: return {};
   }

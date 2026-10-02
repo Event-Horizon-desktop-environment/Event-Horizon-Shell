@@ -28,6 +28,14 @@ void compute_overview_layout(OverviewLayout& layout, double w, double h, int nWo
 void paint_search_bar(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
                       float hoverLift, float progress, const std::string& query = {});
 
+// Bottom pill button: "Show all apps" (workspace view) or "Back"
+// (launchpad view). Painted last so it stays on top; clicked via
+// pick_apps_button_at in either mode.
+void paint_apps_button(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
+                       float hoverLift, float progress);
+
+[[nodiscard]] bool pick_apps_button_at(const OverviewLayout& layout, double mx, double my);
+
 void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                            const OverviewLayout& layout,
                            const std::vector<OverviewWorkspace>& workspaces,
@@ -56,12 +64,29 @@ bool pick_close_at(const OverviewLayout& layout, const std::vector<OverviewWorks
                    double mx, double my, int wsIndex, double scrollPos, int* outFlat = nullptr);
 
 void compute_app_grid_layout(AppGridLayout& grid, double w, double h, double searchY,
-                             double uiScale, int nApps);
+                             double uiScale, int nApps, double bottomReservePx = 0.0);
+// Folder modal grid: fixed 4 columns centered box, up to 4 visible rows.
+void compute_modal_grid(AppGridLayout& modal, double w, double h, double uiScale, int nApps);
 void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                     const OverviewLayout& layout,
+                    const std::vector<GridItem>& items,
                     const std::vector<SpotlightHit>& apps,
+                    const std::vector<AppFolder>& folders,
                     int hoveredIdx, float hoverLift, float progress,
                     double scrollPos = 0.0);
+// Card rect of the folder modal box (title sits above it). Shared by paint
+// and input so backdrop-vs-modal hit tests can never disagree.
+[[nodiscard]] OverviewCardRect modal_card_rect(const OverviewLayout& layout);
+void paint_folder_modal(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
+                        const OverviewLayout& layout,
+                        const std::vector<GridItem>& modalItems,
+                        const std::vector<SpotlightHit>& apps,
+                        const std::vector<AppFolder>& folders,
+                        int hoveredIdx, float hoverLift, float progress,
+                        double scrollPos, const std::string& title);
+// Page dots under the main grid card; hidden when everything fits one page.
+void paint_page_dots(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
+                     double scrollPos, float progress);
 int pick_app_at(const AppGridLayout& grid, double mx, double my, int nApps,
                 double scrollPos = 0.0);
 

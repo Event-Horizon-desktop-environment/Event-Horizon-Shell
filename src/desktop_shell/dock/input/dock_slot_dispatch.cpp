@@ -122,6 +122,15 @@ void dock_handle_slot_press(DockApp& app, uint32_t serial, bool left, bool right
     return;
   }
 
+  if (hit.kind == PickSlot::Kind::Overview) {
+    if (app.overviewToggleHook) {
+      app.overviewToggleHook();
+      dock_draw(app);
+      wl_display_flush(app.display);
+    }
+    return;
+  }
+
   if (hit.kind == PickSlot::Kind::Workspaces) {
     // Middle-click opens the overview (GNOME parity); left-click switches.
     if (middle && app.overviewToggleHook) {

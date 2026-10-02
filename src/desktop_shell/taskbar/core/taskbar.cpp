@@ -3936,6 +3936,12 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     return;
   }
 
+  if (type == "overview") {
+    taskbar_request_overview_toggle();
+    wl_display_flush(app.display);
+    return;
+  }
+
   if (type == "workspaces") {
     // Middle-click opens the overview (GNOME parity); left-click switches.
     if (button == 0x112) {
@@ -5292,6 +5298,7 @@ static std::string tb_tooltip_text(TaskbarApp& app, int layer, int slotIdx) {
   if (slotIdx < 0 || static_cast<size_t>(slotIdx) >= hits.size()) return {};
   const auto& hit = hits[static_cast<size_t>(slotIdx)];
   if (hit.widgetId == eh::shell::taskbar::kTbChevronKey) return std::string("More windows");
+  if (eh::config::widget_implementation_type(hit.widgetId) == "overview") return std::string("Overview");
   if (hit.widgetId.rfind("__eh_tl_", 0) == 0 && hit.chosenSerial != 0 && app.toplevels) {
     // Per-window labeled buttons: tooltip shows the full (untrimmed) title.
     if (const auto* tl = thumbs_toplevel_by_serial(*app.toplevels, hit.chosenSerial)) {

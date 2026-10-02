@@ -31,6 +31,7 @@ const char* dock_widget_material_ligature(const std::string& id) {
   if (id == "world_clock") return "public";
   if (id == "control_center" || id == "pear_center") return "tune";
   if (id == "notifications") return "notifications";
+  if (id == "overview" || eh::config::widget_implementation_type(id) == "overview") return "dashboard";
   if (id == "spacer" || eh::config::widget_implementation_type(id) == "spacer") return "horizontal_rule";
   if (id == "trash" || eh::config::widget_implementation_type(id) == "trash") return "delete";
   if (id == "volume_mixer" || eh::config::widget_implementation_type(id) == "volume_mixer") return "volume_up";
