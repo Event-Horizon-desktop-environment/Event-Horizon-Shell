@@ -74,7 +74,8 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                     const std::vector<SpotlightHit>& apps,
                     const std::vector<AppFolder>& folders,
                     int hoveredIdx, float hoverLift, float progress,
-                    double scrollPos = 0.0);
+                    double scrollPos = 0.0,
+                    const GridDragState& drag = {});
 // Card rect of the folder modal box (title sits above it). Shared by paint
 // and input so backdrop-vs-modal hit tests can never disagree.
 [[nodiscard]] OverviewCardRect modal_card_rect(const OverviewLayout& layout);
@@ -84,12 +85,21 @@ void paint_folder_modal(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors
                         const std::vector<SpotlightHit>& apps,
                         const std::vector<AppFolder>& folders,
                         int hoveredIdx, float hoverLift, float progress,
-                        double scrollPos, const std::string& title);
+                        double scrollPos, const std::string& title,
+                        const GridDragState& drag = {});
 // Page dots under the main grid card; hidden when everything fits one page.
 void paint_page_dots(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
                      double scrollPos, float progress);
+// Right-click pin menu (glass box + rows). Hit-test via Host::ctx_menu_hit.
+void paint_ctx_menu(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
+                    const OverviewCardRect& rect, const std::vector<std::string>& labels,
+                    int hoveredRow, float progress);
 int pick_app_at(const AppGridLayout& grid, double mx, double my, int nApps,
                 double scrollPos = 0.0);
+// Cell origin for an item index (no visibility check; used for drag grab
+// offsets and shuffle snapshots).
+[[nodiscard]] OverviewCardRect app_cell_rect(const AppGridLayout& grid, int idx,
+                                            double scrollPos);
 
 void compute_quick_select_layout(QuickSelectLayout& qs, OverviewAxis axis, double w, double h,
                                  double cardW, double cardH, double uiScale, int nWorkspaces);

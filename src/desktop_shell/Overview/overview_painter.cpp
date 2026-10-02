@@ -1284,13 +1284,91 @@ void compute_modal_grid(AppGridLayout& modal, double w, double h, double uiScale
   modal.startY = (h - gridH) * 0.5 + 12.0 * s; // breathing room for the title
 }
 
+static double grid_shuffle_ease(double t) {
+  t = std::clamp(t, 0.0, 1.0);
+  return 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+}
+
+struct ResolvedCell {
+  bool ok = false;
+  bool folder = false;
+  const AppFolder* folderPtr = nullptr;
+  std::string iconKey;
+  std::string name;
+  std::string key;
+};
+
+static ResolvedCell resolve_grid_cell(const std::vector<GridItem>& items,
+                                      const std::vector<SpotlightHit>& apps,
+                                      const std::vector<AppFolder>& folders, int i) {
+  ResolvedCell r;
+  if (i < 0 || i >= static_cast<int>(items.size())) return r;
+  const GridItem& git = items[static_cast<size_t>(i)];
+  if (git.folder) {
+    if (git.index >= folders.size()) return r;
+    r.folder = true;
+    r.folderPtr = &folders[git.index];
+    r.name = r.folderPtr->name;
+    r.key = grid_item_key(true, r.folderPtr->id);
+  } else {
+    if (git.index >= apps.size()) return r;
+    r.iconKey = apps[git.index].iconKey;
+    r.name = apps[git.index].name;
+    r.key = grid_item_key(false, apps[git.index].path);
+  }
+  r.ok = true;
+  return r;
+}
+
+// Folder tile visual shared by grid cells and the drag ghost.
+static void paint_folder_tile(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
+                              double us, float alpha, double iconX, double iconY,
+                              double iconSize, const AppFolder& folder, double cx,
+                              const std::string& name) {
+  cairo_set_source_rgba(cr, 1, 1, 1, 0.11 * alpha);
+  rounded_rect(cr, iconX, iconY, iconSize, iconSize, iconSize * 0.28);
+  cairo_fill(cr);
+  const double pad = 5.0 * us;
+  const double q = (iconSize - pad * 3.0) * 0.5;
+  size_t shown = 0;
+  for (size_t k = 0; k < folder.apps.size() && shown < 4; ++k) {
+    const int mPx = std::max(16, static_cast<int>(std::ceil(q * us)));
+    const eh::icons::IconEntry* mic = ctx.icons->tray_icon(folder.apps[k].iconKey, mPx);
+    if (!mic || !mic->surface) continue;
+    const double qx = iconX + pad + static_cast<double>(shown % 2) * (q + pad);
+    const double qy = iconY + pad + static_cast<double>(shown / 2) * (q + pad);
+    const double mw = static_cast<double>(mic->width);
+    const double mh = static_cast<double>(mic->height);
+    const double msc = q / std::max(1.0, std::max(mw, mh));
+    cairo_save(cr);
+    cairo_translate(cr, qx + (q - mw * msc) * 0.5, qy + (q - mh * msc) * 0.5);
+    cairo_scale(cr, msc, msc);
+    cairo_set_source_surface(cr, mic->surface, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+    cairo_paint_with_alpha(cr, alpha);
+    cairo_restore(cr);
+    ++shown;
+  }
+  if (shown == 0 && !name.empty()) {
+    cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, alpha);
+    cairo_set_font_size(cr, 12.5 * us * 1.8);
+    cairo_text_extents_t fex;
+    const std::string ch = name.substr(0, 1);
+    cairo_text_extents(cr, ch.c_str(), &fex);
+    cairo_move_to(cr, cx - fex.x_advance * 0.5 - fex.x_bearing,
+                  iconY + iconSize * 0.5 + fex.height * 0.5);
+    cairo_show_text(cr, ch.c_str());
+  }
+}
+
 void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                     const OverviewLayout& layout,
                     const std::vector<GridItem>& items,
                     const std::vector<SpotlightHit>& apps,
                     const std::vector<AppFolder>& folders,
                     int hoveredIdx, float hoverLift, float progress,
-                    double scrollPos) {
+                    double scrollPos,
+                    const GridDragState& drag) {
   const float alpha = std::clamp(progress, 0.0f, 1.0f);
   if (alpha <= 0.0f) return;
 
@@ -1335,11 +1413,32 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
     const int row = i / grid.cols;
     if (row > lastRow) break;
     const int col = i % grid.cols;
-    const double cellX = grid.startX + col * grid.cellW;
-    const double cellY = grid.startY + row * grid.cellH - scroll;
+    double cellX = grid.startX + col * grid.cellW;
+    double cellY = grid.startY + row * grid.cellH - scroll;
     const bool hovered = (i == hoveredIdx);
     const double lift = hovered ? static_cast<double>(hoverLift) : 0.0;
     const double liftPx = lift * 6.0 * us;
+
+    const ResolvedCell cell = resolve_grid_cell(items, apps, folders, i);
+    if (!cell.ok) continue;
+    // Lifted cell stays empty; the ghost paints it floating.
+    if (i == drag.dragIdx) continue;
+    // Shuffle: slide from the pre-drop origin toward the new slot.
+    if (drag.shuffle && !drag.shuffle->empty() && drag.nowMs >= drag.shuffleStartMs) {
+      const double t = grid_shuffle_ease(
+          static_cast<double>(drag.nowMs - drag.shuffleStartMs) / 200.0);
+      for (const auto& sh : *drag.shuffle) {
+        if (sh.key == cell.key) {
+          cellX += (sh.fromX - cellX) * (1.0 - t);
+          cellY += (sh.fromY - cellY) * (1.0 - t);
+          break;
+        }
+      }
+    }
+    const bool isFolder = cell.folder;
+    const AppFolder* folder = cell.folderPtr;
+    const std::string& iconKey = cell.iconKey;
+    const std::string& name = cell.name;
 
     // Flat hover wash behind the whole cell, like the mock (no border).
     if (lift > 0.01f) {
@@ -1348,66 +1447,22 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
                    grid.cellW - 12.0 * us, grid.cellH - 8.0 * us, 14.0 * us);
       cairo_fill(cr);
     }
+    // Accent ring on folders while an app drag hovers them (drop cue).
+    if (hovered && isFolder && drag.dragIdx >= 0 && drag.dragIdx != i) {
+      cairo_set_source_rgba(cr, colors.accentR, colors.accentG, colors.accentB, 0.65 * alpha);
+      cairo_set_line_width(cr, 2.0 * us);
+      rounded_rect(cr, cellX + 6.0 * us, cellY + 4.0 * us - liftPx,
+                   grid.cellW - 12.0 * us, grid.cellH - 8.0 * us, 14.0 * us);
+      cairo_stroke(cr);
+    }
 
     const double cx = cellX + grid.cellW * 0.5;
     const double iconX = cx - grid.iconSize * 0.5;
     const double iconY = cellY + 10.0 * us - liftPx;
 
-    // Resolve the cell: folder tiles show a 2x2 mini-icon stack, apps show
-    // their own icon. Out-of-range items (stale hover after refresh) paint
-    // nothing but keep their slot so indices stay stable.
-    const GridItem& git = items[static_cast<size_t>(i)];
-    const bool isFolder = git.folder;
-    const AppFolder* folder = (isFolder && git.index < folders.size())
-                                  ? &folders[git.index]
-                                  : nullptr;
-    std::string iconKey;
-    std::string name;
-    if (isFolder) {
-      if (folder == nullptr) continue;
-      name = folder->name;
-    } else {
-      if (git.index >= apps.size()) continue;
-      iconKey = apps[git.index].iconKey;
-      name = apps[git.index].name;
-    }
-
     if (isFolder && folder != nullptr) {
-      // Folder tile: subtle tile with up to 4 mini app icons (mock style).
-      cairo_set_source_rgba(cr, 1, 1, 1, 0.11 * alpha);
-      rounded_rect(cr, iconX, iconY, grid.iconSize, grid.iconSize, grid.iconSize * 0.28);
-      cairo_fill(cr);
-      const double pad = 5.0 * us;
-      const double q = (grid.iconSize - pad * 3.0) * 0.5;
-      size_t shown = 0;
-      for (size_t k = 0; k < folder->apps.size() && shown < 4; ++k) {
-        const int mPx = std::max(16, static_cast<int>(std::ceil(q * us)));
-        const eh::icons::IconEntry* mic = ctx.icons->tray_icon(folder->apps[k].iconKey, mPx);
-        if (!mic || !mic->surface) continue;
-        const double qx = iconX + pad + static_cast<double>(shown % 2) * (q + pad);
-        const double qy = iconY + pad + static_cast<double>(shown / 2) * (q + pad);
-        const double mw = static_cast<double>(mic->width);
-        const double mh = static_cast<double>(mic->height);
-        const double msc = q / std::max(1.0, std::max(mw, mh));
-        cairo_save(cr);
-        cairo_translate(cr, qx + (q - mw * msc) * 0.5, qy + (q - mh * msc) * 0.5);
-        cairo_scale(cr, msc, msc);
-        cairo_set_source_surface(cr, mic->surface, 0, 0);
-        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
-        cairo_paint_with_alpha(cr, alpha);
-        cairo_restore(cr);
-        ++shown;
-      }
-      if (shown == 0 && !name.empty()) {
-        cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, alpha);
-        cairo_set_font_size(cr, grid.fontSize * 1.8);
-        cairo_text_extents_t fex;
-        const std::string ch = name.substr(0, 1);
-        cairo_text_extents(cr, ch.c_str(), &fex);
-        cairo_move_to(cr, cx - fex.x_advance * 0.5 - fex.x_bearing,
-                      iconY + grid.iconSize * 0.5 + fex.height * 0.5);
-        cairo_show_text(cr, ch.c_str());
-      }
+      paint_folder_tile(cr, ctx, colors, us, alpha, iconX, iconY, grid.iconSize, *folder, cx,
+                        name);
     } else {
     // iconKey here is a themed icon name (desktop Icon= key), not an appId:
     // tray_icon() is the correct resolver and avoids the appId desktop-file
@@ -1469,7 +1524,62 @@ void paint_app_grid(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors,
     }
   }
 
+  // Reorder insertion marker (dock-style bar in the target gap).
+  if (drag.insertMark && drag.insH > 0.0) {
+    cairo_set_source_rgba(cr, colors.accentR, colors.accentG, colors.accentB, 0.85 * alpha);
+    cairo_set_line_width(cr, 3.0 * us);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_move_to(cr, drag.insX, drag.insY);
+    cairo_line_to(cr, drag.insX, drag.insY + drag.insH);
+    cairo_stroke(cr);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+  }
+
   cairo_restore(cr);
+
+  // Floating drag ghost (unclipped, above everything): the lifted cell at
+  // 1.05 scale following the pointer.
+  if (drag.dragIdx >= 0) {
+    const ResolvedCell gcell = resolve_grid_cell(items, apps, folders, drag.dragIdx);
+    if (gcell.ok) {
+      const double gw = grid.cellW;
+      const double gh = grid.cellH;
+      const double gcx = drag.ghostX + gw * 0.5;
+      const double gcy = drag.ghostY + gh * 0.5;
+      cairo_save(cr);
+      cairo_translate(cr, gcx, gcy);
+      cairo_scale(cr, 1.05, 1.05);
+      cairo_translate(cr, -gcx, -gcy);
+      if (gcell.folder && gcell.folderPtr) {
+        const double ix = drag.ghostX + (gw - grid.iconSize) * 0.5;
+        const double iy = drag.ghostY + 10.0 * us;
+        paint_folder_tile(cr, ctx, colors, us, alpha * 0.95f, ix, iy, grid.iconSize,
+                          *gcell.folderPtr, gcx, gcell.name);
+      } else if (!gcell.folder) {
+        rounded_rect(cr, drag.ghostX + 6.0 * us, drag.ghostY + 4.0 * us,
+                     gw - 12.0 * us, gh - 8.0 * us, 14.0 * us);
+        cairo_set_source_rgba(cr, colors.wsBgR, colors.wsBgG, colors.wsBgB, 0.9 * alpha);
+        cairo_fill(cr);
+        const int wantPx = std::max(16, static_cast<int>(std::ceil(grid.iconSize * us)));
+        const eh::icons::IconEntry* gic = ctx.icons->tray_icon(gcell.iconKey, wantPx);
+        if (gic && gic->surface) {
+          const double ix = gcx - grid.iconSize * 0.5;
+          const double iy = drag.ghostY + 10.0 * us;
+          const double iw = static_cast<double>(gic->width);
+          const double ih = static_cast<double>(gic->height);
+          const double sc = grid.iconSize / std::max(1.0, std::max(iw, ih));
+          cairo_save(cr);
+          cairo_translate(cr, ix, iy);
+          cairo_scale(cr, sc, sc);
+          cairo_set_source_surface(cr, gic->surface, 0, 0);
+          cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+          cairo_paint_with_alpha(cr, 0.95 * alpha);
+          cairo_restore(cr);
+        }
+      }
+      cairo_restore(cr);
+    }
+  }
 } // end paint_app_grid (no scrollbar: page dots below the grid show position)
 
 OverviewCardRect modal_card_rect(const OverviewLayout& layout) {
@@ -1489,7 +1599,8 @@ void paint_folder_modal(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors
                         const std::vector<SpotlightHit>& apps,
                         const std::vector<AppFolder>& folders,
                         int hoveredIdx, float hoverLift, float progress,
-                        double scrollPos, const std::string& title) {
+                        double scrollPos, const std::string& title,
+                        const GridDragState& drag) {
   const float alpha = std::clamp(progress, 0.0f, 1.0f);
   if (alpha <= 0.0f) return;
   const double us = layout.uiScale;
@@ -1529,7 +1640,7 @@ void paint_folder_modal(cairo_t* cr, ShellCtx& ctx, const OverviewColors& colors
   OverviewLayout box = layout;
   box.appGrid = grid;
   paint_app_grid(cr, ctx, colors, box, modalItems, apps, folders,
-                 hoveredIdx, hoverLift, progress, scrollPos);
+                 hoveredIdx, hoverLift, progress, scrollPos, drag);
 }
 
 void paint_page_dots(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
@@ -1565,6 +1676,49 @@ void paint_page_dots(cairo_t* cr, const OverviewColors& colors, const OverviewLa
     cairo_arc(cr, dx + r, dy, r, 0, 2 * M_PI);
     cairo_fill(cr);
     dx += r * 2.0 + gap;
+  }
+}
+
+OverviewCardRect app_cell_rect(const AppGridLayout& grid, int idx, double scrollPos) {
+  OverviewCardRect r;
+  if (grid.cols <= 0 || grid.cellW <= 0.0 || grid.cellH <= 0.0 || idx < 0) return r;
+  const double scroll = std::clamp(scrollPos, 0.0, std::max(0.0, grid.scrollMax));
+  r.x = grid.startX + static_cast<double>(idx % grid.cols) * grid.cellW;
+  r.y = grid.startY + static_cast<double>(idx / grid.cols) * grid.cellH - scroll;
+  r.w = grid.cellW;
+  r.h = grid.cellH;
+  return r;
+}
+
+void paint_ctx_menu(cairo_t* cr, const OverviewColors& colors, const OverviewLayout& layout,
+                    const OverviewCardRect& rect, const std::vector<std::string>& labels,
+                    int hoveredRow, float progress) {
+  const float alpha = std::clamp(progress, 0.0f, 1.0f);
+  if (alpha <= 0.0f || labels.empty()) return;
+  const double us = layout.uiScale;
+  {
+    m3::Box box;
+    box.setColor(static_cast<float>(colors.glassBgR), static_cast<float>(colors.glassBgG),
+                 static_cast<float>(colors.glassBgB), static_cast<float>(0.96 * alpha));
+    box.setRadius(static_cast<float>(12.0 * us));
+    box.setGeometry(static_cast<float>(rect.x), static_cast<float>(rect.y),
+                    static_cast<float>(rect.w), static_cast<float>(rect.h));
+    box.setGlassy(true);
+    box.paint(cr);
+  }
+  cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+  cairo_set_font_size(cr, 13.0 * us);
+  const double rowH = (rect.h - 12.0 * us) / static_cast<double>(labels.size());
+  for (size_t i = 0; i < labels.size(); ++i) {
+    const double ry = rect.y + 6.0 * us + static_cast<double>(i) * rowH;
+    if (static_cast<int>(i) == hoveredRow) {
+      cairo_set_source_rgba(cr, 1, 1, 1, 0.09 * alpha);
+      rounded_rect(cr, rect.x + 4.0 * us, ry, rect.w - 8.0 * us, rowH, 8.0 * us);
+      cairo_fill(cr);
+    }
+    cairo_set_source_rgba(cr, colors.fgR, colors.fgG, colors.fgB, 0.92 * alpha);
+    cairo_move_to(cr, rect.x + 14.0 * us, ry + rowH * 0.66);
+    cairo_show_text(cr, labels[i].c_str());
   }
 }
 

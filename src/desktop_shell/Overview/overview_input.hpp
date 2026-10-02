@@ -76,6 +76,7 @@ public:
   int hovered_app = -1;
   float app_hover_lift = 0.f;
   bool hovered_apps_btn = false;
+  int ctx_menu_hover = -1;
   uint64_t trackpad_settle_until_ms_ = 0;
 
   bool owns_surface(const wl_surface* s) const noexcept;

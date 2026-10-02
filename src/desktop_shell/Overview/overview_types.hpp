@@ -86,6 +86,34 @@ struct GridItem {
   size_t index = 0; // into Host folders_ (folder) or apps_ (app)
 };
 
+// Stable identity for shuffle animation ("a:"+desktop path / "f:"+folder id).
+[[nodiscard]] inline std::string grid_item_key(bool folder, const std::string& id) {
+  return (folder ? "f:" : "a:") + id;
+}
+
+// Snapshot of pre-drop cell origins for the reorganize animation.
+struct GridShuffle {
+  std::string key;
+  double fromX = 0.0;
+  double fromY = 0.0;
+};
+
+// Per-frame drag/animate state for one grid paint. Default = static grid.
+struct GridDragState {
+  int dragIdx = -1;      // item lifted under the pointer (slot left empty)
+  double ghostX = 0.0;   // top-left of the floating ghost cell
+  double ghostY = 0.0;
+  // Reorder insertion marker (dock-style): vertical bar at the gap where
+  // the dragged icon will land. Only for edge drops, never for folders.
+  bool insertMark = false;
+  double insX = 0.0;
+  double insY = 0.0;
+  double insH = 0.0;
+  const std::vector<GridShuffle>* shuffle = nullptr;
+  uint64_t shuffleStartMs = 0;
+  uint64_t nowMs = 0;
+};
+
 struct AppGridLayout {
   double startX = 0, startY = 0;
   double cellW = 0, cellH = 0;

@@ -161,6 +161,40 @@ public:
   // Drop a main-grid cell onto another (drag release). Handles folder
   // creation (app onto app) and moving into a folder. No-op on clicks.
   void drop_grid_item(int srcIdx, int dstIdx);
+  // Right-click context menu (pin/unpin) over app cells.
+  bool ctx_menu_open_ = false;
+  OverviewCardRect ctx_menu_rect_{};
+  std::vector<std::string> ctx_menu_labels_;
+  std::vector<int> ctx_menu_actions_; // 0 = dock pin toggle, 1 = taskbar pin toggle
+  std::string ctx_menu_app_;
+  void open_ctx_menu(double x, double y, const std::string& appPath);
+  void close_ctx_menu();
+  [[nodiscard]] bool ctx_menu_open() const noexcept { return ctx_menu_open_; }
+  [[nodiscard]] bool ctx_menu_hit(double x, double y, int* outRow) const;
+  void activate_ctx_menu_row(int row);
+  [[nodiscard]] bool dock_pinned_path(const std::string& path) const;
+  [[nodiscard]] bool taskbar_pinned_path(const std::string& path) const;
+  void toggle_dock_pin(const std::string& path);
+  void toggle_taskbar_pin(const std::string& path);
+  // Move a main-grid cell before/after another (edge drop). Persists.
+  void reorder_grid_item(int srcIdx, int dstIdx, bool after);
+  [[nodiscard]] std::string grid_item_id(int idx) const;
+  // Snapshot pre-drop cell origins for the shuffle animation. Call BEFORE
+  // mutating folders/apps.
+  void begin_grid_shuffle();
+  [[nodiscard]] bool grid_shuffle_active() const;
+  // Per-frame drag + shuffle state for one grid paint (modal selects which).
+  [[nodiscard]] GridDragState grid_drag_state(bool modal);
+  // Inline rename of the open folder (title click or F2). Keystrokes go to
+  // the name until Enter commits or Esc cancels.
+  void start_rename();
+  void commit_rename();
+  void cancel_rename();
+  [[nodiscard]] bool renaming() const noexcept { return renaming_; }
+  [[nodiscard]] std::string modal_title_display() const;
+  // Rename keystrokes (UTF-8 append capped at 48 bytes, proper pop).
+  void rename_type_text(const char* text);
+  void rename_backspace();
   [[nodiscard]] ShellCtx& ctx() noexcept { return ctx_; }
   [[nodiscard]] const std::unique_ptr<eh::wayland::WaylandConnection>& wl() const noexcept { return wl_; }
   [[nodiscard]] bool open() const noexcept { return open_; }
@@ -373,6 +407,11 @@ private:
   int open_folder_ = -1;
   double modal_scroll_pos_ = 0.0;
   double modal_scroll_target_ = 0.0;
+  // Grid shuffle (reorganize) animation: pre-drop cell origins by item key.
+  // Snapshot BEFORE a folder mutation; paint eases cells to new slots.
+  std::vector<GridShuffle> grid_shuffle_;
+  uint64_t grid_shuffle_start_ms_ = 0;
+  bool grid_shuffle_modal_ = false;
   // User folder overrides (persisted to overview_folders.toml):
   // - manual_folders_: user-created folders (drag app onto app).
   // - removed_apps_: desktop paths excluded from their auto folder
@@ -383,6 +422,16 @@ private:
   std::unordered_set<std::string> removed_apps_{};
   std::map<std::string, std::vector<std::string>> added_apps_{};
   bool folders_loaded_ = false;
+  // Manual grid order ("f:<folderId>" / "a:<desktopPath>") from drag
+  // reorder. Applied over the default build; unknown ids stay in place.
+  std::vector<std::string> grid_order_{};
+  // Custom folder names (auto bucket ids and manual ids alike). Applied in
+  // rebuild; persisted in the [names] table.
+  std::map<std::string, std::string> folder_names_{};
+  // Inline rename mode for the open folder (F2 or click its title):
+  // keystrokes edit the name instead of the search query.
+  bool renaming_ = false;
+  std::string rename_buf_{};
 };
 
 } // namespace eh::shell::overview

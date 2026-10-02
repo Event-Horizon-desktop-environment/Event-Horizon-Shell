@@ -7,6 +7,9 @@
 #include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/common/icon_cache/icon_cache.hpp"
 #include "desktop_shell/common/ns/namespaces.hpp"
+#include "desktop_shell/dock/pinned/dock_pinned.h"
+#include "desktop_shell/common/fs/shell_paths.hpp"
+#include "desktop_shell/shared/pins/pin_identity.hpp"
 #include "configuration/shell_config.hpp"
 #include "backends/hyprland/hyprland_backends.h"
 #include "wl/toplevel/foreign_toplevels.hpp"
@@ -236,7 +239,7 @@ void overview_host_page_frame_done(void* data, wl_callback* cb, uint32_t /*compo
     debug_log("overview", "slow frame: %.2f ms (show_apps=%d, apps=%zu)",
               frameMs, self->show_apps_ ? 1 : 0, self->apps_.size());
 
-  if (self->open_ || self->anim_.has_active())
+  if (self->open_ || self->anim_.has_active() || self->grid_shuffle_active())
     self->schedule_frame();
 }
 
@@ -1024,32 +1027,46 @@ void Host::ensure_wallpaper_bg() {
 }
 
 void Host::paint_background_surface() {
-  if (!bg_dirty_ || !wl_ || !wl_->shm()) return;
+  if (!wl_ || !wl_->shm()) return;
+  // Hold the background until the open animation actually starts fading
+  // content in: committing an opaque wallpaper while cards are still at
+  // alpha 0 is the split-second "blank wallpaper" flash on open. The dirty
+  // flag stays set so the first content frame paints us together.
+  if (progress_ <= 0.0f) return;
+  const float alpha = std::clamp(progress_, 0.0f, 1.0f);
+  if (!bg_dirty_ && alpha >= 1.0f) return;
   ensure_wallpaper_bg();
-  // Primary output.
-  if (bg_surface_ && w_ > 0 && h_ > 0 && bg_buf_.ensure(wl_->shm(), kOverviewBackgroundNamespace, w_, h_)) {
-    cairo_t* cr = bg_buf_.cairo();
+  // One surface paint: wallpaper cover-fit at the fade alpha (opaque once
+  // settled), or transparent when no wallpaper is configured.
+  auto paint_one = [&](cairo_t* cr, int w, int h) {
     if (bg_wallpaper_) {
       const int iw = cairo_image_surface_get_width(bg_wallpaper_);
       const int ih = cairo_image_surface_get_height(bg_wallpaper_);
       if (iw > 0 && ih > 0) {
-        const double sc = std::max(static_cast<double>(w_) / iw, static_cast<double>(h_) / ih);
+        const double sc = std::max(static_cast<double>(w) / iw, static_cast<double>(h) / ih);
         cairo_save(cr);
         cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-        cairo_translate(cr, (static_cast<double>(w_) - iw * sc) * 0.5,
-                        (static_cast<double>(h_) - ih * sc) * 0.5);
+        cairo_paint(cr); // clear to transparent first so the fade never stacks
+        cairo_translate(cr, (static_cast<double>(w) - iw * sc) * 0.5,
+                        (static_cast<double>(h) - ih * sc) * 0.5);
         cairo_scale(cr, sc, sc);
         cairo_set_source_surface(cr, bg_wallpaper_, 0, 0);
         cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
-        cairo_paint(cr);
+        if (alpha < 1.0f) cairo_paint_with_alpha(cr, alpha);
+        else cairo_paint(cr);
         cairo_restore(cr);
+        return;
       }
-    } else {
-      cairo_save(cr);
-      cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-      cairo_paint(cr);
-      cairo_restore(cr);
     }
+    cairo_save(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_restore(cr);
+  };
+  // Primary output.
+  if (bg_surface_ && w_ > 0 && h_ > 0 && !bg_buf_.busy() &&
+      bg_buf_.ensure(wl_->shm(), kOverviewBackgroundNamespace, w_, h_)) {
+    paint_one(bg_buf_.cairo(), w_, h_);
     cairo_surface_flush(bg_buf_.cairo_surface());
     if (bg_viewport_) wp_viewport_set_destination(bg_viewport_, w_, h_);
     wl_surface_attach(bg_surface_, bg_buf_.wl(), 0, 0);
@@ -1060,30 +1077,9 @@ void Host::paint_background_surface() {
   // Extra outputs.
   for (auto& ep : extra_outputs_) {
     auto& e = *ep;
-    if (!e.bg_surface || e.w <= 0 || e.h <= 0) continue;
+    if (!e.bg_surface || e.w <= 0 || e.h <= 0 || e.bg_buf.busy()) continue;
     if (!e.bg_buf.ensure(wl_->shm(), kOverviewBackgroundNamespace, e.w, e.h)) continue;
-    cairo_t* cr = e.bg_buf.cairo();
-    if (bg_wallpaper_) {
-      const int iw = cairo_image_surface_get_width(bg_wallpaper_);
-      const int ih = cairo_image_surface_get_height(bg_wallpaper_);
-      if (iw > 0 && ih > 0) {
-        const double sc = std::max(static_cast<double>(e.w) / iw, static_cast<double>(e.h) / ih);
-        cairo_save(cr);
-        cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-        cairo_translate(cr, (static_cast<double>(e.w) - iw * sc) * 0.5,
-                        (static_cast<double>(e.h) - ih * sc) * 0.5);
-        cairo_scale(cr, sc, sc);
-        cairo_set_source_surface(cr, bg_wallpaper_, 0, 0);
-        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
-        cairo_paint(cr);
-        cairo_restore(cr);
-      }
-    } else {
-      cairo_save(cr);
-      cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-      cairo_paint(cr);
-      cairo_restore(cr);
-    }
+    paint_one(e.bg_buf.cairo(), e.w, e.h);
     cairo_surface_flush(e.bg_buf.cairo_surface());
     if (e.bg_viewport) wp_viewport_set_destination(e.bg_viewport, e.w, e.h);
     wl_surface_attach(e.bg_surface, e.bg_buf.wl(), 0, 0);
@@ -1092,7 +1088,8 @@ void Host::paint_background_surface() {
     wl_surface_commit(e.bg_surface);
   }
   if (wl_->display()) wl_display_flush(wl_->display());
-  bg_dirty_ = false;
+  // Settle the dirty flag only once fully opaque; mid-fade frames repaint.
+  if (alpha >= 1.0f) bg_dirty_ = false;
 }
 
 void Host::paint_backdrop() {
@@ -1319,7 +1316,8 @@ void Host::paint_content() {
     {
       overview::StageGuard pg(overview::Stage::PaintAppGrid);
     paint_app_grid(cr, ctx_, colors_, layout_, grid_items_, apps_, folders_,
-                   input_->hovered_app, input_->app_hover_lift, progress_, app_scroll_pos_);
+                   input_->hovered_app, input_->app_hover_lift, progress_, app_scroll_pos_,
+                   grid_drag_state(false));
     }
     {
       overview::StageGuard pg(overview::Stage::PaintSearchBar);
@@ -1331,7 +1329,12 @@ void Host::paint_content() {
       paint_folder_modal(cr, ctx_, colors_, layout_, modal_items_,
                          folders_[static_cast<size_t>(open_folder_)].apps, folders_,
                          input_->hovered_app, input_->app_hover_lift, progress_,
-                         modal_scroll_pos_, folder_title());
+                         modal_scroll_pos_, modal_title_display(), grid_drag_state(true));
+    }
+    if (ctx_menu_open_ && !ctx_menu_labels_.empty()) {
+      overview::StageGuard pg(overview::Stage::PaintSearchBar);
+      paint_ctx_menu(cr, colors_, layout_, ctx_menu_rect_, ctx_menu_labels_,
+                     input_->ctx_menu_hover, progress_);
     }
   } else {
     {
@@ -1744,6 +1747,7 @@ void Host::destroy_layer() {
   input_->press_win = -1;
   input_->press_app_idx = -1;
   input_->press_app_modal = false;
+  input_->ctx_menu_hover = -1;
   input_->drop_target_ws = -1;
   input_->drop_target_win = -1;
   input_->drop_target_add = false;
@@ -1793,6 +1797,224 @@ void Host::detach_vk() noexcept {
     ep->vk_layer.detach();
 }
 
+void Host::begin_grid_shuffle() {
+  grid_shuffle_.clear();
+  grid_shuffle_modal_ = folder_open();
+  const AppGridLayout& g = active_grid();
+  const double scroll = active_scroll_pos();
+  if (folder_open()) {
+    const auto& folderApps = folders_[static_cast<size_t>(open_folder_)].apps;
+    for (size_t r = 0; r < modal_items_.size() && r < folderApps.size(); ++r) {
+      const OverviewCardRect rc = app_cell_rect(g, static_cast<int>(r), scroll);
+      grid_shuffle_.push_back({"a:" + folderApps[r].path, rc.x, rc.y});
+    }
+  } else {
+    for (size_t i = 0; i < grid_items_.size(); ++i) {
+      const GridItem& it = grid_items_[i];
+      std::string key;
+      if (it.folder) {
+        if (it.index >= folders_.size()) continue;
+        key = "f:" + folders_[it.index].id;
+      } else {
+        if (it.index >= apps_.size()) continue;
+        key = "a:" + apps_[it.index].path;
+      }
+      const OverviewCardRect rc = app_cell_rect(g, static_cast<int>(i), scroll);
+      grid_shuffle_.push_back({key, rc.x, rc.y});
+    }
+  }
+  grid_shuffle_start_ms_ = now_mono_ms();
+}
+
+bool Host::grid_shuffle_active() const {
+  if (grid_shuffle_.empty()) return false;
+  return now_mono_ms() - grid_shuffle_start_ms_ < 250;
+}
+
+GridDragState Host::grid_drag_state(bool modal) {
+  GridDragState st;
+  if (grid_shuffle_modal_ == modal && !grid_shuffle_.empty()) {
+    const uint64_t now = now_mono_ms();
+    if (now - grid_shuffle_start_ms_ < 250) {
+      st.shuffle = &grid_shuffle_;
+      st.shuffleStartMs = grid_shuffle_start_ms_;
+      st.nowMs = now;
+    } else {
+      grid_shuffle_.clear();
+    }
+  }
+  if (show_apps_ && input_->drag_active && input_->button_pressed &&
+      input_->press_app_idx >= 0 && input_->press_app_modal == modal) {
+    st.dragIdx = input_->press_app_idx;
+    st.ghostX = input_->ptr_x() - input_->drag_grab_dx;
+    st.ghostY = input_->ptr_y() - input_->drag_grab_dy;
+    // Insertion marker for main-grid reorder drags: same edge rule as the
+    // drop handler (center = folder flow, edges = reorder). Hidden over
+    // the dragged cell itself and over folder centers.
+    if (!modal && st.dragIdx >= 0 && st.dragIdx < static_cast<int>(grid_items_.size()) &&
+        !grid_items_[static_cast<size_t>(st.dragIdx)].folder) {
+      const int hov = input_->hovered_app;
+      if (hov >= 0 && hov < static_cast<int>(grid_items_.size()) && hov != st.dragIdx) {
+        const OverviewCardRect cell = app_cell_rect(layout_.appGrid, hov, app_scroll_pos_);
+        if (cell.w > 0.0 && cell.h > 0.0 && input_->ptr_x() >= cell.x &&
+            input_->ptr_x() <= cell.x + cell.w && input_->ptr_y() >= cell.y &&
+            input_->ptr_y() <= cell.y + cell.h) {
+          const double fx = (input_->ptr_x() - cell.x) / cell.w;
+          const double fy = (input_->ptr_y() - cell.y) / cell.h;
+          const bool center = (fx > 0.2 && fx < 0.8 && fy > 0.2 && fy < 0.8);
+          const bool dstFolder = grid_items_[static_cast<size_t>(hov)].folder;
+          if (!center && !dstFolder) {
+            st.insertMark = true;
+            st.insX = (fx > 0.5) ? cell.x + cell.w : cell.x;
+            st.insY = cell.y + 4.0 * layout_.uiScale;
+            st.insH = cell.h - 8.0 * layout_.uiScale;
+          }
+        }
+      }
+    }
+  }
+  return st;
+}
+
+std::string Host::grid_item_id(int idx) const {
+  if (idx < 0 || idx >= static_cast<int>(grid_items_.size())) return {};
+  const GridItem& item = grid_items_[static_cast<size_t>(idx)];
+  if (item.folder) {
+    if (item.index >= folders_.size()) return {};
+    return "f:" + folders_[item.index].id;
+  }
+  if (item.index >= apps_.size()) return {};
+  return "a:" + apps_[item.index].path;
+}
+
+void Host::reorder_grid_item(int srcIdx, int dstIdx, bool after) {
+  if (!show_apps_ || folder_open() || !search_query_.empty()) return;
+  if (srcIdx == dstIdx) return;
+  if (srcIdx < 0 || srcIdx >= static_cast<int>(grid_items_.size())) return;
+  if (dstIdx < 0 || dstIdx >= static_cast<int>(grid_items_.size())) return;
+  // Current display order as ids, then move.
+  std::vector<std::string> ids;
+  ids.reserve(grid_items_.size());
+  for (size_t i = 0; i < grid_items_.size(); ++i) ids.push_back(grid_item_id(static_cast<int>(i)));
+  const std::string moving = ids[static_cast<size_t>(srcIdx)];
+  const std::string anchor = ids[static_cast<size_t>(dstIdx)];
+  if (moving.empty() || anchor.empty()) return;
+  ids.erase(ids.begin() + srcIdx);
+  auto it = std::find(ids.begin(), ids.end(), anchor);
+  if (it == ids.end()) return;
+  size_t pos = static_cast<size_t>(it - ids.begin());
+  if (after) ++pos;
+  if (pos > ids.size()) pos = ids.size();
+  ids.insert(ids.begin() + static_cast<long>(pos), moving);
+  debug_log("overview", "grid reorder %s %s %s", moving.c_str(), after ? "after" : "before",
+            anchor.c_str());
+  grid_order_ = std::move(ids);
+  after_folder_edit();
+}
+
+void Host::open_ctx_menu(double x, double y, const std::string& appPath) {
+  close_ctx_menu();
+  if (appPath.empty() || w_ <= 0 || h_ <= 0) return;
+  const double us = layout_.uiScale > 0.0 ? layout_.uiScale : 1.0;
+  ctx_menu_app_ = appPath;
+  ctx_menu_labels_.clear();
+  ctx_menu_actions_.clear();
+  ctx_menu_labels_.push_back(dock_pinned_path(appPath) ? "Unpin from dock" : "Pin to dock");
+  ctx_menu_actions_.push_back(0);
+  ctx_menu_labels_.push_back(taskbar_pinned_path(appPath) ? "Unpin from taskbar" : "Pin to taskbar");
+  ctx_menu_actions_.push_back(1);
+  const double rowH = 34.0 * us;
+  const double menuW = 220.0 * us;
+  const double menuH = rowH * ctx_menu_labels_.size() + 12.0 * us;
+  ctx_menu_rect_.w = menuW;
+  ctx_menu_rect_.h = menuH;
+  ctx_menu_rect_.x = std::clamp(x, 8.0, std::max(8.0, static_cast<double>(w_) - menuW - 8.0));
+  ctx_menu_rect_.y = std::clamp(y, 8.0, std::max(8.0, static_cast<double>(h_) - menuH - 8.0));
+  input_->ctx_menu_hover = -1;
+  ctx_menu_open_ = true;
+  debug_log("overview", "ctx menu open app=%s", appPath.c_str());
+  if (!frame_cb_) schedule_frame();
+}
+
+void Host::close_ctx_menu() {
+  if (!ctx_menu_open_) return;
+  ctx_menu_open_ = false;
+  input_->ctx_menu_hover = -1;
+  ctx_menu_labels_.clear();
+  ctx_menu_actions_.clear();
+  ctx_menu_app_.clear();
+  if (!frame_cb_) schedule_frame();
+}
+
+bool Host::ctx_menu_hit(double x, double y, int* outRow) const {
+  if (!ctx_menu_open_) return false;
+  const double us = layout_.uiScale > 0.0 ? layout_.uiScale : 1.0;
+  const auto& r = ctx_menu_rect_;
+  if (x < r.x || x > r.x + r.w || y < r.y || y > r.y + r.h) return false;
+  const double rowH = (r.h - 12.0 * us) / std::max<size_t>(1, ctx_menu_labels_.size());
+  int row = static_cast<int>((y - r.y - 6.0 * us) / rowH);
+  if (row < 0 || row >= static_cast<int>(ctx_menu_labels_.size())) return false;
+  if (outRow) *outRow = row;
+  return true;
+}
+
+void Host::activate_ctx_menu_row(int row) {
+  if (!ctx_menu_open_ || row < 0 || row >= static_cast<int>(ctx_menu_actions_.size())) {
+    close_ctx_menu();
+    return;
+  }
+  const int action = ctx_menu_actions_[static_cast<size_t>(row)];
+  const std::string app = ctx_menu_app_;
+  close_ctx_menu();
+  if (app.empty()) return;
+  if (action == 0) {
+    debug_log("overview", "ctx menu: dock pin toggle %s", app.c_str());
+    toggle_dock_pin(app);
+  } else {
+    debug_log("overview", "ctx menu: taskbar pin toggle %s", app.c_str());
+    toggle_taskbar_pin(app);
+  }
+}
+
+bool Host::dock_pinned_path(const std::string& path) const {
+  if (path.empty()) return false;
+  return dock_settings_is_app_pinned(path);
+}
+
+bool Host::taskbar_pinned_path(const std::string& path) const {
+  if (path.empty()) return false;
+  const std::string key = eh::shell::paths::normalize_desktop_app_id(path);
+  if (key == "unknown") return false;
+  for (const auto& p : eh::config::shell_config_snapshot().taskbar.pinnedApps) {
+    if (pin_identity_pin_raw_matches_key(p, key)) return true;
+  }
+  return false;
+}
+
+void Host::toggle_dock_pin(const std::string& path) {
+  if (path.empty()) return;
+  dock_settings_pinned_toggle(path);
+}
+
+void Host::toggle_taskbar_pin(const std::string& path) {
+  const std::string key = eh::shell::paths::normalize_desktop_app_id(path);
+  if (key == "unknown") return;
+  auto sc = eh::config::shell_config_snapshot();
+  auto& pins = sc.taskbar.pinnedApps;
+  for (auto it = pins.begin(); it != pins.end(); ++it) {
+    if (!pin_identity_pin_raw_matches_key(*it, key)) continue;
+    debug_log("overview", "taskbar unpin: '%s'", key.c_str());
+    pins.erase(it);
+    (void)eh::config::write_state_settings_toml(sc);
+    eh::config::shell_config_apply_from_memory(std::move(sc));
+    return;
+  }
+  debug_log("overview", "taskbar pin: '%s'", key.c_str());
+  pins.push_back(key);
+  (void)eh::config::write_state_settings_toml(sc);
+  eh::config::shell_config_apply_from_memory(std::move(sc));
+}
+
 void Host::drop_grid_item(int srcIdx, int dstIdx) {
   if (!show_apps_ || folder_open() || !search_query_.empty()) return;
   if (srcIdx == dstIdx) return;
@@ -1800,24 +2022,28 @@ void Host::drop_grid_item(int srcIdx, int dstIdx) {
   if (dstIdx < 0 || dstIdx >= static_cast<int>(grid_items_.size())) return;
   const GridItem& src = grid_items_[static_cast<size_t>(srcIdx)];
   const GridItem& dst = grid_items_[static_cast<size_t>(dstIdx)];
-  if (src.folder) return; // folders themselves are not draggable (GNOME parity-ish)
+  if (src.folder) {
+    debug_log("overview", "drop: source is a folder, ignoring");
+    return; // folders themselves are not draggable (GNOME parity-ish)
+  }
   const std::string srcPath = grid_item_path(srcIdx);
   if (srcPath.empty()) return;
   if (dst.folder) {
     const std::string folderId = folders_[dst.index].id;
-    // Dropping onto its own folder is a no-op.
-    if (folder_open()) return;
+    debug_log("overview", "drop: %s onto folder %s", srcPath.c_str(), folderId.c_str());
     move_app_into_folder(srcPath, folderId);
     return;
   }
   const std::string dstPath = grid_item_path(dstIdx);
   if (dstPath.empty()) return;
+  debug_log("overview", "drop: %s onto %s (create folder)", srcPath.c_str(), dstPath.c_str());
   create_manual_folder(srcPath, dstPath);
 }
 
 void Host::refresh_app_list() {
   const auto t0 = std::chrono::steady_clock::now();
   load_folder_state();
+  close_ctx_menu();
   apps_.clear();
   eh_app_drawer_menu_query(search_query_, &apps_);
   app_scroll_pos_ = 0.0;
@@ -1887,6 +2113,8 @@ void Host::rebuild_grid_items() {
       AppFolder folder;
       folder.id = id;
       folder.name = eh::shell::tahoe::kTahoeBuckets[b].label;
+      const auto nit = folder_names_.find(id);
+      if (nit != folder_names_.end() && !nit->second.empty()) folder.name = nit->second;
       for (size_t i : mem) {
         folder.apps.push_back(apps_[i]);
         grouped[i] = 1;
@@ -1904,6 +2132,8 @@ void Host::rebuild_grid_items() {
       AppFolder folder;
       folder.id = mf.id;
       folder.name = mf.name;
+      const auto nit = folder_names_.find(mf.id);
+      if (nit != folder_names_.end() && !nit->second.empty()) folder.name = nit->second;
       for (const auto& saved : mf.apps) {
         for (size_t i = 0; i < apps_.size(); ++i) {
           if (apps_[i].path == saved.path && !grouped[i]) {
@@ -1926,6 +2156,35 @@ void Host::rebuild_grid_items() {
       item.folder = false;
       item.index = i;
       grid_items_.push_back(item);
+    }
+    // Manual order from drag reorder: stable-sort by saved position,
+    // unknown ids keep their relative order at the end.
+    if (!grid_order_.empty() && grid_items_.size() > 1) {
+      const auto id_of = [&](const GridItem& it) -> std::string {
+        if (it.folder) {
+          if (it.index >= folders_.size()) return {};
+          return "f:" + folders_[it.index].id;
+        }
+        if (it.index >= apps_.size()) return {};
+        return "a:" + apps_[it.index].path;
+      };
+      std::unordered_map<std::string, size_t> pos;
+      for (size_t i = 0; i < grid_order_.size(); ++i) pos[grid_order_[i]] = i;
+      std::vector<size_t> order(grid_items_.size());
+      for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+      std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        auto itA = pos.find(id_of(grid_items_[a]));
+        auto itB = pos.find(id_of(grid_items_[b]));
+        const bool ha = itA != pos.end();
+        const bool hb = itB != pos.end();
+        if (ha != hb) return ha;
+        if (ha) return itA->second < itB->second;
+        return false;
+      });
+      std::vector<GridItem> sorted;
+      sorted.reserve(grid_items_.size());
+      for (size_t i : order) sorted.push_back(grid_items_[i]);
+      grid_items_.swap(sorted);
     }
   } else {
     for (size_t i = 0; i < apps_.size(); ++i) {
@@ -1953,6 +2212,8 @@ void Host::load_folder_state() {
   manual_folders_.clear();
   removed_apps_.clear();
   added_apps_.clear();
+  folder_names_.clear();
+  grid_order_.clear();
   try {
     toml::table tbl = toml::parse_file(overview_folders_path());
     if (const auto* rem = tbl["removed"].as_array()) {
@@ -1967,6 +2228,16 @@ void Host::load_folder_state() {
             if (const auto* s = el.as_string()) vec.push_back(std::string(s->get()));
         }
       }
+    }
+    if (const auto* names = tbl["names"].as_table()) {
+      for (const auto& [k, v] : *names) {
+        const auto* s = v.as_string();
+        if (s && !s->get().empty()) folder_names_[std::string(k)] = std::string(s->get());
+      }
+    }
+    if (const auto* ord = tbl["order"].as_array()) {
+      for (const auto& el : *ord)
+        if (const auto* s = el.as_string()) grid_order_.push_back(std::string(s->get()));
     }
     if (const auto* customs = tbl["custom"].as_array()) {
       int n = 0;
@@ -2005,6 +2276,12 @@ void Host::save_folder_state() const {
       add.insert_or_assign(k, std::move(a));
     }
     root.insert_or_assign("added", std::move(add));
+    toml::table names;
+    for (const auto& [k, v] : folder_names_) names.insert_or_assign(k, v);
+    root.insert_or_assign("names", std::move(names));
+    toml::array ord;
+    for (const auto& id : grid_order_) ord.push_back(id);
+    root.insert_or_assign("order", std::move(ord));
     toml::array customs;
     for (const auto& f : manual_folders_) {
       toml::table t;
@@ -2064,6 +2341,7 @@ void Host::create_manual_folder(const std::string& pathA, const std::string& pat
   const SpotlightHit* a = find_app_by_path(pathA);
   const SpotlightHit* b = find_app_by_path(pathB);
   if (!a || !b) return;
+  begin_grid_shuffle();
   AppFolder folder;
   int n = 0;
   for (const auto& f : manual_folders_) {
@@ -2078,6 +2356,8 @@ void Host::create_manual_folder(const std::string& pathA, const std::string& pat
   folder.name = "Folder";
   folder.apps.push_back(*a);
   folder.apps.push_back(*b);
+  debug_log("overview", "folder create %s (%s, %s)", folder.id.c_str(), pathA.c_str(),
+            pathB.c_str());
   removed_apps_.insert(pathA);
   removed_apps_.insert(pathB);
   manual_folders_.push_back(std::move(folder));
@@ -2088,6 +2368,7 @@ void Host::move_app_into_folder(const std::string& appPath, const std::string& f
   if (appPath.empty() || folderId.empty()) return;
   const SpotlightHit* app = find_app_by_path(appPath);
   if (!app) return;
+  begin_grid_shuffle();
   if (folderId.rfind("custom-", 0) == 0) {
     bool found = false;
     for (auto& f : manual_folders_) {
@@ -2129,6 +2410,7 @@ void Host::move_app_into_folder(const std::string& appPath, const std::string& f
 
 void Host::remove_app_from_open_folder(const std::string& appPath) {
   if (!folder_open() || appPath.empty()) return;
+  begin_grid_shuffle();
   const std::string folderId = folders_[static_cast<size_t>(open_folder_)].id;
   if (folderId.rfind("custom-", 0) == 0) {
     for (auto& f : manual_folders_) {
@@ -2145,6 +2427,7 @@ void Host::remove_app_from_open_folder(const std::string& appPath) {
     // A removed app stays out of its auto folder (excluded on entry).
   } else {
     // Auto folder: the exclusion list is the GNOME excluded-apps equivalent.
+    debug_log("overview", "folder remove %s from auto %s", appPath.c_str(), folderId.c_str());
     removed_apps_.insert(appPath);
   }
   after_folder_edit();
@@ -2171,8 +2454,78 @@ void Host::remove_app_from_open_folder(const std::string& appPath) {
   if (!frame_cb_) schedule_frame();
 }
 
+void Host::start_rename() {
+  if (!folder_open()) return;
+  renaming_ = true;
+  rename_buf_ = folder_title();
+  debug_log("overview", "rename start folder=%s", folder_title().c_str());
+  if (!frame_cb_) schedule_frame();
+}
+
+void Host::commit_rename() {
+  if (!renaming_) return;
+  renaming_ = false;
+  if (folder_open() && !rename_buf_.empty()) {
+    const std::string id = folders_[static_cast<size_t>(open_folder_)].id;
+    folder_names_[id] = rename_buf_;
+    debug_log("overview", "rename commit folder=%s name=%s", id.c_str(), rename_buf_.c_str());
+    after_folder_edit();
+    // after_folder_edit() rebuilt folders_: re-resolve by id.
+    open_folder_ = -1;
+    for (size_t i = 0; i < folders_.size(); ++i) {
+      if (folders_[i].id == id) {
+        open_folder_ = static_cast<int>(i);
+        break;
+      }
+    }
+    modal_items_.clear();
+    if (open_folder_ >= 0) {
+      for (size_t i = 0; i < folders_[static_cast<size_t>(open_folder_)].apps.size(); ++i) {
+        GridItem item;
+        item.folder = false;
+        item.index = i;
+        modal_items_.push_back(item);
+      }
+    }
+    recompute_layout();
+  }
+  rename_buf_.clear();
+  if (!frame_cb_) schedule_frame();
+}
+
+void Host::cancel_rename() {
+  if (!renaming_) return;
+  renaming_ = false;
+  rename_buf_.clear();
+  debug_log("overview", "rename cancel");
+  if (!frame_cb_) schedule_frame();
+}
+
+std::string Host::modal_title_display() const {
+  if (renaming_) return rename_buf_ + "|";
+  return folder_title();
+}
+
+void Host::rename_type_text(const char* text) {
+  if (!renaming_ || !text) return;
+  rename_buf_ += text;
+  if (rename_buf_.size() > 48) rename_buf_.resize(48);
+  if (!frame_cb_) schedule_frame();
+}
+
+void Host::rename_backspace() {
+  if (!renaming_ || rename_buf_.empty()) return;
+  size_t len = rename_buf_.size();
+  do {
+    --len;
+  } while (len > 0 && (static_cast<unsigned char>(rename_buf_[len]) & 0xC0) == 0x80);
+  rename_buf_.resize(len);
+  if (!frame_cb_) schedule_frame();
+}
+
 void Host::open_folder(int folderIdx) {
   if (folderIdx < 0 || folderIdx >= static_cast<int>(folders_.size())) return;
+  close_ctx_menu();
   open_folder_ = folderIdx;
   modal_items_.clear();
   for (size_t i = 0; i < folders_[static_cast<size_t>(folderIdx)].apps.size(); ++i) {
@@ -2190,7 +2543,8 @@ void Host::open_folder(int folderIdx) {
 }
 
 void Host::close_folder() {
-  if (open_folder_ < 0) return;
+  if (open_folder_ < 0 && !renaming_) return;
+  cancel_rename();
   open_folder_ = -1;
   modal_items_.clear();
   modal_scroll_pos_ = 0.0;
@@ -2264,10 +2618,12 @@ void Host::make_app_visible(int idx) {
 
 void Host::toggle_apps_mode() {
   if (!open_) return;
+  close_ctx_menu();
   const auto t0 = std::chrono::steady_clock::now();
   show_apps_ = !show_apps_;
   if (show_apps_) {
     search_query_.clear();
+    cancel_rename();
     open_folder_ = -1;
     modal_items_.clear();
     modal_scroll_pos_ = 0.0;
@@ -2292,6 +2648,8 @@ void Host::close() {
   if (!open_) return;
   open_ = false;
   closing_ = true;
+  close_ctx_menu();
+  cancel_rename();
   reveal_->reset();
 
   if (capture_->live_stream_) capture_->live_stream_->stop();

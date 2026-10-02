@@ -160,6 +160,7 @@ void Input::handle_pointer_leave() {
   if (hovered_win >= 0) { hovered_win = -1; changed = true; }
   if (hovered_qs >= 0) { hovered_qs = -1; changed = true; }
   if (hovered_app >= 0) { hovered_app = -1; changed = true; }
+  if (ctx_menu_hover >= 0) { ctx_menu_hover = -1; changed = true; }
   if (close_hovered) { close_hovered = false; changed = true; }
   button_pressed = false;
   drag_active = false;
@@ -185,6 +186,21 @@ void Input::handle_pointer_motion(double sx, double sy) {
       drag_active = true;
       drag_auto_scroll_dir = 0;
       drop_target_ws = -1;
+      // App-grid drags grab the cell under the press so the ghost tracks it.
+      if (press_app_idx >= 0 && host_.show_apps()) {
+        const OverviewCardRect cell =
+            app_cell_rect(host_.active_grid(), press_app_idx, host_.active_scroll_pos());
+        if (cell.w > 0.0) {
+          drag_grab_dx = press_x - cell.x;
+          drag_grab_dy = press_y - cell.y;
+        } else {
+          drag_grab_dx = 0.0;
+          drag_grab_dy = 0.0;
+        }
+        hovered_app = press_app_idx;
+        if (!host_.has_frame_cb()) host_.schedule_frame();
+        return;
+      }
       bool ok = false;
       const OverviewCardRect t =
           overview_tile_rect_for_flat(host_.layout(), host_.workspaces(), press_win, host_.scroll_pos(), &ok);
@@ -200,6 +216,17 @@ void Input::handle_pointer_motion(double sx, double sy) {
   }
 
   if (drag_active) {
+    // App-grid drags track the hovered cell as the drop target instead of
+    // workspace targets.
+    if (host_.show_apps() && press_app_idx >= 0) {
+      const int dst = pick_app_at(host_.active_grid(), ptr_x_, ptr_y_,
+                                  host_.active_count(), host_.active_scroll_pos());
+      if (dst != hovered_app) {
+        hovered_app = dst;
+        if (!host_.has_frame_cb()) host_.schedule_frame();
+      }
+      return;
+    }
     constexpr double kEdgeZone = 64.0;
     drag_auto_scroll_dir = 0;
     if (host_.layout().axis == OverviewAxis::Horizontal) {
@@ -245,6 +272,17 @@ void Input::update_hover_from_pointer() {
   bool changed = false;
   const auto& layout = host_.layout();
   const auto& workspaces = host_.workspaces();
+
+  // Context menu hover wins while open.
+  if (host_.ctx_menu_open()) {
+    int row = -1;
+    const bool over = host_.ctx_menu_hit(sx, sy, &row);
+    const int hov = over ? row : -1;
+    if (hov != ctx_menu_hover) { ctx_menu_hover = hov; changed = true; }
+    if (hovered_app != -1) { hovered_app = -1; changed = true; }
+    if (changed && host_.open() && !host_.has_frame_cb()) host_.schedule_frame();
+    return;
+  }
 
   {
     const double cx = layout.w * 0.5;
@@ -299,11 +337,37 @@ void Input::update_hover_from_pointer() {
 
 void Input::handle_pointer_button(uint32_t button, uint32_t state) {
   if (!host_.open() || !pointer_focus_ || !host_.surface()) return;
+  // Right-click: pin/unpin context menu over app cells (either grid).
+  if (button == 0x111) {
+    if (state != WL_POINTER_BUTTON_STATE_PRESSED) return;
+    if (host_.ctx_menu_open()) host_.close_ctx_menu();
+    if (host_.show_apps()) {
+      const int idx = pick_app_at(host_.active_grid(), ptr_x_, ptr_y_,
+                                  host_.active_count(), host_.active_scroll_pos());
+      std::string path;
+      if (idx >= 0) {
+        path = host_.folder_open() ? host_.modal_item_path(idx) : host_.grid_item_path(idx);
+      }
+      // Folders (empty path) get no menu.
+      if (!path.empty()) host_.open_ctx_menu(ptr_x_, ptr_y_, path);
+    }
+    return;
+  }
   if (button != 0x110) return;
   const auto& layout = host_.layout();
   const auto& workspaces = host_.workspaces();
 
   if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+    // An open context menu eats the press: inside activates, outside
+    // dismisses (and swallows, so nothing launches underneath).
+    if (host_.ctx_menu_open()) {
+      int row = -1;
+      if (host_.ctx_menu_hit(ptr_x_, ptr_y_, &row) && row >= 0)
+        host_.activate_ctx_menu_row(row);
+      else
+        host_.close_ctx_menu();
+      return;
+    }
     {
       const int qsIdx = pick_quick_select_at(layout.qs, layout, workspaces, ptr_x_, ptr_y_);
       if (qsIdx >= 0) {
@@ -340,6 +404,16 @@ void Input::handle_pointer_button(uint32_t button, uint32_t state) {
     }
 
     if (host_.show_apps()) {
+      // Clicking the folder title renames it (F2 works too).
+      if (host_.folder_open()) {
+        const OverviewCardRect mbox = modal_card_rect(host_.layout());
+        const double us = host_.layout().uiScale;
+        if (ptr_x_ >= mbox.x && ptr_x_ <= mbox.x + mbox.w && ptr_y_ >= mbox.y - 44.0 * us &&
+            ptr_y_ <= mbox.y) {
+          host_.start_rename();
+          return;
+        }
+      }
       press_app_idx = pick_app_at(host_.active_grid(), ptr_x_, ptr_y_,
                                   host_.active_count(),
                                   host_.active_scroll_pos());
@@ -399,13 +473,29 @@ void Input::handle_pointer_button(uint32_t button, uint32_t state) {
             }
           }
         } else {
-          // Main-grid drag: a drop onto another cell creates a folder
-          // (app onto app) or moves into a folder; anywhere else cancels
-          // (clicks launch, drags never do).
+          // Main-grid drag: a drop near the target cell's edges reorders
+          // (dock-style insertion); a drop in the cell center keeps the
+          // folder flow (app onto app = new folder, onto folder = move in).
+          // Anywhere else cancels (clicks launch, drags never do).
           const int dst = pick_app_at(host_.layout().appGrid, ptr_x_, ptr_y_,
                                       static_cast<int>(host_.grid_items().size()),
                                       host_.app_scroll_pos());
-          if (dst >= 0 && dst != press_app_idx) host_.drop_grid_item(press_app_idx, dst);
+          if (dst >= 0 && dst != press_app_idx) {
+            const OverviewCardRect cell =
+                app_cell_rect(host_.layout().appGrid, dst, host_.app_scroll_pos());
+            bool center = false;
+            if (cell.w > 0.0 && cell.h > 0.0) {
+              const double fx = (ptr_x_ - cell.x) / cell.w;
+              const double fy = (ptr_y_ - cell.y) / cell.h;
+              center = (fx > 0.2 && fx < 0.8 && fy > 0.2 && fy < 0.8);
+            }
+            if (center) {
+              host_.drop_grid_item(press_app_idx, dst);
+            } else {
+              const double fx = cell.w > 0.0 ? (ptr_x_ - cell.x) / cell.w : 0.5;
+              host_.reorder_grid_item(press_app_idx, dst, fx > 0.5);
+            }
+          }
         }
       } else if (press_win >= 0) {
         if (drop_target_add) {
@@ -482,7 +572,21 @@ void Input::handle_key(uint32_t key, uint32_t state) {
 
   const xkb_keysym_t sym = xkb_state_key_get_one_sym(xkbState_, key + 8);
 
+  // F2 renames the open folder (GNOME parity); Esc/Return commit flow below.
+  if (sym == XKB_KEY_F2 && host_.show_apps() && host_.folder_open()) {
+    host_.start_rename();
+    return;
+  }
+
   if (sym == XKB_KEY_Escape) {
+    if (host_.ctx_menu_open()) {
+      host_.close_ctx_menu();
+      return;
+    }
+    if (host_.renaming()) {
+      host_.cancel_rename();
+      return;
+    }
     if (host_.folder_open()) {
       host_.close_folder();
       hovered_app = -1;
@@ -507,6 +611,10 @@ void Input::handle_key(uint32_t key, uint32_t state) {
   }
 
   if (sym == XKB_KEY_BackSpace) {
+    if (host_.renaming()) {
+      host_.rename_backspace();
+      return;
+    }
     if (!host_.search_query().empty()) {
       host_.search_query().pop_back();
       if (host_.search_query().empty()) host_.set_show_apps(false);
@@ -518,6 +626,10 @@ void Input::handle_key(uint32_t key, uint32_t state) {
   }
 
   if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+    if (host_.renaming()) {
+      host_.commit_rename();
+      return;
+    }
     if (host_.show_apps() && host_.active_count() > 0) {
       const int n = host_.active_count();
       const int idx = (hovered_app >= 0 && hovered_app < n) ? hovered_app : 0;
@@ -611,6 +723,10 @@ void Input::handle_key(uint32_t key, uint32_t state) {
   std::array<char, 8> buf{};
   int len = xkb_state_key_get_utf8(xkbState_, key + 8, buf.data(), buf.size());
   if (len > 0 && buf[0] >= 32 && static_cast<unsigned char>(buf[0]) != 0x7f) {
+    if (host_.renaming()) {
+      host_.rename_type_text(buf.data());
+      return;
+    }
     host_.search_query() += buf.data();
     if (!host_.show_apps()) {
       host_.set_show_apps(true);
