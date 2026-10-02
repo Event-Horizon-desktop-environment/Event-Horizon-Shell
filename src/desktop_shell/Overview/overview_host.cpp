@@ -1346,7 +1346,8 @@ void Host::paint_content() {
                           input_->drag_active ? input_->ptr_y() - input_->drag_grab_dy : 0.0,
                           input_->drop_target_ws,
                           progress_,
-                          consume_cards_invalidated());
+                          consume_cards_invalidated(),
+                          capture_ ? capture_->desktop_wallpaper_capture_.get() : nullptr);
     }
 
     {
@@ -1471,7 +1472,8 @@ void Host::paint_extra_content(OverviewOutput& e, bool use_vk) {
                           -1, -1, false,
                           tmpWsLifts, tmpWinLifts,
                           -1, -1, 0.0, 0.0, -1, progress_,
-                          false);
+                          false,
+                          capture_ ? capture_->desktop_wallpaper_capture_.get() : nullptr);
     paint_quick_select_strip(cr, ctx_, colors_, layout_.qs, layout_, workspaces_,
                              selected_index_, -1, -1, 0.0f);
 
@@ -1550,7 +1552,8 @@ void Host::prewarm_caches() {
                         scroll_pos_, selected_index_,
                         -1, -1, false,
                         ws_hover_lifts_, win_hover_lifts_,
-                        -1, -1, 0.0, 0.0, -1, 0.0f);
+                        -1, -1, 0.0, 0.0, -1, 0.0f, false,
+                        capture_ ? capture_->desktop_wallpaper_capture_.get() : nullptr);
 
   paint_quick_select_strip(cr, ctx_, colors_, layout_.qs, layout_, workspaces_,
                            selected_index_, -1, -1, 0.0f);

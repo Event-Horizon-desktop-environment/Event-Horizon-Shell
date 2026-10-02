@@ -47,7 +47,8 @@ void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& col
                            double ghostX, double ghostY,
                            int dropTargetWs,
                            float progress,
-                           bool invalidateCards = false);
+                           bool invalidateCards = false,
+                           const WorkspaceCapture* wallpaper = nullptr);
 
 int pick_workspace_at(const OverviewLayout& layout, double mx, double my,
                       const std::vector<OverviewWorkspace>& workspaces, double scrollPos);

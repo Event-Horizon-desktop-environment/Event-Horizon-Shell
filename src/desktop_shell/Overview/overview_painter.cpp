@@ -788,7 +788,8 @@ void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& col
                            double ghostX, double ghostY,
                             int dropTargetWs,
                             float progress,
-                            bool invalidateCards) {
+                            bool invalidateCards,
+                            const WorkspaceCapture* wallpaper) {
 
   g_paint.cardHits = 0; g_paint.cardMisses = 0;
   g_paint.winHits = 0; g_paint.winMisses = 0;
@@ -888,7 +889,14 @@ void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& col
 
     const bool wsEmpty = ws.windows.empty();
     const bool hasCap = ws.capture && ws.capture->width > 0 && ws.capture->height > 0;
-    const bool useCapture = hasCap;
+    // Occupied workspaces show the desktop wallpaper behind their window
+    // tiles (a full desktop copy would double-paint the windows). Only empty
+    // workspaces show the full desktop copy. Overflow keeps its capture so
+    // the frosted relative mapping stays intact.
+    const bool useWallpaper = !wsEmpty && !ws.overflow && wallpaper &&
+                              wallpaper->width > 0 && wallpaper->height > 0;
+    const WorkspaceCapture* bgCap = useWallpaper ? wallpaper : (hasCap ? ws.capture.get() : nullptr);
+    const bool useCapture = (bgCap != nullptr);
     const bool drawTiles = !wsEmpty;
 
     const int cw = std::max(1, static_cast<int>(std::round(baseCard.w)));
@@ -898,7 +906,7 @@ void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& col
         (static_cast<std::uint64_t>(std::lround(colors.glassBgG * 255.0)) << 8) |
         static_cast<std::uint64_t>(std::lround(colors.glassBgB * 255.0));
     const std::uint64_t contentHash = compute_ws_content_hash(ws);
-    const CardCacheKey key{useCapture ? ws.capture.get() : nullptr, ws.id, cw, ch, colorKey,
+    const CardCacheKey key{bgCap, ws.id, cw, ch, colorKey,
                            contentHash};
     auto it = g_paint.cardCache.find(key);
     if (it == g_paint.cardCache.end()) {
@@ -923,7 +931,7 @@ void paint_workspace_cards(cairo_t* cr, ShellCtx& ctx, const OverviewColors& col
           cairo_t* rc = cairo_create(img.surf);
           cairo_translate(rc, -baseCard.x, -baseCard.y);
 
-          paint_card_content(rc, colors, baseCard, useCapture ? ws.capture.get() : nullptr, us, 1.0f,
+          paint_card_content(rc, colors, baseCard, bgCap, us, 1.0f,
                              ws.overflow);
 
           if (drawTiles) {
@@ -1868,14 +1876,12 @@ void paint_quick_select_strip(cairo_t* cr, ShellCtx&, const OverviewColors& colo
 
       double tx = 0, ty = 0;
       if (qs.horizontal) {
-        const double totalW = static_cast<double>(nWs) * qs.thumbW +
-                              static_cast<double>(std::max(0, nWs - 1)) * qs.thumbGap;
+        const double totalW = strip_row_total_w(qs, nWs);
         tx = qs.stripX + (qs.stripW - totalW) * 0.5 +
              static_cast<double>(i) * (qs.thumbW + qs.thumbGap);
         ty = qs.stripY + qs.padY;
       } else {
-        const double totalH = static_cast<double>(nWs) * qs.thumbH +
-                              static_cast<double>(std::max(0, nWs - 1)) * qs.thumbGap;
+        const double totalH = strip_row_total_h(qs, nWs);
         tx = qs.stripX + qs.padX;
         ty = qs.stripY + (qs.stripH - totalH) * 0.5 +
              static_cast<double>(i) * (qs.thumbH + qs.thumbGap);
