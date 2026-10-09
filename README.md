@@ -1,9 +1,8 @@
-# Event Horizon
+<img width="1500" height="360" alt="eh-logo-lockup" src="https://github.com/user-attachments/assets/9e7db47e-fa9b-4701-91e3-556904f3ad5a" />
+
+## Event Horizon
 
 Event Horizon — Wayland-native desktop shell in C++23. Dock, taskbar, desktop, widgets, and settings as layer-shell clients for your compositor.
-
-
-[![This shells Theme song](https://img.youtube.com/vi/ghQDM-hdtxc/hqdefault.jpg)](https://www.youtube.com/watch?v=ghQDM-hdtxc)
 
 Event Horizon is a complete desktop shell that runs alongside Hyprland, Niri, Mango, Sway, Labwc.
 
