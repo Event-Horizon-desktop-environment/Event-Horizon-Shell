@@ -1,4 +1,5 @@
-<img width="1500" height="360" alt="eh-logo-lockup" src="https://github.com/user-attachments/assets/9e7db47e-fa9b-4701-91e3-556904f3ad5a" />
+<img width="3200" height="960" alt="eh-banner" src="https://github.com/user-attachments/assets/709ddf5b-cf76-4e9b-8a48-1a4c43434a42" />
+
 
 ## Event Horizon
 
