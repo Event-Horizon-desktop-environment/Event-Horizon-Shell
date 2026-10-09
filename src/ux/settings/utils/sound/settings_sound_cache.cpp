@@ -5,6 +5,7 @@
 #include "ux/settings/utils/sound/settings_sound_cache.hpp"
 #include "ux/settings/settings_app_types.hpp"
 #include "ux/settings/settings_tab_sound/settings_tab_sound.hpp"
+#include "ux/settings/settings_tab_sound/sound_log.hpp"
 #include "desktop_shell/common/time/mono_time.hpp"
 #include "services/audio/pipewire_service.hpp"
 
@@ -52,10 +53,13 @@ void settings_sound_engine_paint_cache_read(const App& app, eh::audio::EngineSet
     }
   }
   auto& pw = eh::audio::PipeWireService::instance();
+  const std::uint64_t q0 = eh::shell::now_mono_ms();
   g_settings_sound_engine_paint_cache.es = pw.query_engine_settings();
   g_settings_sound_engine_paint_cache.cf = pw.query_compat_default_sink_format();
   g_settings_sound_engine_paint_cache.mono_ms = now;
   g_settings_sound_engine_paint_cache.valid = true;
+  eh::settings::sound_log::SoundLog::instance().writef(
+      "entry-query engine+compat took %llums", (long long)(eh::shell::now_mono_ms() - q0));
   *es_out = g_settings_sound_engine_paint_cache.es;
   *cf_out = g_settings_sound_engine_paint_cache.cf;
 }
@@ -80,7 +84,11 @@ const std::vector<eh::audio::AudioCardProfiles>& settings_sound_cards_cached(App
   if (!stale) return g_settings_sound_cards_cache;
 
   eh::audio::PipeWireService::instance().start();
+  const std::uint64_t q0 = eh::shell::now_mono_ms();
   g_settings_sound_cards_cache = eh::audio::PipeWireService::instance().query_audio_cards(true);
+  eh::settings::sound_log::SoundLog::instance().writef(
+      "entry-query bt-cards took %llums (n=%d)", (long long)(eh::shell::now_mono_ms() - q0),
+      (int)g_settings_sound_cards_cache.size());
   g_settings_sound_cards_cache_mono_ms = now;
   g_settings_sound_cards_cache_valid = true;
   return g_settings_sound_cards_cache;
@@ -106,7 +114,11 @@ const std::vector<eh::audio::AudioCardProfiles>& settings_sound_nonbt_cards_cach
   if (!stale) return g_settings_sound_nonbt_cards_cache;
 
   eh::audio::PipeWireService::instance().start();
+  const std::uint64_t q0 = eh::shell::now_mono_ms();
   g_settings_sound_nonbt_cards_cache = eh::audio::PipeWireService::instance().query_audio_cards(false);
+  eh::settings::sound_log::SoundLog::instance().writef(
+      "entry-query cards took %llums (n=%d)", (long long)(eh::shell::now_mono_ms() - q0),
+      (int)g_settings_sound_nonbt_cards_cache.size());
   g_settings_sound_nonbt_cards_cache_mono_ms = now;
   g_settings_sound_nonbt_cards_cache_valid = true;
   return g_settings_sound_nonbt_cards_cache;

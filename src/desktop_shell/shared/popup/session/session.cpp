@@ -946,13 +946,18 @@ void popup_open_weather(DockApp& app, int anchorX, const std::string& instanceId
 }
 
 void popup_open_volume_mixer(DockApp& app, int anchorX, uint32_t serial) {
-   
+  
   popup_close(app);
   if (app.display) (void)wl_display_roundtrip(app.display);
   const double us = dock_ui_scale(app.settings);
+  (void)us;
   app.popupKind = DockApp::PopupKind::VolumeMixer;
   app.popupW = eh::shell::dock::popup::volume_mixer::kVolumeMixerPopupW;
-  app.popupH = static_cast<int>(440.0 * us);
+  // Warm the icon theme index now: first paint with streams otherwise eats a
+  // ~20ms synchronous index build (see horizon-volumemixer.log icons= spike).
+  app.icons.prewarm_search_dirs();
+  eh::shell::dock::popup::volume_mixer::volume_mixer_notify_popup_open();
+  app.popupH = eh::shell::dock::popup::volume_mixer::volume_mixer_popup_content_height();
   app.popupAnchorX = anchorX;
   app.popupItems.clear();
   app.popupOpen = true;

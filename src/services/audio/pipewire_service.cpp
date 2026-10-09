@@ -1620,10 +1620,19 @@ void PipeWireService::apply_compat_default_sink_pcm_format(int choice_0_3) {
 }
 
 void PipeWireService::apply_saved_defaults(const SavedDefaults& defaults) {
-    
+  
 
   std::uint32_t found_sink = 0;
   std::uint32_t found_source = 0;
+  // Volume/mute applications are deferred past the lock below: set_node_*()
+  // takes the PipeWire loop lock, and the loop thread takes mtx_ in event
+  // callbacks, so holding mtx_ across those calls is an AB-BA deadlock that
+  // froze the caller on first Sound-tab paint. Decide under the lock, act
+  // outside it.
+  int sink_vol_pct = -1;
+  int sink_mute = -1;
+  int src_vol_pct = -1;
+  int src_mute = -1;
 
   {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
@@ -1634,10 +1643,10 @@ void PipeWireService::apply_saved_defaults(const SavedDefaults& defaults) {
           found_sink = id;
           default_sink_ = id;
           if (defaults.default_sink_volume_pct != n.volume_pct) {
-            set_node_volume(id, static_cast<double>(defaults.default_sink_volume_pct) / 100.0);
+            sink_vol_pct = defaults.default_sink_volume_pct;
           }
           if (defaults.default_sink_muted != n.muted) {
-            set_node_mute(id, defaults.default_sink_muted);
+            sink_mute = defaults.default_sink_muted ? 1 : 0;
           }
           break;
         }
@@ -1650,10 +1659,10 @@ void PipeWireService::apply_saved_defaults(const SavedDefaults& defaults) {
           found_source = id;
           default_source_ = id;
           if (defaults.default_source_volume_pct != n.volume_pct) {
-            set_node_volume(id, static_cast<double>(defaults.default_source_volume_pct) / 100.0);
+            src_vol_pct = defaults.default_source_volume_pct;
           }
           if (defaults.default_source_muted != n.muted) {
-            set_node_mute(id, defaults.default_source_muted);
+            src_mute = defaults.default_source_muted ? 1 : 0;
           }
           break;
         }
@@ -1662,6 +1671,13 @@ void PipeWireService::apply_saved_defaults(const SavedDefaults& defaults) {
 
     rebuild_snapshot_locked();
   }
+
+  if (sink_vol_pct >= 0 && found_sink != 0)
+    set_node_volume(found_sink, static_cast<double>(sink_vol_pct) / 100.0);
+  if (sink_mute >= 0 && found_sink != 0) set_node_mute(found_sink, sink_mute != 0);
+  if (src_vol_pct >= 0 && found_source != 0)
+    set_node_volume(found_source, static_cast<double>(src_vol_pct) / 100.0);
+  if (src_mute >= 0 && found_source != 0) set_node_mute(found_source, src_mute != 0);
 
   if (found_sink) set_default_sink(found_sink);
   if (found_source) set_default_source(found_source);

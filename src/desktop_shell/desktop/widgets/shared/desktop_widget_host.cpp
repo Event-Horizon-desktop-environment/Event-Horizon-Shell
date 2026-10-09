@@ -8,6 +8,7 @@
 #include "desktop_shell/desktop/widgets/media_player/desktop_widget_media_player.hpp"
 #include "desktop_shell/desktop/widgets/media_compact/desktop_widget_media_compact.hpp"
 #include "desktop_shell/desktop/widgets/world_clock/desktop_widget_world_clock.hpp"
+#include "desktop_shell/desktop/widgets/fetch/desktop_widget_fetch.hpp"
 #include "configuration/shell_config.hpp"
 #include "services/mpris/mpris_player.hpp"
 #include "ux/settings/data/settings_desktop_widgets_data.hpp"
@@ -44,6 +45,8 @@ static std::unique_ptr<DesktopWidget> make_widget(const DesktopWidgetConfig& cfg
       return std::make_unique<DesktopMediaCompactWidget>(mpris);
     case DesktopWidgetType::WorldClock:
       return std::make_unique<DesktopWorldClockWidget>(cfg.id);
+    case DesktopWidgetType::Fetch:
+      return std::make_unique<DesktopFetchWidget>(cfg.id);
   }
   return nullptr;
 }

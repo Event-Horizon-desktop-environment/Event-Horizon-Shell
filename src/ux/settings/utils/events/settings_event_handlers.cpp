@@ -1267,58 +1267,13 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
       const double pyL = app.pointerY + settings_scroll_px(app);
       eh::audio::PipeWireService::instance().start();
       const eh::audio::Snapshot snap = eh::audio::PipeWireService::instance().snapshot();
-      const int n_play = static_cast<int>(snap.output_streams.size());
-      const int n_rec = static_cast<int>(snap.input_streams.size());
-      const int n_cards_dd = sound_tab_card_count_clamped(app);
-      const SoundTabGeom sg =
-          sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab, n_play, n_rec, n_cards_dd);
-      int dcx = 0;
-      int dcy = 0;
-      int dcw = 0;
-      int dch = 0;
-      if (sound_dd_combo_geom(sg, app.soundActiveDd, n_play, n_rec, &dcx, &dcy, &dcw, &dch)) {
-        int nrows = 0;
-        std::vector<std::string> sound_card_dd_labels;
-        if (app.soundActiveDd == 0)
-          nrows = static_cast<int>(snap.sinks.size());
-        else if (app.soundActiveDd == 1)
-          nrows = static_cast<int>(snap.sources.size());
-        else if (app.soundActiveDd == 2)
-          nrows = kSoundEngineRateCount;
-        else if (app.soundActiveDd == 3)
-          nrows = 1 + kSoundEngineRateCount;
-        else if (app.soundActiveDd == 4)
-          nrows = 4;
-        else if (app.soundActiveDd == 5)
-          nrows = kSoundCompatPcmChoiceCount;
-        else if (app.soundActiveDd == 6 || app.soundActiveDd == 7)
-          nrows = 1 + kSoundEngineQuantumCount;
-        else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
-          const int bi = app.soundActiveDd - kSoundCardDdBase;
-          const auto& cards = sound_tab_cards_cached(app);
-          if (bi >= 0 && bi < static_cast<int>(cards.size())) {
-            nrows = static_cast<int>(cards[static_cast<size_t>(bi)].profiles.size());
-            sound_card_dd_labels = sound_card_profile_row_labels(cards[static_cast<size_t>(bi)]);
-          }
-        } else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000)
-          nrows = static_cast<int>(snap.sinks.size());
-        else if (app.soundActiveDd >= 1000)
-          nrows = static_cast<int>(snap.sources.size());
-        int popup_list_x = dcx;
-        int popup_list_w = dcw;
-        if (!sound_card_dd_labels.empty()) {
-          const SoundBtPopupGeom pg = sound_bt_dropdown_popup_geom(app, tcx, tcw, dcx, dcw, sound_card_dd_labels);
-          popup_list_x = pg.x;
-          popup_list_w = pg.w;
-        }
-        const int dly = sound_dd_popup_list_doc_top_y(dcy, dch, nrows, settings_scroll_px_int(app), app.height);
-        if (nrows > 0) {
-          const int nr =
-              settings_mode_dd_pointer_row(app.pointerX, pyL, popup_list_x, dly, popup_list_w, kSettingsDdRowH, nrows);
-          if (nr != app.soundDdHoverRow) {
-            app.soundDdHoverRow = nr;
-            needDdDraw = true;
-          }
+      // Single model: hover reads the same rows/box paint and click use.
+      const SoundDropdown dd = build_sound_dropdown(app, snap);
+      if (dd.open && !dd.rows.empty()) {
+        const int nr = sound_dropdown_row_at(dd, app.pointerX, pyL);
+        if (nr != app.soundDdHoverRow) {
+          app.soundDdHoverRow = nr;
+          needDdDraw = true;
         }
       }
     } else if (app.soundDdHoverRow != -1) {

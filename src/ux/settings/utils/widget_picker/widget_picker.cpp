@@ -128,6 +128,8 @@ static const char* widget_display_desc(const std::string& id) {
     return "CPU, memory, disk, and network usage graphs";
   if (id == "media_compact")
     return "Compact MPRIS pill (album art, title/artist, prev/play/next)";
+  if (id == "fetch")
+    return "Fastfetch system info card (OS, hardware, memory, disks)";
   return "";
 }
 
@@ -279,7 +281,7 @@ static int picker_desc_line_count_cached(const std::string& wid, int wrapW) {
 }
 
 static const char* const kDesktopOnlyPickIds[] = {
-    "weather_fancy", "calendar", "system_monitor", "media_compact",
+    "weather_fancy", "calendar", "system_monitor", "media_compact", "fetch",
 };
 static constexpr int kDesktopOnlyPickCount =
     static_cast<int>(sizeof(kDesktopOnlyPickIds) / sizeof(kDesktopOnlyPickIds[0]));
@@ -287,7 +289,7 @@ static constexpr int kDesktopOnlyPickCount =
 static bool is_desktop_widget_id(const std::string& id) {
   return id == "clock" || id == "weather" || id == "weather_fancy" ||
          id == "calendar" || id == "system_monitor" || id == "media" ||
-         id == "media_compact" || id == "world_clock";
+         id == "media_compact" || id == "world_clock" || id == "fetch";
 }
 
 static bool widget_matches_filter(const std::string& id, const std::string& needle) {

@@ -25,12 +25,14 @@
 #include "desktop_shell/common/icon_cache/icon_cache.hpp"
 #include "desktop_shell/desktop/entries/desktop_entries.hpp"
 #include "services/audio/pipewire_service.hpp"
+#include "desktop_shell/common/audio/audio_display_names.hpp"
 
 // extern declarations for functions remaining in settings_app.cpp
 extern void draw(App& app);
 extern void settings_close_non_default_app_dropdowns(App& app);
 
 #include "ux/settings/utils/sound/settings_sound_cache.hpp"
+#include "ux/settings/settings_tab_sound/sound_log.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 #include "ux/settings/utils/scroll/settings_scroll.hpp"
 
@@ -567,10 +569,10 @@ static int sound_hit_child_tab(float px, float py, int contentX, int contentW) {
 }
 
 int sound_dd_popup_list_doc_top_y(int combo_doc_y, int combo_h, int nrows, int scroll_px, int window_h) {
-   
+  
   if (nrows <= 0) return combo_doc_y + combo_h + 2;
   const int default_top = combo_doc_y + combo_h + 2;
-  const int popup_h = nrows * kSettingsDdRowH;
+  const int popup_h = kSoundDdTitleH + nrows * kSettingsDdRowH + kSoundDdBottomPad;
   const int viewport_bottom_doc = window_h - kSpacingL + scroll_px;
   if (default_top + popup_h <= viewport_bottom_doc) return default_top;
   const int above_top = combo_doc_y - popup_h - 2;
@@ -936,11 +938,12 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
         std::string disp = bc.active_profile_key;
         for (const auto& p : bc.profiles) {
           if (p.key == bc.active_profile_key) {
-            disp = p.description.empty() ? p.key : p.description;
+            disp = eh::shell::audio::shorten_profile_label(p.key, p.description.empty() ? p.key : p.description);
             break;
           }
         }
-        paint_snd_combo_row(sec, i, bc.card_name.c_str(), disp.c_str(),
+        const std::string card_short = eh::shell::audio::shorten_device_name(bc.card_name);
+        paint_snd_combo_row(sec, i, card_short.c_str(), disp.c_str(),
                             app.soundActiveDd == (kSoundCardDdBase + i));
       }
     };
@@ -956,7 +959,7 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
         if (d.node_id == snap.default_sink) def_sink = &d;
       }
       const std::string sink_disp =
-          def_sink ? (def_sink->display_name.empty() ? def_sink->name : def_sink->display_name) : std::string("(none)");
+          def_sink ? eh::shell::audio::shorten_device_name(def_sink->display_name.empty() ? def_sink->name : def_sink->display_name) : std::string("(none)");
 
       {
         const double iconPx = 16.0;
@@ -1030,7 +1033,7 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
         if (d.node_id == snap.default_source) def_src = &d;
       }
       const std::string src_disp =
-          def_src ? (def_src->display_name.empty() ? def_src->name : def_src->display_name) : std::string("(none)");
+          def_src ? eh::shell::audio::shorten_device_name(def_src->display_name.empty() ? def_src->name : def_src->display_name) : std::string("(none)");
 
       {
         const double iconPx = 16.0;
@@ -1379,7 +1382,7 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
           std::string route_disp = route;
           for (const auto& d : snap.sinks) {
             if (d.name == route) {
-              route_disp = d.display_name.empty() ? d.name : d.display_name;
+              route_disp = eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name);
               break;
             }
           }
@@ -1510,7 +1513,7 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
           std::string route_disp = route;
           for (const auto& d : snap.sources) {
             if (d.name == route) {
-              route_disp = d.display_name.empty() ? d.name : d.display_name;
+              route_disp = eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name);
               break;
             }
           }
@@ -1584,162 +1587,252 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
 }
 
 // settings_paint_sound_dropdown_unclipped (from settings_app.cpp)
-static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /*contentX*/, int /*contentW*/,
-                                                    double glassOv, const eh::audio::Snapshot& snap) {
-   
-  if (app.soundActiveDd < 0) return;
-  int tcx = 0;
-  int tcw = 0;
+
+// Section title for sound dropdown lists (mixer-style panel header).
+// Range order mirrors the row builders below (cards before the 100s),
+// so the title always matches the listed rows.
+static const char* sound_dd_title_for(int sound_active_dd) {
+  if (sound_active_dd == 0) return "OUTPUT DEVICE";
+  if (sound_active_dd == 1) return "INPUT DEVICE";
+  if (sound_active_dd == 2) return "SAMPLE RATE";
+  if (sound_active_dd == 3) return "FORCE SAMPLE RATE";
+  if (sound_active_dd == 4) return "ALLOWED RATES";
+  if (sound_active_dd == 5) return "PCM FORMAT";
+  if (sound_active_dd == 6) return "BUFFER SIZE";
+  if (sound_active_dd == 7) return "FORCE BUFFER SIZE";
+  if (sound_active_dd >= kSoundCardDdBase) return "PROFILE";
+  if (sound_active_dd >= 100 && sound_active_dd < 1000) return "PLAY ON";
+  if (sound_active_dd >= 1000) return "RECORD FROM";
+  return nullptr;
+}
+
+SoundDropdown build_sound_dropdown(App& app, const eh::audio::Snapshot& snap) {
+  SoundDropdown dd;
+  const int id = app.soundActiveDd;
+  if (id < 0) return dd;
+  int tcx = 0, tcw = 0;
   settings_content_column_geom(app, &tcx, &tcw);
   const int n_play = static_cast<int>(snap.output_streams.size());
   const int n_rec = static_cast<int>(snap.input_streams.size());
   const int n_cards = sound_tab_card_count_clamped(app);
   const SoundTabGeom sg =
       sound_compute_child_geom(tcx, tcw, kSoundChildContentTop, app.soundChildTab, n_play, n_rec, n_cards);
+  int dcx = 0, dcy = 0, dcw = 0, dch = 0;
+  if (!sound_dd_combo_geom(sg, id, n_play, n_rec, &dcx, &dcy, &dcw, &dch)) return dd;
+  dd.comboX = dcx;
+  dd.comboY = dcy;
+  dd.comboW = dcw;
+  dd.comboH = dch;
 
-  int dcx = 0;
-  int dcy = 0;
-  int dcw = 0;
-  int dch = 0;
-  if (!sound_dd_combo_geom(sg, app.soundActiveDd, n_play, n_rec, &dcx, &dcy, &dcw, &dch)) return;
-
-  auto& pw = eh::audio::PipeWireService::instance();
-  const eh::audio::EngineSettings es_dd = pw.query_engine_settings();
-
-  static std::vector<std::string> soundDdStore;
-  static std::vector<const char*> soundDdPtrs;
-  soundDdStore.clear();
-  soundDdPtrs.clear();
-  int nrows = 0;
-  int sel_ix = 0;
-
-  if (app.soundActiveDd == 0) {
-    nrows = static_cast<int>(snap.sinks.size());
+  dd.selected = 0;
+  std::string link_blob;
+  if (id == 0) {
     for (const auto& d : snap.sinks)
-      soundDdStore.push_back(d.display_name.empty() ? d.name : d.display_name);
-    for (int j = 0; j < nrows; ++j) {
-      if (snap.sinks[static_cast<size_t>(j)].node_id == snap.default_sink) sel_ix = j;
+      dd.rows.push_back(eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name));
+    for (size_t j = 0; j < snap.sinks.size(); ++j) {
+      if (snap.sinks[j].node_id == snap.default_sink) dd.selected = static_cast<int>(j);
     }
-  } else if (app.soundActiveDd == 1) {
-    nrows = static_cast<int>(snap.sources.size());
+  } else if (id == 1) {
     for (const auto& d : snap.sources)
-      soundDdStore.push_back(d.display_name.empty() ? d.name : d.display_name);
-    for (int j = 0; j < nrows; ++j) {
-      if (snap.sources[static_cast<size_t>(j)].node_id == snap.default_source) sel_ix = j;
+      dd.rows.push_back(eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name));
+    for (size_t j = 0; j < snap.sources.size(); ++j) {
+      if (snap.sources[j].node_id == snap.default_source) dd.selected = static_cast<int>(j);
     }
-  } else if (app.soundActiveDd == 2) {
-    nrows = kSoundEngineRateCount;
-    for (int j = 0; j < nrows; ++j) soundDdStore.push_back(sound_engine_hz_display(kSoundEngineRates[j]));
-    sel_ix = -1;
-    for (int j = 0; j < nrows; ++j) {
-      if (kSoundEngineRates[j] == es_dd.clock_rate_hz) sel_ix = j;
-    }
-  } else if (app.soundActiveDd == 3) {
-    nrows = 1 + kSoundEngineRateCount;
-    soundDdStore.emplace_back("Auto");
-    for (int j = 0; j < kSoundEngineRateCount; ++j) soundDdStore.push_back(sound_engine_hz_display(kSoundEngineRates[j]));
-    if (es_dd.clock_force_rate_hz == 0)
-      sel_ix = 0;
-    else {
-      sel_ix = -1;
+  } else if (id >= 2 && id <= 7) {
+    eh::audio::EngineSettings es{};
+    eh::audio::CompatDefaultSinkFormat cf{};
+    settings_sound_engine_paint_cache_read(app, &es, &cf);
+    if (id == 2) {
+      for (int j = 0; j < kSoundEngineRateCount; ++j)
+        dd.rows.push_back(sound_engine_hz_display(kSoundEngineRates[j]));
+      dd.selected = -1;
       for (int j = 0; j < kSoundEngineRateCount; ++j) {
-        if (kSoundEngineRates[j] == es_dd.clock_force_rate_hz) sel_ix = 1 + j;
+        if (kSoundEngineRates[j] == es.clock_rate_hz) dd.selected = j;
+      }
+    } else if (id == 3) {
+      dd.rows.emplace_back("Auto");
+      for (int j = 0; j < kSoundEngineRateCount; ++j)
+        dd.rows.push_back(sound_engine_hz_display(kSoundEngineRates[j]));
+      if (es.clock_force_rate_hz == 0)
+        dd.selected = 0;
+      else {
+        dd.selected = -1;
+        for (int j = 0; j < kSoundEngineRateCount; ++j) {
+          if (kSoundEngineRates[j] == es.clock_force_rate_hz) dd.selected = 1 + j;
+        }
+      }
+    } else if (id == 4) {
+      dd.rows.emplace_back("Hi-Fi (44.1-192 kHz)");
+      dd.rows.emplace_back("Consumer (44.1 / 48 kHz)");
+      dd.rows.emplace_back("Pro (48 / 96 / 192 kHz)");
+      dd.rows.emplace_back("Single (default rate only)");
+      dd.selected = sound_engine_allowed_preset_sel(es);
+    } else if (id == 5) {
+      for (int j = 0; j < kSoundCompatPcmChoiceCount; ++j) dd.rows.emplace_back(kSoundCompatPcmLabels[j]);
+      dd.selected = sound_compat_pcm_dropdown_sel_ix(cf);
+    } else {  // 6 and 7 share the quantum list; 6 = clock, 7 = force.
+      dd.rows.emplace_back("Auto");
+      for (int j = 0; j < kSoundEngineQuantumCount; ++j)
+        dd.rows.push_back(std::to_string(kSoundEngineQuantums[j]));
+      const int cur = (id == 6) ? es.clock_quantum : es.clock_force_quantum;
+      dd.selected = 0;
+      if (cur != 0) {
+        dd.selected = -1;
+        for (int j = 0; j < kSoundEngineQuantumCount; ++j) {
+          if (kSoundEngineQuantums[j] == cur) dd.selected = 1 + j;
+        }
       }
     }
-  } else if (app.soundActiveDd == 4) {
-    nrows = 4;
-    soundDdStore.emplace_back("Hi-Fi (44.1-192 kHz)");
-    soundDdStore.emplace_back("Consumer (44.1 / 48 kHz)");
-    soundDdStore.emplace_back("Pro (48 / 96 / 192 kHz)");
-    soundDdStore.emplace_back("Single (default rate only)");
-    sel_ix = sound_engine_allowed_preset_sel(es_dd);
-  } else if (app.soundActiveDd == 5) {
-    nrows = kSoundCompatPcmChoiceCount;
-    const eh::audio::CompatDefaultSinkFormat cf_dd = pw.query_compat_default_sink_format();
-    for (int j = 0; j < nrows; ++j) soundDdStore.emplace_back(kSoundCompatPcmLabels[j]);
-    sel_ix = sound_compat_pcm_dropdown_sel_ix(cf_dd);
-  } else if (app.soundActiveDd == 6) {
-    nrows = 1 + kSoundEngineQuantumCount;
-    soundDdStore.emplace_back("Auto");
-    for (int j = 0; j < kSoundEngineQuantumCount; ++j)
-      soundDdStore.push_back(std::to_string(kSoundEngineQuantums[j]));
-    sel_ix = 0;
-    if (es_dd.clock_quantum != 0) {
-      sel_ix = -1;
-      for (int j = 0; j < kSoundEngineQuantumCount; ++j) {
-        if (kSoundEngineQuantums[j] == es_dd.clock_quantum) sel_ix = 1 + j;
-      }
-    }
-  } else if (app.soundActiveDd == 7) {
-    nrows = 1 + kSoundEngineQuantumCount;
-    soundDdStore.emplace_back("Auto");
-    for (int j = 0; j < kSoundEngineQuantumCount; ++j)
-      soundDdStore.push_back(std::to_string(kSoundEngineQuantums[j]));
-    sel_ix = 0;
-    if (es_dd.clock_force_quantum != 0) {
-      sel_ix = -1;
-      for (int j = 0; j < kSoundEngineQuantumCount; ++j) {
-        if (kSoundEngineQuantums[j] == es_dd.clock_force_quantum) sel_ix = 1 + j;
-      }
-    }
-  } else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
-    const int bi = app.soundActiveDd - kSoundCardDdBase;
+  } else if (id >= kSoundCardDdBase && id < kSoundCardDdBase + kSoundMaxCards) {
+    const int bi = id - kSoundCardDdBase;
     const auto& cards = sound_tab_cards_cached(app);
-    if (bi < 0 || bi >= static_cast<int>(cards.size())) return;
+    if (bi < 0 || bi >= static_cast<int>(cards.size())) return dd;
     const auto& bc = cards[static_cast<size_t>(bi)];
-    nrows = static_cast<int>(bc.profiles.size());
     for (const auto& p : bc.profiles) {
-      soundDdStore.push_back(p.description.empty() ? p.key : (p.description + " (" + p.key + ")"));
+      dd.rows.push_back(eh::shell::audio::shorten_profile_label(p.key, p.description.empty() ? p.key : p.description) +
+                       (p.description.empty() ? std::string{} : " (" + p.key + ")"));
     }
-    sel_ix = -1;
-    for (int j = 0; j < nrows; ++j) {
-      if (bc.profiles[static_cast<size_t>(j)].key == bc.active_profile_key) sel_ix = j;
+    dd.selected = -1;
+    for (size_t j = 0; j < bc.profiles.size(); ++j) {
+      if (bc.profiles[j].key == bc.active_profile_key) dd.selected = static_cast<int>(j);
     }
-  } else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000) {
-    const int si = app.soundActiveDd - 100;
-    if (si < 0 || si >= n_play) return;
-    const auto& st = snap.output_streams[static_cast<size_t>(si)];
-    nrows = static_cast<int>(snap.sinks.size());
-    const std::string route = pw.playback_route_sink_name(st.node_id);
+  } else if (id >= 100 && id < 1000) {
+    const int si = id - 100;
+    if (si < 0 || si >= n_play) return dd;
+    (void)eh::audio::pw_link_list_capture_stdout(&link_blob);
+    const std::string route = eh::audio::pw_link_list_playback_sink_for_stream(
+        link_blob, snap.output_streams[static_cast<size_t>(si)].node_name);
     for (const auto& d : snap.sinks)
-      soundDdStore.push_back(d.display_name.empty() ? d.name : d.display_name);
-    for (int j = 0; j < nrows; ++j) {
-      if (snap.sinks[static_cast<size_t>(j)].name == route) sel_ix = j;
+      dd.rows.push_back(eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name));
+    for (size_t j = 0; j < snap.sinks.size(); ++j) {
+      if (snap.sinks[j].name == route) dd.selected = static_cast<int>(j);
     }
-  } else if (app.soundActiveDd >= 1000) {
-    const int si = app.soundActiveDd - 1000;
-    if (si < 0 || si >= n_rec) return;
-    const auto& st = snap.input_streams[static_cast<size_t>(si)];
-    nrows = static_cast<int>(snap.sources.size());
-    const std::string route = pw.capture_route_source_name(st.node_id);
+  } else if (id >= 1000) {
+    const int si = id - 1000;
+    if (si < 0 || si >= n_rec) return dd;
+    (void)eh::audio::pw_link_list_capture_stdout(&link_blob);
+    const std::string route = eh::audio::pw_link_list_capture_source_for_stream(
+        link_blob, snap.input_streams[static_cast<size_t>(si)].node_name);
     for (const auto& d : snap.sources)
-      soundDdStore.push_back(d.display_name.empty() ? d.name : d.display_name);
-    for (int j = 0; j < nrows; ++j) {
-      if (snap.sources[static_cast<size_t>(j)].name == route) sel_ix = j;
+      dd.rows.push_back(eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name));
+    for (size_t j = 0; j < snap.sources.size(); ++j) {
+      if (snap.sources[j].name == route) dd.selected = static_cast<int>(j);
     }
+  } else {
+    return dd;
   }
+  if (dd.rows.empty()) return dd;
+  dd.title = sound_dd_title_for(id);
 
-  for (const auto& s : soundDdStore) soundDdPtrs.push_back(s.c_str());
-  if (nrows <= 0 || static_cast<int>(soundDdPtrs.size()) != nrows) return;
-
-  const int text_max_px = settings_measure_max_text_advance_px_sans12(soundDdStore);
-  constexpr int kSoundPopupTextHPad = 28;
-  const int desired_w = text_max_px + kSoundPopupTextHPad;
+  const int text_max_px = settings_measure_max_text_advance_px_sans12(dd.rows);
+  // Radio gutter (text starts at x+38) plus right padding.
+  constexpr int kPadW = 60;
+  const int desired_w = text_max_px + kPadW;
   const int margin = 12;
   const int screen_budget = std::max(dcw, app.width - 2 * margin);
-  int popup_w = std::max(dcw, std::min(desired_w, screen_budget));
-  int popup_x = dcx;
-  if (popup_x + popup_w > app.width - margin) popup_x = app.width - margin - popup_w;
-  if (popup_x < margin) {
-    popup_x = margin;
-    popup_w = std::max(dcw, std::min(popup_w, app.width - 2 * margin));
+  dd.listW = std::max(dcw, std::min(desired_w, screen_budget));
+  dd.listX = dcx;
+  if (dd.listX + dd.listW > app.width - margin) dd.listX = app.width - margin - dd.listW;
+  if (dd.listX < margin) {
+    dd.listX = margin;
+    dd.listW = std::max(dcw, std::min(dd.listW, app.width - 2 * margin));
+  }
+  dd.listY = sound_dd_popup_list_doc_top_y(dcy, dch, static_cast<int>(dd.rows.size()),
+                                           settings_scroll_px_int(app), app.height);
+  dd.listH = kSoundDdTitleH + static_cast<int>(dd.rows.size()) * kSettingsDdRowH + kSoundDdBottomPad;
+  for (const auto& s : dd.rows) dd.rowPtrs.push_back(s.c_str());
+  dd.open = true;
+  return dd;
+}
+
+// Mixer-style dropdown list for the Sound tab: opaque rounded panel with an
+// accent border, a radio per row, and an accent-tinted checked row. Same
+// geometry contract as settings_paint_combo_list_popup (x/y/w/rowH/rows), so
+// the existing index-based click handling is untouched.
+static void paint_sound_dropdown_list_mixer_style(App& app, cairo_t* cr, int x, int y, int w, int rowH,
+                                                 int rowCount, const char* const* labels, int selectedIdx,
+                                                 int hoverRow, const char* title) {
+  const int titleH = title ? kSoundDdTitleH : 0;
+  const int listH = titleH + rowCount * rowH + kSoundDdBottomPad;
+  cairo_save(cr);
+  cairo_round_rect(cr, static_cast<double>(x) + 2.0, static_cast<double>(y) + 3.0,
+                   static_cast<double>(w), static_cast<double>(listH), 10.0);
+  cairo_set_source_rgba(cr, 0, 0, 0, 0.35);
+  cairo_fill(cr);
+  cairo_restore(cr);
+  {
+    m3::Box box;
+    float r, g, b;
+    if (app.drawChromeMatugen) {
+      r = app.drawChrome.panelFillR;
+      g = app.drawChrome.panelFillG;
+      b = app.drawChrome.panelFillB;
+    } else {
+      r = static_cast<float>(Theme::BgR);
+      g = static_cast<float>(Theme::BgG);
+      b = static_cast<float>(Theme::BgB);
+    }
+    box.setColor(r, g, b, 1.0f);
+    box.setRadius(10.0f);
+    box.setGeometry(static_cast<float>(x), static_cast<float>(y), static_cast<float>(w),
+                    static_cast<float>(listH));
+    box.paint(cr);
+  }
+  cairo_round_rect(cr, static_cast<double>(x), static_cast<double>(y), static_cast<double>(w),
+                   static_cast<double>(listH), 10.0);
+  cairo_set_source_rgba(cr, Theme::AccR, Theme::AccG, Theme::AccB, 0.35);
+  cairo_set_line_width(cr, 1.0);
+  cairo_stroke(cr);
+
+  if (title) {
+    settings_show_text(cr, x + 12, y + 18, title, 10.5f, 700, Theme::TextR, Theme::TextG,
+                       Theme::TextB, 0.62f);
   }
 
-  const int list_doc_top =
-      sound_dd_popup_list_doc_top_y(dcy, dch, nrows, settings_scroll_px_int(app), app.height);
-  const int list_device_y = list_doc_top - settings_scroll_px_int(app);
-  settings_paint_combo_list_popup(app, cr, popup_x, list_device_y, popup_w, kSettingsDdRowH, nrows, soundDdPtrs.data(),
-                                  sel_ix, app.soundDdHoverRow, glassOv, 0, 0, true);
+  const double cy0 = static_cast<double>(y + titleH);
+  for (int i = 0; i < rowCount; ++i) {
+    const double ry = cy0 + static_cast<double>(i * rowH);
+    const bool sel = i == selectedIdx;
+    const bool hov = i == hoverRow;
+    if (sel || hov) {
+      cairo_round_rect(cr, static_cast<double>(x) + 4.0, ry + 2.0, static_cast<double>(w) - 8.0,
+                       static_cast<double>(rowH) - 4.0, 6.0);
+      cairo_set_source_rgba(cr, Theme::AccR, Theme::AccG, Theme::AccB, sel ? 0.14 : 0.09);
+      cairo_fill(cr);
+    }
+    const double rcx = static_cast<double>(x) + 22.0;
+    const double rcy = ry + static_cast<double>(rowH) * 0.5;
+    cairo_new_path(cr);
+    cairo_arc(cr, rcx, rcy, 7.0, 0, 2 * M_PI);
+    if (sel) {
+      cairo_set_source_rgba(cr, Theme::AccR, Theme::AccG, Theme::AccB, 0.95);
+      cairo_set_line_width(cr, 2.0);
+    } else {
+      cairo_set_source_rgba(cr, Theme::TextR, Theme::TextG, Theme::TextB, 0.62);
+      cairo_set_line_width(cr, 1.5);
+    }
+    cairo_stroke(cr);
+    if (sel) {
+      cairo_new_path(cr);
+      cairo_arc(cr, rcx, rcy, 3.5, 0, 2 * M_PI);
+      cairo_set_source_rgba(cr, Theme::AccR, Theme::AccG, Theme::AccB, 0.95);
+      cairo_fill(cr);
+    }
+    const double textA = sel ? 1.0 : (hov ? 0.92 : 0.82);
+    settings_show_text(cr, x + 38, static_cast<int>(ry) + 19, labels[i], 12.f, sel ? 700 : 400,
+                       Theme::TextR, Theme::TextG, Theme::TextB, static_cast<float>(textA));
+  }
+}
+
+static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /*contentX*/, int /*contentW*/,
+                                                    double glassOv, const eh::audio::Snapshot& snap) {
+  (void)glassOv;  // mixer-style list is fully opaque by design
+  const SoundDropdown dd = build_sound_dropdown(app, snap);
+  if (!dd.open || dd.rows.empty()) return;
+  const int list_device_y = dd.listY - settings_scroll_px_int(app);
+  paint_sound_dropdown_list_mixer_style(app, cr, dd.listX, list_device_y, dd.listW, kSettingsDdRowH,
+                                        static_cast<int>(dd.rows.size()), dd.rowPtrs.data(), dd.selected,
+                                        app.soundDdHoverRow, dd.title);
 }
 
 // settings_sound_consume_pointer_down (from settings_sound_ui.inl)
@@ -1790,100 +1883,48 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       draw(app);
       return true;
     }
-    int nrows = 0;
-    if (app.soundActiveDd == 0)
-      nrows = static_cast<int>(snap.sinks.size());
-    else if (app.soundActiveDd == 1)
-      nrows = static_cast<int>(snap.sources.size());
-    else if (app.soundActiveDd == 2)
-      nrows = kSoundEngineRateCount;
-    else if (app.soundActiveDd == 3)
-      nrows = 1 + kSoundEngineRateCount;
-    else if (app.soundActiveDd == 4)
-      nrows = 4;
-    else if (app.soundActiveDd == 5)
-      nrows = kSoundCompatPcmChoiceCount;
-    else if (app.soundActiveDd == 6 || app.soundActiveDd == 7)
-      nrows = 1 + kSoundEngineQuantumCount;
-    else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000)
-      nrows = static_cast<int>(snap.sinks.size());
-    else if (app.soundActiveDd >= 1000)
-      nrows = static_cast<int>(snap.sources.size());
-    else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
-      const int bi = app.soundActiveDd - kSoundCardDdBase;
-      const auto& cards = sound_tab_cards_cached(app);
-      if (bi >= 0 && bi < static_cast<int>(cards.size()))
-        nrows = static_cast<int>(cards[static_cast<size_t>(bi)].profiles.size());
+    // Single model: rows, selection, title, and positioned box all come from
+    // the builder, so click mapping cannot desync from paint.
+    const SoundDropdown dd = build_sound_dropdown(app, snap);
+    const int nrows = static_cast<int>(dd.rows.size());
+    if (!dd.open || nrows == 0) {
+      app.soundActiveDd = -1;
+      draw(app);
+      return true;
     }
-
-    std::vector<std::string> dd_labels;
-    if (app.soundActiveDd == 0) {
-      for (const auto& d : snap.sinks)
-        dd_labels.push_back(d.display_name.empty() ? d.name : d.display_name);
-    } else if (app.soundActiveDd == 1) {
-      for (const auto& d : snap.sources)
-        dd_labels.push_back(d.display_name.empty() ? d.name : d.display_name);
-    } else if (app.soundActiveDd == 2) {
-      for (int j = 0; j < kSoundEngineRateCount; ++j)
-        dd_labels.push_back(sound_engine_hz_display(kSoundEngineRates[j]));
-    } else if (app.soundActiveDd == 3) {
-      dd_labels.emplace_back("Auto");
-      for (int j = 0; j < kSoundEngineRateCount; ++j)
-        dd_labels.push_back(sound_engine_hz_display(kSoundEngineRates[j]));
-    } else if (app.soundActiveDd == 4) {
-      dd_labels = {"Hi-Fi (44.1-192 kHz)", "Consumer (44.1 / 48 kHz)", "Pro (48 / 96 / 192 kHz)", "Single (default rate only)"};
-    } else if (app.soundActiveDd == 5) {
-      for (int j = 0; j < kSoundCompatPcmChoiceCount; ++j)
-        dd_labels.emplace_back(kSoundCompatPcmLabels[j]);
-    } else if (app.soundActiveDd == 6 || app.soundActiveDd == 7) {
-      dd_labels.emplace_back("Auto");
-      for (int j = 0; j < kSoundEngineQuantumCount; ++j)
-        dd_labels.push_back(std::to_string(kSoundEngineQuantums[j]));
-    } else if (app.soundActiveDd >= 100 && app.soundActiveDd < 1000) {
-      for (const auto& d : snap.sinks)
-        dd_labels.push_back(d.display_name.empty() ? d.name : d.display_name);
-    } else if (app.soundActiveDd >= 1000) {
-      for (const auto& d : snap.sources)
-        dd_labels.push_back(d.display_name.empty() ? d.name : d.display_name);
-    } else if (app.soundActiveDd >= kSoundCardDdBase && app.soundActiveDd < kSoundCardDdBase + kSoundMaxCards) {
-      const int bi = app.soundActiveDd - kSoundCardDdBase;
-      const auto& cards = sound_tab_cards_cached(app);
-      if (bi >= 0 && bi < static_cast<int>(cards.size())) {
-        for (const auto& p : cards[static_cast<size_t>(bi)].profiles)
-          dd_labels.push_back(p.description.empty() ? p.key : (p.description + " (" + p.key + ")"));
+    const int popup_list_x = dd.listX;
+    const int popup_list_w = dd.listW;
+    const int ly = dd.listY;
+    const int listH = dd.listH;
+    eh::settings::sound_log::SoundLog::instance().writef(
+        "dd-press dd=%d nrows=%d ptr=(%.0f,%.0f) list=(%d,%d %dx%d)", app.soundActiveDd, nrows,
+        app.pointerX, pyLogical, popup_list_x, ly, popup_list_w, listH);
+    if (point_in_rect(app.pointerX, pyLogical, popup_list_x, ly, popup_list_w, listH)) {
+      const int rr = sound_dropdown_row_at(dd, app.pointerX, pyLogical);
+      eh::settings::sound_log::SoundLog::instance().writef("dd-row dd=%d rr=%d", app.soundActiveDd, rr);
+      if (rr < 0) {
+        eh::settings::sound_log::SoundLog::instance().writef("dd-miss dd=%d (title/pad click, dismiss only)",
+                                                             app.soundActiveDd);
       }
-    }
-    int popup_list_x = cx;
-    int popup_list_w = cw;
-    if (!dd_labels.empty()) {
-      const int text_max_px = settings_measure_max_text_advance_px_sans12(dd_labels);
-      constexpr int kSoundDdTextHPad = 28;
-      const int desired_w = text_max_px + kSoundDdTextHPad;
-      const int margin = 12;
-      const int screen_budget = std::max(cw, app.width - 2 * margin);
-      popup_list_w = std::max(cw, std::min(desired_w, screen_budget));
-      popup_list_x = cx;
-      if (popup_list_x + popup_list_w > app.width - margin) popup_list_x = app.width - margin - popup_list_w;
-      if (popup_list_x < margin) {
-        popup_list_x = margin;
-        popup_list_w = std::max(cw, std::min(popup_list_w, app.width - 2 * margin));
-      }
-    }
-
-    const int ly = sound_dd_popup_list_doc_top_y(cy, ch, nrows, settings_scroll_px_int(app), app.height);
-    if (nrows > 0 &&
-        point_in_rect(app.pointerX, pyLogical, popup_list_x, ly, popup_list_w, nrows * kSettingsDdRowH)) {
-      const int rr = settings_mode_dd_pointer_row(app.pointerX, pyLogical, popup_list_x, ly, popup_list_w,
-                                                  kSettingsDdRowH, nrows);
       if (rr >= 0) {
         if (app.soundActiveDd == 0 && rr < nrows) {
           pw.set_default_sink(snap.sinks[static_cast<size_t>(rr)].node_id);
           app.settings.audioDefaultSinkName = snap.sinks[static_cast<size_t>(rr)].name;
           save_settings(app.settings);
+          const eh::audio::Snapshot verify = pw.snapshot();
+          eh::settings::sound_log::SoundLog::instance().writef(
+              "dd-apply dd=0 row=%d node=%u sink='%s' now_default_sink=%u", rr,
+              snap.sinks[static_cast<size_t>(rr)].node_id,
+              snap.sinks[static_cast<size_t>(rr)].name.c_str(), verify.default_sink);
         } else if (app.soundActiveDd == 1 && rr < nrows) {
           pw.set_default_source(snap.sources[static_cast<size_t>(rr)].node_id);
           app.settings.audioDefaultSourceName = snap.sources[static_cast<size_t>(rr)].name;
           save_settings(app.settings);
+          const eh::audio::Snapshot verify = pw.snapshot();
+          eh::settings::sound_log::SoundLog::instance().writef(
+              "dd-apply dd=1 row=%d node=%u source='%s' now_default_source=%u", rr,
+              snap.sources[static_cast<size_t>(rr)].node_id,
+              snap.sources[static_cast<size_t>(rr)].name.c_str(), verify.default_source);
         } else if (app.soundActiveDd == 2 && rr >= 0 && rr < kSoundEngineRateCount) {
           pw.apply_engine_clock_rate_hz(kSoundEngineRates[rr]);
           settings_sound_engine_paint_cache_invalidate();
@@ -1956,6 +1997,9 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
                                               snap.sources[static_cast<size_t>(rr)].node_id);
         }
       }
+    } else {
+      eh::settings::sound_log::SoundLog::instance().writef("dd-miss dd=%d (outside list, dismiss only)",
+                                                           app.soundActiveDd);
     }
     app.soundActiveDd = -1;
     app.soundDdHoverRow = -1;
@@ -1975,7 +2019,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       if (d.node_id == snap.default_sink) snd_def_sink = &d;
     }
     const std::string snd_sink_disp =
-        snd_def_sink ? (snd_def_sink->display_name.empty() ? snd_def_sink->name : snd_def_sink->display_name)
+        snd_def_sink ? eh::shell::audio::shorten_device_name(snd_def_sink->display_name.empty() ? snd_def_sink->name : snd_def_sink->display_name)
                      : std::string("(none)");
     sound_combo_geom_for(sg.devices, 0, snd_sink_disp.c_str(), &cx, &cy, &cw, &ch);
   }
@@ -2021,7 +2065,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
       if (d.node_id == snap.default_source) snd_def_src = &d;
     }
     const std::string snd_src_disp =
-        snd_def_src ? (snd_def_src->display_name.empty() ? snd_def_src->name : snd_def_src->display_name)
+        snd_def_src ? eh::shell::audio::shorten_device_name(snd_def_src->display_name.empty() ? snd_def_src->name : snd_def_src->display_name)
                     : std::string("(none)");
     sound_combo_geom_for(sg.devices, 2, snd_src_disp.c_str(), &cx, &cy, &cw, &ch);
   }
@@ -2091,7 +2135,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
     std::string card_disp = btcrd.active_profile_key;
     for (const auto& p : btcrd.profiles) {
       if (p.key == btcrd.active_profile_key) {
-        card_disp = p.description.empty() ? p.key : p.description;
+        card_disp = eh::shell::audio::shorten_profile_label(p.key, p.description.empty() ? p.key : p.description);
         break;
       }
     }
@@ -2201,7 +2245,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
     std::string route_disp = route;
     for (const auto& d : snap.sinks) {
       if (d.name == route) {
-        route_disp = d.display_name.empty() ? d.name : d.display_name;
+        route_disp = eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name);
         break;
       }
     }
@@ -2243,7 +2287,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
     std::string rroute_disp = rroute;
     for (const auto& d : snap.sources) {
       if (d.name == rroute) {
-        rroute_disp = d.display_name.empty() ? d.name : d.display_name;
+        rroute_disp = eh::shell::audio::shorten_device_name(d.display_name.empty() ? d.name : d.display_name);
         break;
       }
     }

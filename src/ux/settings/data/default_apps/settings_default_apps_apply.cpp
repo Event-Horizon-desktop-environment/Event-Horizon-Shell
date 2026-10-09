@@ -1,5 +1,7 @@
 #include "ux/settings/data/default_apps/settings_default_apps_apply.hpp"
 
+#include "ux/settings/data/default_apps/settings_default_apps_filemanager1.hpp"
+
 #include <array>
 #include <cctype>
 #include <cstdlib>
@@ -95,6 +97,8 @@ void apply_category_default(const std::string& desktop_id, int category_index) {
     s_pre_apply_set[static_cast<size_t>(category_index)] = true;
   }
   for (size_t m = 0; mimes[m] != nullptr; ++m) run_xdg_mime_default(id, mimes[m]);
+  if (category_index == 3)
+    filemanager1::apply_filemanager1_transition(filemanager1::sync_filemanager1_override(id));
 }
 
 std::string captured_system_default(int category_index) {
@@ -105,6 +109,8 @@ std::string captured_system_default(int category_index) {
 
 void restore_category_system_default(int category_index) {
   if (category_index < 0 || category_index >= kNumCategories) return;
+  if (category_index == 3)
+    filemanager1::apply_filemanager1_transition(filemanager1::sync_filemanager1_override({}));
   const char* const* mimes = category_mime_list(category_index);
   if (!mimes) return;
   const size_t ci = static_cast<size_t>(category_index);
@@ -129,6 +135,10 @@ void restore_category_system_default(int category_index) {
 }
 
 void apply_from_config(const eh::config::DefaultAppsSettings& d) {
+  // The D-Bus file-manager endpoint must converge even when the MIME signature
+  // is unchanged (e.g. override deleted externally, or set before this logic
+  // existed), so sync it outside the signature gate below.
+  filemanager1::apply_filemanager1_transition(filemanager1::sync_filemanager1_override(d.fileManager));
   static std::string last_applied;
   const std::string sig = config_signature(d);
   if (sig == last_applied) return;

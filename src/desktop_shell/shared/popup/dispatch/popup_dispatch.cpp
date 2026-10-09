@@ -14,9 +14,24 @@
 #include "desktop_shell/widgets/bluetooth/bluetooth_paint.hpp"
 #include "desktop_shell/dock/input/dock_pick.hpp"
 
+#include <chrono>
+#include <cstdint>
+
 #include <wayland-client.h>
 
 namespace eh::shell::popup {
+namespace {
+// Last VolumeMixer motion-driven present (ms, steady clock). Pointer motion
+// can arrive at 500Hz+; repainting + presenting per event produced 240
+// paints/s in the mixer log. The drag state update always runs — only the
+// expensive present is capped here at ~60Hz.
+uint64_t s_lastMixerDrawMs = 0;
+uint64_t mixer_motion_ms() {
+  return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count());
+}
+}  // namespace
 
 bool popup_handle_click(DockApp& app, double x, double y, uint32_t serial) {
   switch (app.popupKind) {
@@ -65,12 +80,48 @@ bool popup_handle_motion(DockApp& app) {
     wl_display_flush(app.display);
     return true;
   }
+  if (app.popupKind == DockApp::PopupKind::VolumeMixer) {
+    if (app.pointerSurface != app.popupSurface) return false;
+    eh::shell::dock::popup::volume_mixer::dock_volume_mixer_popup_handle_motion(app);
+    const uint64_t nowMs = mixer_motion_ms();
+    if (nowMs - s_lastMixerDrawMs >= 16) {
+      s_lastMixerDrawMs = nowMs;
+      popup_draw_surface(app);
+      wl_display_flush(app.display);
+    }
+    return true;
+  }
   if (app.popupKind != DockApp::PopupKind::VolumeMixer &&
       app.popupKind != DockApp::PopupKind::MediaPlayer) return false;
   if (app.pointerSurface != app.popupSurface) return false;
   popup_draw_surface(app);
   wl_display_flush(app.display);
   return true;
+}
+
+bool popup_handle_release(DockApp& app) {
+  if (!app.popupOpen) return false;
+  if (app.popupKind == DockApp::PopupKind::VolumeMixer) {
+    eh::shell::dock::popup::volume_mixer::dock_volume_mixer_popup_handle_release(app);
+    popup_draw_surface(app);
+    wl_display_flush(app.display);
+    return true;
+  }
+  return false;
+}
+
+bool popup_handle_axis(DockApp& app, double deltaPx) {
+  if (!app.popupOpen) return false;
+  if (app.popupKind == DockApp::PopupKind::VolumeMixer) {
+    if (app.pointerSurface != app.popupSurface) return false;
+    if (eh::shell::dock::popup::volume_mixer::dock_volume_mixer_popup_handle_axis(app, deltaPx)) {
+      popup_draw_surface(app);
+      wl_display_flush(app.display);
+      return true;
+    }
+    return false;
+  }
+  return false;
 }
 
 bool popup_handle_escape(DockApp& app) {

@@ -601,6 +601,7 @@ shell_cpp_sources = [
   'src/desktop_shell/desktop/widgets/media_compact/desktop_widget_media_compact.cpp',
   'src/desktop_shell/desktop/widgets/world_clock/desktop_widget_world_clock.cpp',
   'src/desktop_shell/desktop/widgets/world_clock/desktop_world_clock_settings.cpp',
+  'src/desktop_shell/desktop/widgets/fetch/desktop_widget_fetch.cpp',
   'src/desktop_shell/desktop/audio/cava_reader.cpp',
   'src/desktop_shell/desktop/audio/cava_config.cpp',
   'src/desktop_shell/desktop/entries/desktop_xdg_ops.cpp',
@@ -703,6 +704,7 @@ shell_cpp_sources = [
   'src/ux/settings/utils/helpers/material_glyphs.cpp',
   'src/ux/settings/data/default_apps/settings_default_apps.cpp',
   'src/ux/settings/data/default_apps/settings_default_apps_apply.cpp',
+  'src/ux/settings/data/default_apps/settings_default_apps_filemanager1.cpp',
   'src/ux/settings/data/monitors/settings_monitors.cpp',
   'src/ux/settings/data/mango/settings_mango_data.cpp',
   'src/ux/settings/data/hyprland/settings_hyprland_data.cpp',
@@ -1018,6 +1020,18 @@ executable(
   install_mode: 'rwxr-xr-x',
 )
 
+# FileManager1 proxy: owns org.freedesktop.FileManager1 on behalf of the
+# Default Apps file-manager choice so browser "Show in folder" and in-shell
+# reveal actions reach the configured manager. Activated via the user-level
+# D-Bus service override that Settings installs.
+executable(
+  'horizon-filemanager1',
+  sources: 'src/services/filemanager1/filemanager1_proxy.cpp',
+  dependencies: [sdbus_dep],
+  install: true,
+  install_mode: 'rwxr-xr-x',
+)
+
 # Split-out settings child (Phase 2): run_standalone lives in eh_shell_core, this
 # executable is the thin entrypoint. Spawned by the supervisor via posix_spawn.
 executable(
@@ -1295,6 +1309,19 @@ test_contract_ipc = executable('test_contract_ipc',
   install: false,
 )
 test('ipc_fabric', test_contract_ipc)
+
+# ── FileManager1 override test (Default Apps file-manager routing) ─────────
+test_filemanager1_override = executable('test_filemanager1_override',
+  [
+    'test/test_filemanager1_override.cpp',
+    'src/ux/settings/data/default_apps/settings_default_apps_filemanager1.cpp',
+  ],
+  include_directories: test_inc,
+  dependencies: [],
+  cpp_args: test_cpp_args,
+  install: false,
+)
+test('filemanager1_override', test_filemanager1_override)
 
 # ── VRAM boost pure logic test ───────────────────────────────────────────────
 test_vram_boost = executable('test_vram_boost',

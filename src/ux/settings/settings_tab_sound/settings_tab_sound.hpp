@@ -12,6 +12,7 @@ struct App;
 
 namespace eh::audio {
 struct AudioCardProfiles;
+struct Snapshot;
 }
 
 // The Sound sidebar tab (id 8) is an "Audio Center" with its own child tabs,
@@ -50,6 +51,30 @@ struct SoundBtPopupGeom {
   int x;
   int w;
 };
+
+// One dropdown model for the Sound tab: a single range dispatch builds rows,
+// selection, title, and the positioned list box. Paint, click, and hover all
+// read this (never their own copies) so rows, geometry, and actions can't
+// desync. Coordinates are document space: add scroll for pointer tests,
+// subtract it for paint.
+struct SoundDropdown {
+  bool open = false;
+  const char* title = nullptr;
+  std::vector<std::string> rows;
+  std::vector<const char*> rowPtrs;
+  int selected = -1;
+  int comboX = 0, comboY = 0, comboW = 0, comboH = 0;
+  int listX = 0, listY = 0, listW = 0, listH = 0;
+};
+SoundDropdown build_sound_dropdown(App& app, const eh::audio::Snapshot& snap);
+inline int sound_dropdown_row_at(const SoundDropdown& dd, double px, double py) {
+  if (!dd.open || dd.rows.empty()) return -1;
+  const int n = static_cast<int>(dd.rows.size());
+  const double top = static_cast<double>(dd.listY + kSoundDdTitleH);
+  if (px < dd.listX || px >= dd.listX + dd.listW || py < top) return -1;
+  const int r = static_cast<int>((py - top) / kSettingsDdRowH);
+  return (r >= 0 && r < n) ? r : -1;
+}
 
 void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double glassOv, double paintPointerYOffset);
 bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW);

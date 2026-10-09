@@ -38,6 +38,7 @@ std::string widget_display_title(const std::string& id) {
   if (id == "system_monitor") return "System Monitor";
   if (id == "media") return "Media";
   if (id == "media_compact") return "Media Compact";
+  if (id == "fetch") return "System Info";
   if (id == "volume") return "Volume";
   if (id == "mic") return "Microphone";
   if (id == "network") return "Network";

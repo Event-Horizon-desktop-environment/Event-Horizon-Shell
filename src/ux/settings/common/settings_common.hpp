@@ -120,6 +120,11 @@ static constexpr int kSettingsComboH = 28;
 static constexpr int kQtColorSchemeComboH = 38;
 static constexpr int kTabBarH = 36;
 static constexpr int kSettingsDdRowH = 26;
+// Sound-tab dropdown chrome (mixer-style list): section title height and
+// bottom padding inside the panel. Paint, click, and hover mapping must all
+// use these so rows stay in sync.
+static constexpr int kSoundDdTitleH = 28;
+static constexpr int kSoundDdBottomPad = 8;
 
 static constexpr int kSliderRowH    = 68;
 

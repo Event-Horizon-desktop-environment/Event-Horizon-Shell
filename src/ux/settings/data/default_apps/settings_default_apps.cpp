@@ -35,7 +35,7 @@ static const char* kMimeWeb[] = {"x-scheme-handler/http", "x-scheme-handler/http
                                  "application/xhtml+xml", nullptr};
 static const char* kMimeMail[] = {"x-scheme-handler/mailto", nullptr};
 static const char* kMimeCal[] = {"text/calendar", "x-scheme-handler/webcal", nullptr};
-static const char* kMimeFm[] = {"inode/directory", nullptr};
+static const char* kMimeFm[] = {"inode/directory", "inode/mount-point", nullptr};
 static const char* kMimeTerm[] = {"application/x-terminal-emulator", nullptr};
 static const char* kMimeMusic[] = {"audio/mpeg", "audio/flac", "audio/ogg", "audio/wav", "audio/x-wav",
                                    "audio/aac", "audio/mp4", "audio/opus", "audio/x-matroska", "audio/x-ms-wma", nullptr};

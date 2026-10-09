@@ -27,6 +27,7 @@ const char* dock_widget_material_ligature(const std::string& id) {
   if (id == "system_monitor") return "monitoring";
   if (id == "media") return "music_note";
   if (id == "media_compact") return "music_video";
+  if (id == "fetch") return "info";
   if (id == "workspaces") return "view_module";
   if (id == "world_clock") return "public";
   if (id == "control_center" || id == "pear_center") return "tune";

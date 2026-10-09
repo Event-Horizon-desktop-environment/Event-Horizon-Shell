@@ -217,6 +217,7 @@ void shell_pointer_button(void* data, wl_pointer*  , uint32_t serial, uint32_t  
     if (left && eh::shell::control_center::handle_button_release(app)) {
       // CC drag ended, fall through to handle other release events
     }
+    if (left) eh::shell::popup::popup_handle_release(app);
     if (left && app.dockPressedSlot >= 0) {
       app.dockPressedSlot = -1;
       dock_draw(app);
@@ -346,6 +347,7 @@ void shell_pointer_axis(void* data, wl_pointer*  , uint32_t  , uint32_t axis, wl
     return;
   }
   if (eh::shell::control_center::handle_axis(app, deltaPx)) return;
+  if (eh::shell::popup::popup_handle_axis(app, deltaPx)) return;
   if (eh::shell::dock::app_drawer::app_drawer_handle_axis(app, deltaPx)) return;
 }
 void shell_pointer_frame(void*  , wl_pointer*  ) {}

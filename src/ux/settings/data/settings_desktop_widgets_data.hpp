@@ -12,6 +12,7 @@ enum class DesktopWidgetType : int {
   MediaPlayer = 5,
   MediaCompact = 6,
   WorldClock = 7,
+  Fetch = 8,
 };
 
 inline const char* desktop_widget_type_to_widget_id(DesktopWidgetType t) {
@@ -24,6 +25,7 @@ inline const char* desktop_widget_type_to_widget_id(DesktopWidgetType t) {
     case DesktopWidgetType::MediaPlayer: return "media";
     case DesktopWidgetType::MediaCompact: return "media_compact";
     case DesktopWidgetType::WorldClock: return "world_clock";
+    case DesktopWidgetType::Fetch: return "fetch";
   }
   return "";
 }
@@ -37,6 +39,7 @@ inline DesktopWidgetType widget_id_to_desktop_widget_type(const std::string& wid
   if (wid == "media_compact") return DesktopWidgetType::MediaCompact;
   if (wid == "system_monitor") return DesktopWidgetType::SystemMonitor;
   if (wid == "world_clock") return DesktopWidgetType::WorldClock;
+  if (wid == "fetch") return DesktopWidgetType::Fetch;
   return DesktopWidgetType::Clock;
 }
 
