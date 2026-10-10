@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
 #include <mutex>
 
 namespace eh::shell::dock {
@@ -53,7 +54,9 @@ inline const char* dock_boot_current_step() {
 }
 
 // Mark a completed startup step. Always printed; sequence-numbered so a crash
-// log shows the exact step that never completed.
+// log shows the exact step that never completed. Elapsed wall time since the
+// first step is included so slow restarts (e.g. dock toggle off/on) can be
+// attributed without verbose mode.
 inline void dock_boot_step(const char* fmt, ...) {
   char msg[512];
   {
@@ -64,15 +67,20 @@ inline void dock_boot_step(const char* fmt, ...) {
   }
 
   int idx = 0;
+  long long elapsed_ms = 0;
   {
     std::lock_guard<std::mutex> lock(boot_detail::mtx());
     idx = ++boot_detail::seq();
     (void)std::snprintf(boot_detail::step_buf(), boot_detail::kStepBufSize, "%s", msg);
+    using Clock = std::chrono::steady_clock;
+    static const auto t0 = Clock::now();
+    elapsed_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
   }
 
-  std::fprintf(stderr, "[horizon-dock:boot] %03d %s\n", idx, msg);
+  std::fprintf(stderr, "[horizon-dock:boot] %03d +%lldms %s\n", idx, elapsed_ms, msg);
   std::fflush(stderr);
-  debug_log("dock", "boot %03d %s", idx, msg);
+  debug_log("dock", "boot %03d +%lldms %s", idx, elapsed_ms, msg);
 }
 
 // One-shot trace of a layer surface being created. Printed unconditionally so

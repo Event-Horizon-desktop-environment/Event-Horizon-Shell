@@ -187,7 +187,10 @@ int run_dock_standalone() {
           dock_schedule_frame(app);
         } else if (topic == "command.request") {
           if (is_settings_command(payload)) {
-            eh::settings::request_launch_settings();
+            // Ignore: settings.toggle is consumed by horizon-settings to close
+            // itself. Spawning here would parent settings to the dock, so
+            // turning the dock off would kill settings via PDEATHSIG.
+            // Opens go through request_launch_settings() → supervisor IPC.
           } else if (is_menu_command(payload)) {
             dock_toggle_menu_from_keyboard(app);
           }

@@ -23,6 +23,7 @@
 #include "ux/settings/utils/scroll/settings_scroll.hpp"
 #include "ux/settings/settings_serialize.hpp"
 #include "ux/settings/utils/widget_picker/settings_widget_drag.hpp"
+#include "ux/settings/utils/widget_defaults/settings_widget_defaults.hpp"
 #include "ux/settings/utils/helpers/material_glyphs.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 #include "ux/settings/utils/display/settings_display_dropdown.hpp"
@@ -405,6 +406,31 @@ struct PanelTabM3State {
         addBtn.setHovered(hoverAdd);
         addBtn.paint(cr);
       }
+      // Reset-to-defaults row below the tallest column (geometry shared with
+      // handleWidgetsPointerDown below).
+      {
+        double maxAddBottom = listY;
+        for (int rs = 0; rs < 3; ++rs) {
+          const auto& rws = *widgets_for_section_const(app, rs);
+          const double addBottom =
+              listY + static_cast<double>(rws.size()) * (kCardH + kCardGapV) + kCardGapV + 38.0;
+          if (addBottom > maxAddBottom) maxAddBottom = addBottom;
+        }
+        const double resetY = maxAddBottom + 12.0;
+        const bool hoverReset = (px >= cX && px < cX + cW && py >= resetY && py < resetY + 38.0);
+        m3::Button resetBtn;
+        resetBtn.setMinSize(0, 0);
+        resetBtn.setGlyph("restart_alt");
+        resetBtn.setLabel("Reset to defaults");
+        resetBtn.setGeometry(static_cast<float>(cX), static_cast<float>(resetY),
+                             static_cast<float>(cW), 38.0f);
+        resetBtn.setStyle(m3::Button::Style::Outlined);
+        resetBtn.setSize(m3::Button::Size::XS);
+        resetBtn.setAccentColor(a_r, a_g, a_b);
+        resetBtn.setOutlineColor(o_r, o_g, o_b);
+        resetBtn.setHovered(hoverReset);
+        resetBtn.paint(cr);
+      }
       return;
     }
   }
@@ -628,6 +654,32 @@ struct PanelTabM3State {
     const double listY = colTop + 26.0;
     constexpr double kCardH = 54.0;
     constexpr double kCardGapV = 8.0;
+    // Reset-to-defaults row (geometry mirrors paintWidgets()).
+    {
+      double maxAddBottom = listY;
+      for (int rs = 0; rs < 3; ++rs) {
+        const auto& rws = *widgets_for_section_const(app, rs);
+        const double addBottom =
+            listY + static_cast<double>(rws.size()) * (kCardH + kCardGapV) + kCardGapV + 38.0;
+        if (addBottom > maxAddBottom) maxAddBottom = addBottom;
+      }
+      const double resetY = maxAddBottom + 12.0;
+      if (px >= cX && px < cX + cW && py >= resetY && py < resetY + 38.0) {
+        debug_log("settings", "panel widgets: reset to defaults");
+        namespace wd = eh::settings::widget_defaults;
+        app.settings.panelLeftWidgets = wd::panel_left();
+        app.settings.panelCenterWidgets = wd::panel_center();
+        app.settings.panelRightWidgets = wd::panel_right();
+        auto& ds = app.settings.panelWidgetSlotsDisabled;
+        auto& gs = app.settings.widgetSlotsDisabled;
+        for (const auto& id : app.settings.panelLeftWidgets) { ds.erase(id); gs.erase(id); }
+        for (const auto& id : app.settings.panelCenterWidgets) { ds.erase(id); gs.erase(id); }
+        for (const auto& id : app.settings.panelRightWidgets) { ds.erase(id); gs.erase(id); }
+        save_settings(app.settings);
+        draw(app);
+        return true;
+      }
+    }
     for (int s = 0; s < 3; ++s) {
       const double colX = cX + static_cast<double>(s) * (colW + colGap);
       auto& widgets = *widgets_for_section(app, s);

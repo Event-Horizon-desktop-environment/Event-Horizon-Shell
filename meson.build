@@ -1359,6 +1359,26 @@ test_icon_cache = executable('test_icon_cache',
 )
 test('icon_cache', test_icon_cache)
 
+# ── Settings singleton pidfile guard (PID-reuse must not block launches) ───
+test_settings_singleton = executable('test_settings_singleton',
+  ['test/test_settings_singleton.cpp'],
+  include_directories: test_inc,
+  dependencies: [eh_shell_core_dep],
+  cpp_args: test_cpp_args,
+  install: false,
+)
+test('settings_singleton', test_settings_singleton)
+
+# ── Widget layout defaults (explicit empty must survive load) ──────────────
+test_widget_defaults = executable('test_widget_defaults',
+  ['test/test_widget_defaults.cpp'],
+  include_directories: test_inc,
+  dependencies: [eh_shell_core_dep],
+  cpp_args: test_cpp_args,
+  install: false,
+)
+test('widget_defaults', test_widget_defaults)
+
 # ── Damage region utility test ───────────────────────────────────────────────
 test_damage_region = executable('test_damage_region',
   ['test/test_damage_region.cpp', 'src/wl/buffer/damage_region.cpp'],

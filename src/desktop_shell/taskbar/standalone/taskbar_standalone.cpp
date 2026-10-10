@@ -212,7 +212,8 @@ int run_taskbar_standalone() {
           taskbar_schedule_frame(app);
         } else if (topic == "command.request") {
           if (is_settings_command(payload)) {
-            eh::settings::request_launch_settings();
+            // Ignore: settings.toggle is consumed by horizon-settings to close
+            // itself (see dock_standalone). Opens delegate to the supervisor.
           } else if (is_menu_command(payload)) {
             taskbar_toggle_menu(app);
           }

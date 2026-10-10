@@ -357,7 +357,7 @@ bool pid_alive(int pid) {
   std::snprintf(path, sizeof(path), "/proc/%d/stat", pid);
   FILE* f = std::fopen(path, "r");
   if (!f) return true;
-  char buf[256];
+  char buf[512];
   const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
   std::fclose(f);
   if (n == 0) return true;
@@ -367,9 +367,91 @@ bool pid_alive(int pid) {
   return true;
 }
 
+// Verify the pidfile pid still refers to a settings process. Guards against
+// PID reuse: after a SIGKILLed settings (e.g. killed with its dock parent via
+// PDEATHSIG) the pidfile is left behind, and an unrelated process can inherit
+// the number — without this check every settings launch would be silently
+// blocked until that process exits. Mirrors dock_pid_is_ours().
+bool pid_is_settings_process(int pid) {
+  if (pid <= 1) return false;
+  char path[64];
+  std::snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+  if (FILE* f = std::fopen(path, "rb")) {
+    char buf[512];
+    bool got = false;
+    std::string comm;
+    if (std::fgets(buf, sizeof(buf), f)) {
+      const char* openP = std::strchr(buf, '(');
+      const char* closeP = std::strrchr(buf, ')');
+      if (openP && closeP && closeP > openP) {
+        comm.assign(openP + 1, static_cast<size_t>(closeP - openP - 1));
+        got = true;
+      }
+    }
+    std::fclose(f);
+    if (got) {
+      // Note: the kernel truncates comm to 15 chars, so the `horizon-settings`
+      // binary (16 chars) shows up as "horizon-setting".
+      if (comm == "horizon-settings" || comm == "horizon-setting") return true;
+      // `EventHorizon --eh-settings` runs the same run_standalone() entry.
+      if (comm == "EventHorizon") {
+        std::snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+        if (FILE* cf = std::fopen(path, "rb")) {
+          char cbuf[1024];
+          const size_t cn = std::fread(cbuf, 1, sizeof(cbuf) - 1, cf);
+          std::fclose(cf);
+          if (cn > 0) {
+            cbuf[cn] = '\0';
+            std::string cmd(cbuf, cn);
+            if (cmd.find("--eh-settings") != std::string::npos) return true;
+          }
+        }
+        return false;
+      }
+      // Unrecognized comm — fall through to the exe-link check below (covers
+      // truncation edge cases); a foreign comm with a foreign exe fails there.
+    }
+  }
+  // stat unreadable — fall back to the exe link.
+  char exe[4096];
+  std::snprintf(path, sizeof(path), "/proc/%d/exe", pid);
+  const ssize_t n = ::readlink(path, exe, sizeof(exe) - 1);
+  if (n <= 0) return false;
+  exe[n] = '\0';
+  const std::string exeStr = exe;
+  const auto slash = exeStr.find_last_of('/');
+  const std::string base = slash == std::string::npos ? exeStr : exeStr.substr(slash + 1);
+  return base == "horizon-settings";
+}
+
 std::string settings_log_path() {
   const char* d = std::getenv("XDG_STATE_HOME");
   return std::string(d && *d ? d : "/tmp") + "/event-horizon-settings.log";
+}
+
+bool is_split_child_process() {
+  char self[4096];
+  const ssize_t n = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
+  if (n <= 0) return false;
+  self[n] = '\0';
+  const std::string exe = self;
+  const auto slash = exe.find_last_of('/');
+  const std::string base = slash == std::string::npos ? exe : exe.substr(slash + 1);
+  // Supervisor is `EventHorizon`; split-out children are `horizon-*`.
+  return base.rfind("horizon-", 0) == 0;
+}
+
+bool publish_settings_open_to_supervisor() {
+  eh::ipc::IpcClient tmp;
+  if (tmp.connect(eh::ipc::default_socket_path(), 3) < 0) return false;
+  const bool ok = tmp.publish("command.request", "settings.open");
+  // Flush: a bare connect+publish+close is dropped by the server's
+  // connect/disconnect race (verified live: instant-close publishes never
+  // arrive, held ones do). The request round-trip forces the server to
+  // consume our publish before it sees the disconnect.
+  if (ok) (void)tmp.request("list-commands", 2000);
+  tmp.disconnect();
+  return ok;
 }
 
 }  // namespace
@@ -380,6 +462,18 @@ void request_launch_settings() {
   if (g_settings_launcher) {
     g_settings_launcher();
     return;
+  }
+  // Split-out children (horizon-dock / taskbar / panel / ...) must not spawn
+  // horizon-settings directly: PR_SET_PDEATHSIG would parent it to us, so
+  // turning us off (e.g. Show dock off) would kill settings too. Delegate to
+  // the supervisor over IPC so settings becomes the supervisor's child.
+  if (is_split_child_process()) {
+    if (publish_settings_open_to_supervisor()) {
+      debug_log("settings", "request_launch_settings: delegated to supervisor via IPC");
+      return;
+    }
+    debug_log("settings", "request_launch_settings: IPC unavailable, falling back to direct spawn");
+    // Bus unavailable — fall through to a direct spawn.
   }
   (void)spawn_settings();
 }
@@ -393,6 +487,13 @@ bool settings_singleton_running() {
     const int got = std::fscanf(f, "%d", &pid);
     std::fclose(f);
     if (got != 1) return false;
+    // Identity check first: a stale pidfile whose number was recycled by an
+    // unrelated process must never block launches (nor divert the supervisor
+    // into publishing toggle-to-nothing).
+    if (!pid_is_settings_process(pid)) {
+      ::unlink(settings_pid_path().c_str());
+      return false;
+    }
     if (pid_alive(pid)) return true;
   }
   ::unlink(settings_pid_path().c_str());

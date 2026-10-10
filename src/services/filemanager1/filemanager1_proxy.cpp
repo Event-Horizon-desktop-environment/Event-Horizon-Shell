@@ -466,10 +466,32 @@ void open_uris_in_manager(const std::vector<std::string>& uris) {
   spawn_argv_detached(argv);
 }
 
-// ShowItems URIs point at files to reveal: open each parent folder (grouped,
-// deduplicated). Managers without --select support still land in the right
-// place; exact file highlighting is best-effort via the manager itself.
+// Whether the configured default manager's Exec can consume file targets
+// (%F/%U/%f/%u). Managers without any file code cannot be handed a file:
+// the request would either open a bare window or (via MIME fallback) a
+// viewer on the file instead of its folder.
+[[nodiscard]] bool default_exec_consumes_files() {
+  ResolvedManager mgr = resolve_default_manager();
+  if (!mgr.ok) return false;
+  for (const std::string& tok : split_exec(mgr.desktop.exec)) {
+    if (tok.size() == 2 && tok[0] == '%' &&
+        (tok[1] == 'F' || tok[1] == 'U' || tok[1] == 'f' || tok[1] == 'u'))
+      return true;
+  }
+  return false;
+}
+
+// ShowItems URIs point at files to reveal: forward the files themselves so
+// managers with reveal support (Nautilus --select semantics, Dolphin,
+// Horizon, ...) open the parent folder AND highlight the file. Reducing to
+// the parent dir here would make downstream selection impossible. Managers
+// whose Exec cannot take files keep the old parent-folder behavior so the
+// folder still opens instead of a viewer on the file.
 void handle_show_items(const std::vector<std::string>& uris) {
+  if (default_exec_consumes_files()) {
+    open_uris_in_manager(uris);
+    return;
+  }
   std::vector<std::string> folders;
   for (const auto& u : uris) {
     const std::string p = path_from_file_uri(u);

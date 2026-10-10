@@ -9,11 +9,11 @@ namespace eh::shell::taskbar {
 
 struct TaskbarSettings {
   bool enabled = false;
-  int widthMode = 0;  // 0 = floating, 1 = edge, 2 = fill
+  int widthMode = 1;  // 0 = floating, 1 = edge, 2 = fill
   int height = 48;
-  int radius = 12;
-  int opacity = 100;
-  int iconSize = 32;
+  int radius = 0;
+  int opacity = 65;
+  int iconSize = 38;
   int iconSpacing = 8;
   int floatingAmount = 8;
   int edgeGap = 0;
@@ -26,12 +26,12 @@ struct TaskbarSettings {
   std::vector<std::string> rightWidgets{};
   std::vector<std::string> pinnedApps{};
   bool groupApps = true;
-  bool showLabels = false;
+  bool showLabels = true;
   bool collapseWhenFull = true;
   bool thumbnailsEnabled = true;
   bool thumbnailPeekEnabled = true;
   int thumbnailThreshold = 10;
-  bool compactMedia = true;
+  bool compactMedia = false;
   int slotPillOpacity = 100;
   bool positionTop = false;
   bool autoHide = false;

@@ -313,7 +313,8 @@ int run_stage_standalone() {
           eh::shell::dashboard::dashboard_on_config_changed(app, sc.dashboard);
         } else if (topic == "command.request") {
           if (payload == "settings.toggle") {
-            eh::settings::request_launch_settings();
+            // Ignore: consumed by horizon-settings to close itself (see
+            // dock_standalone). Opens delegate to the supervisor.
           } else if (is_overview_command(payload) && app.overview) {
             if (payload == "overview.toggle") {
               app.overview->toggle();

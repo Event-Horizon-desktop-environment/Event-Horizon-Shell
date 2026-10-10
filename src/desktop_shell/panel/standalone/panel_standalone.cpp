@@ -184,7 +184,9 @@ int run_panel_standalone() {
           panel_maybe_reload_settings(app, sc);
           panel_schedule_frame(app);
         } else if (topic == "command.request") {
-          if (payload == "settings.toggle") eh::settings::request_launch_settings();
+          // Ignore settings.toggle: consumed by horizon-settings to close
+          // itself. Opens delegate to the supervisor (see request_launch_settings).
+          if (payload == "settings.toggle") { /* no-op */ }
         }
       });
       ipc_ok = ipc.subscribe("config.applied") && ipc.subscribe("command.request");

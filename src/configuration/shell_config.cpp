@@ -6,6 +6,7 @@
 #include "desktop_shell/common/palette/matugen_palette.hpp"
 #include "desktop_shell/common/monitor/output_assign.hpp"
 #include "ux/settings/common/trace/settings_trace.hpp"
+#include "ux/settings/utils/widget_defaults/settings_widget_defaults.hpp"
 #include "desktop_shell/common/log/debug_log.hpp"
 
 #define TOML_IMPLEMENTATION
@@ -251,30 +252,44 @@ void ensure_builtin_trash_widget(ShellConfig& c) {
 }
 
 void apply_dock_defaults_if_needed(ShellConfig& c) {
-   
+  
   if (c.dock.leftWidgets.empty() && c.dock.centerWidgets.empty() && c.dock.rightWidgets.empty()) {
-    c.dock.leftWidgets = {"smenu", "media"};
-    c.dock.centerWidgets = {"app_drawer", "pinned_apps", "running_apps", "trash"};
-    c.dock.rightWidgets = {"tray", "weather", "clock", "pear_center", "settings_button"};
+    c.dock.leftWidgets = eh::settings::widget_defaults::dock_left();
+    c.dock.centerWidgets = eh::settings::widget_defaults::dock_center();
+    c.dock.rightWidgets = eh::settings::widget_defaults::dock_right();
   }
 }
 
 void apply_taskbar_defaults_if_needed(ShellConfig& c) {
-   
+  
   if (c.taskbar.leftWidgets.empty() && c.taskbar.centerWidgets.empty() && c.taskbar.rightWidgets.empty()) {
-    c.taskbar.leftWidgets = {"smenu", "media"};
-    c.taskbar.centerWidgets = {"app_drawer", "pinned_apps", "running_apps", "trash"};
-    c.taskbar.rightWidgets = {"tray", "weather", "clock", "pear_center", "settings_button"};
+    c.taskbar.leftWidgets = eh::settings::widget_defaults::taskbar_left();
+    c.taskbar.centerWidgets = eh::settings::widget_defaults::taskbar_center();
+    c.taskbar.rightWidgets = eh::settings::widget_defaults::taskbar_right();
   }
 }
 
 void apply_panel_defaults_if_needed(ShellConfig& c) {
-   
+  
   if (c.panel.leftWidgets.empty() && c.panel.centerWidgets.empty() && c.panel.rightWidgets.empty()) {
-    c.panel.leftWidgets = {"workspaces"};
-    c.panel.centerWidgets = {"clock"};
-    c.panel.rightWidgets = {"tray", "battery", "control_center", "notifications"};
+    c.panel.leftWidgets = eh::settings::widget_defaults::panel_left();
+    c.panel.centerWidgets = eh::settings::widget_defaults::panel_center();
+    c.panel.rightWidgets = eh::settings::widget_defaults::panel_right();
   }
+}
+
+// True when the merged TOML carries ANY explicit widget-list key for the
+// section — including explicitly emptied arrays. An all-empty layout the user
+// chose on purpose must survive load_uncached(); only a config with no widget
+// keys at all (fresh install) gets the built-in defaults. Without this,
+// removing every widget resets the bar to defaults on the next reload (and
+// e.g. a removed app_drawer keeps coming back).
+bool section_widgets_configured(const toml::table& root, const char* section) {
+  const auto* t = root.get_as<toml::table>(section);
+  if (!t) return false;
+  return (*t)["left_widgets"].as_array() != nullptr ||
+         (*t)["center_widgets"].as_array() != nullptr ||
+         (*t)["right_widgets"].as_array() != nullptr;
 }
 
 void apply_toml_overlay(ShellConfig& c, const toml::table& root) {
@@ -1139,9 +1154,11 @@ ShellConfig load_uncached(bool skip_matugen = false) {
   }
   const auto t_after_overlay = std::chrono::steady_clock::now();
 
-  apply_dock_defaults_if_needed(c);
-  apply_taskbar_defaults_if_needed(c);
-  apply_panel_defaults_if_needed(c);
+  // Post-overlay defaults only for sections with NO explicit widget keys:
+  // an explicitly emptied layout must survive (see section_widgets_configured).
+  if (!section_widgets_configured(merged, "dock")) apply_dock_defaults_if_needed(c);
+  if (!section_widgets_configured(merged, "taskbar")) apply_taskbar_defaults_if_needed(c);
+  if (!section_widgets_configured(merged, "panel")) apply_panel_defaults_if_needed(c);
   normalize_legacy_tray_tokens(c);
   dock_migrate_legacy_autosep_slots(c);
   dashboard_migrate_legacy_defaults(c);

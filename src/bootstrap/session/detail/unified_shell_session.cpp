@@ -420,11 +420,17 @@ void UnifiedShellSession::retry_deferred_child_respawns() {
 
   if (dockRespawnAtMs_ && now >= dockRespawnAtMs_) {
     dockRespawnAtMs_ = 0;
-    dockLastRestartMs_ = now;
-    const int pid = eh::shell::dock::dock_spawn_native_child();
-    if (pid > 1) {
-      dock_child_pid_ = pid;
-      debug_log("dock", "deferred respawn after cooldown pid=%d", pid);
+    // A deferred crash-respawn must not revive a dock the user disabled while
+    // it was pending.
+    if (!eh::config::shell_config_snapshot().dock.dockShowDock) {
+      debug_log("dock", "deferred respawn skipped: show_dock disabled");
+    } else {
+      dockLastRestartMs_ = now;
+      const int pid = eh::shell::dock::dock_spawn_native_child();
+      if (pid > 1) {
+        dock_child_pid_ = pid;
+        debug_log("dock", "deferred respawn after cooldown pid=%d", pid);
+      }
     }
   }
   if (desktopRespawnAtMs_ && now >= desktopRespawnAtMs_) {
@@ -447,12 +453,15 @@ void UnifiedShellSession::retry_deferred_child_respawns() {
   }
   if (panelRespawnAtMs_ && now >= panelRespawnAtMs_) {
     panelRespawnAtMs_ = 0;
-    if (!eh::config::shell_config_snapshot().panel.enabled) return;
-    panelLastRestartMs_ = now;
-    const int pid = eh::shell::panel::panel_spawn_native_child();
-    if (pid > 1) {
-      panel_child_pid_ = pid;
-      debug_log("panel", "deferred respawn after cooldown pid=%d", pid);
+    if (!eh::config::shell_config_snapshot().panel.enabled) {
+      debug_log("panel", "deferred respawn skipped: disabled");
+    } else {
+      panelLastRestartMs_ = now;
+      const int pid = eh::shell::panel::panel_spawn_native_child();
+      if (pid > 1) {
+        panel_child_pid_ = pid;
+        debug_log("panel", "deferred respawn after cooldown pid=%d", pid);
+      }
     }
   }
   if (stageRespawnAtMs_ && now >= stageRespawnAtMs_) {
@@ -473,6 +482,9 @@ void UnifiedShellSession::sync_dock_child_with_enabled_setting() {
   if (!want) {
     if (dockEnabledApplied_) {
       dockEnabledApplied_ = false;
+      // Drop any pending crash-respawn so it can't revive the dock after the
+      // user turned it off.
+      dockRespawnAtMs_ = 0;
       if (dock_child_pid_ > 1) {
         std::cerr << "[dock] show_dock disabled; stopping dock child pid=" << dock_child_pid_ << "\n";
         (void)kill(dock_child_pid_, SIGTERM);
@@ -487,7 +499,13 @@ void UnifiedShellSession::sync_dock_child_with_enabled_setting() {
   }
   if (dockRespawnAtMs_) return;
   const uint64_t now = eh::shell::now_mono_ms();
-  if (now - dockLastRestartMs_ < kChildRespawnCooldownMs) return;
+  // A user-initiated (re-)enable bypasses the crash-loop cooldown: the
+  // cooldown exists to throttle unexpected deaths (still enforced on the
+  // SIGCHLD path), not intentional restarts. Without this, toggling the dock
+  // back on within 5s of its last start stalls for the remainder of the
+  // window on every idle flush.
+  const bool userEnable = !dockEnabledApplied_;
+  if (!userEnable && now - dockLastRestartMs_ < kChildRespawnCooldownMs) return;
 
   dockEnabledApplied_ = true;
   dockLastRestartMs_ = now;
@@ -505,6 +523,8 @@ void UnifiedShellSession::sync_panel_child_with_enabled_setting() {
   if (!want) {
     if (panelEnabledApplied_) {
       panelEnabledApplied_ = false;
+      // Same as dock: a pending crash-respawn must not revive the panel.
+      panelRespawnAtMs_ = 0;
       if (panel_child_pid_ > 1) {
         std::cerr << "[panel] disabled; stopping panel child pid=" << panel_child_pid_ << "\n";
         (void)kill(panel_child_pid_, SIGTERM);
@@ -519,7 +539,9 @@ void UnifiedShellSession::sync_panel_child_with_enabled_setting() {
   }
   if (panelRespawnAtMs_) return;
   const uint64_t now = eh::shell::now_mono_ms();
-  if (now - panelLastRestartMs_ < kChildRespawnCooldownMs) return;
+  // User-initiated (re-)enable bypasses the crash-loop cooldown (see dock).
+  const bool userEnable = !panelEnabledApplied_;
+  if (!userEnable && now - panelLastRestartMs_ < kChildRespawnCooldownMs) return;
 
   panelEnabledApplied_ = true;
   panelLastRestartMs_ = now;
@@ -1019,6 +1041,20 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
                 (sc.appearance.matugenMode == "light") ? "dark" : "light";
             if (eh::config::write_state_settings_toml(sc))
               eh::config::shell_config_apply_from_memory(std::move(sc));
+          } else if (payload == "settings.open") {
+            // Child → supervisor settings launch (see request_launch_settings
+            // delegation). Spawn here so horizon-settings is the supervisor's
+            // child: a direct spawn from e.g. horizon-dock would parent it to
+            // the dock, and turning the dock off would take settings down via
+            // PDEATHSIG.
+            debug_log("settings", "supervisor: settings.open received");
+            if (eh::settings::settings_singleton_running()) {
+              debug_log("settings", "supervisor: settings already running, publishing toggle");
+              if (ipc_service_) ipc_service_->publish("command.request", "settings.toggle");
+            } else {
+              debug_log("settings", "supervisor: spawning horizon-settings");
+              (void)eh::settings::spawn_settings();
+            }
           }
         });
   }

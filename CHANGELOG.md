@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Default Apps — file manager choice now owns FileManager1 too
+
+Browser "Open containing folder" and in-shell reveal actions call
+`org.freedesktop.FileManager1.ShowItems` over D-Bus, which ignores the
+`inode/directory` MIME handler — whichever app owned that bus name won no
+matter what Default Apps showed. Setting Horizon Files as file manager still
+opened Otter Files from browsers.
+
+- New `horizon-filemanager1` proxy (`src/services/filemanager1/`): owns
+  `org.freedesktop.FileManager1` and forwards ShowFolders/ShowItems/
+  ShowItemProperties to the configured default (component TOML first,
+  `xdg-mime query` fallback, `xdg-open`/`gio open` last resort), resolving
+  per call and expanding the target's Exec field codes.
+- Settings syncs a user-level `org.freedesktop.FileManager1.service`
+  override on every Default Apps apply (`settings_default_apps_filemanager1.cpp`):
+  removed when the choice is empty or natively provides the name (e.g.
+  Otter), installed pointing at the proxy otherwise; foreign overrides are
+  never touched.
+- File-manager MIME list now covers `inode/directory` and
+  `inode/mount-point`.
+- New `filemanager1_override` unit test.
+
 ### Taskbar — Optimization Pass: Pre-Scaled Icon Cache (Paint 11ms -> Blits)
 
 The phase breakdown named it: `paint=11-36ms` against `reload=0.0`,

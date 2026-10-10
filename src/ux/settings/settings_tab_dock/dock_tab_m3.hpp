@@ -19,6 +19,7 @@
 #include "ux/settings/common/settings_common.hpp"
 #include "ux/settings/settings_serialize.hpp"
 #include "ux/settings/utils/widget_picker/settings_widget_drag.hpp"
+#include "ux/settings/utils/widget_defaults/settings_widget_defaults.hpp"
 #include "ux/settings/utils/helpers/material_glyphs.hpp"
 #include "ux/settings/utils/helpers/settings_slider_appliers.hpp"
 
@@ -393,6 +394,32 @@ struct DockTabM3State {
           addBtn.paint(cr);
         }
 
+        // Reset-to-defaults row below the tallest column (geometry shared with
+        // the pointer-down handler below).
+        {
+          double maxAddBottom = listY;
+          for (int rs = 0; rs < 3; ++rs) {
+            const auto& rws = *widgets_for_section_const(app, rs);
+            const double addBottom =
+                listY + static_cast<double>(rws.size()) * (kCardH + kCardGapV) + kCardGapV + 38.0;
+            if (addBottom > maxAddBottom) maxAddBottom = addBottom;
+          }
+          const double resetY = maxAddBottom + 12.0;
+          const bool hoverReset = (px >= cX && px < cX + cW && py >= resetY && py < resetY + 38.0);
+          m3::Button resetBtn;
+          resetBtn.setMinSize(0, 0);
+          resetBtn.setGlyph("restart_alt");
+          resetBtn.setLabel("Reset to defaults");
+          resetBtn.setGeometry(static_cast<float>(cX), static_cast<float>(resetY),
+                               static_cast<float>(cW), 38.0f);
+          resetBtn.setStyle(m3::Button::Style::Outlined);
+          resetBtn.setSize(m3::Button::Size::XS);
+          resetBtn.setAccentColor(a_r, a_g, a_b);
+          resetBtn.setOutlineColor(o_r, o_g, o_b);
+          resetBtn.setHovered(hoverReset);
+          resetBtn.paint(cr);
+        }
+
         // Drag ghost
         if (app.widgetDragging && app.widgetDragSection >= 0 && app.widgetDragFromIndex >= 0) {
           const double gx = app.pointerX - app.widgetDragGrabDx;
@@ -582,6 +609,36 @@ struct DockTabM3State {
       const double listY = colTop + 26.0;
       constexpr double kCardH = 54.0;
       constexpr double kCardGapV = 8.0;
+
+      // Reset-to-defaults row (geometry mirrors paint()).
+      {
+        double maxAddBottom = listY;
+        for (int rs = 0; rs < 3; ++rs) {
+          const auto& rws = *widgets_for_section_const(app, rs);
+          const double addBottom =
+              listY + static_cast<double>(rws.size()) * (kCardH + kCardGapV) + kCardGapV + 38.0;
+          if (addBottom > maxAddBottom) maxAddBottom = addBottom;
+        }
+        const double resetY = maxAddBottom + 12.0;
+        if (px >= cX && px < cX + cW && py >= resetY && py < resetY + 38.0) {
+          debug_log("settings", "dock widgets: reset to defaults");
+          namespace wd = eh::settings::widget_defaults;
+          app.settings.leftWidgets = wd::dock_left();
+          app.settings.centerWidgets = wd::dock_center();
+          app.settings.rightWidgets = wd::dock_right();
+          // Clear disabled slots for the restored ids (bar + global sets),
+          // or the union in patch_widget_slot_enabled_into_shell_config keeps
+          // them off. Other bars' sets are untouched.
+          auto& ds = app.settings.dockWidgetSlotsDisabled;
+          auto& gs = app.settings.widgetSlotsDisabled;
+          for (const auto& id : app.settings.leftWidgets) { ds.erase(id); gs.erase(id); }
+          for (const auto& id : app.settings.centerWidgets) { ds.erase(id); gs.erase(id); }
+          for (const auto& id : app.settings.rightWidgets) { ds.erase(id); gs.erase(id); }
+          save_settings(app.settings);
+          draw(app);
+          return true;
+        }
+      }
 
       for (int s = 0; s < 3; ++s) {
         const double colX = cX + static_cast<double>(s) * (colW + colGap);
