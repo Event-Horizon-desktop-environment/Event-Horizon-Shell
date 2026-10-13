@@ -8,6 +8,7 @@
 #include "desktop_shell/widgets/shared/slot_pill_style.hpp"
 #include "desktop_shell/widgets/battery/battery_paint.hpp"
 #include "desktop_shell/widgets/bluetooth/bluetooth_paint.hpp"
+#include "desktop_shell/widgets/layout/layout_paint.hpp"
 #include "desktop_shell/widgets/world_clock/world_clock_paint.hpp"
 
 namespace eh::shell::dock_slot_hooks {
@@ -53,6 +54,7 @@ using eh::widgets::dock_media_slot_width;
 using eh::widgets::dock_workspaces_slot_width;
 using eh::widgets::dock_battery_slot_width;
 using eh::widgets::dock_bluetooth_slot_width;
+using eh::widgets::dock_layout_slot_width;
 using eh::widgets::dock_world_clock_slot_width;
 
 using eh::widgets::paint_clock_slot;
@@ -66,6 +68,7 @@ using eh::widgets::paint_media_slot;
 using eh::widgets::paint_workspaces_slot;
 using eh::widgets::paint_battery_slot;
 using eh::widgets::paint_bluetooth_slot;
+using eh::widgets::paint_layout_slot;
 using eh::widgets::paint_world_clock_slot;
 
 using eh::widgets::workspace_activate_entry;

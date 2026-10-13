@@ -39,5 +39,6 @@ const char* dock_widget_material_ligature(const std::string& id) {
   if (id == "vpn" || eh::config::widget_implementation_type(id) == "vpn") return "vpn_key";
   if (id == "battery" || eh::config::widget_implementation_type(id) == "battery") return "battery_full";
   if (id == "bluetooth" || eh::config::widget_implementation_type(id) == "bluetooth") return "bluetooth";
+  if (id == "layout" || eh::config::widget_implementation_type(id) == "layout") return "grid_view";
   return "extension";
 }

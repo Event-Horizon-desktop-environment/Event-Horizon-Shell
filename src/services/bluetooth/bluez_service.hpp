@@ -21,6 +21,7 @@ class Message;
 }
 
 namespace eh::bt {
+class BluetoothAgent;
 
 enum class BluetoothDeviceKind {
   Unknown,
@@ -196,6 +197,11 @@ private:
   std::unique_ptr<sdbus::IProxy> objmgr_{};
   std::unique_ptr<sdbus::IProxy> adapter_proxy_{};
   std::string cached_adapter_path_{};
+  // BlueZ pairing agent. Never wired up before (dead code) — without it every
+  // SSP confirmation fails with "No agent available / Operation not permitted"
+  // and the D-Bus side surfaces AuthenticationFailed. NoInputNoOutput keeps
+  // headphone JustWorks pairing prompt-free in every process.
+  std::unique_ptr<BluetoothAgent> agent_;
 
   Snapshot snap_{};
   std::vector<DeviceInfo> devices_{};

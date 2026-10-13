@@ -38,6 +38,7 @@
 #include "desktop_shell/desktop/widgets/weather_fancy/fancy_weather_card_paint.hpp"
 #include "desktop_shell/widgets/popup/volume_mixer/volume_mixer_popup.hpp"
 #include "desktop_shell/widgets/popup/vpn/vpn_popup.hpp"
+#include "desktop_shell/widgets/popup/layout/layout_popup.hpp"
 #include "desktop_shell/widgets/popup/media_player/media_player_popup.hpp"
 #include "desktop_shell/widgets/battery/battery_paint.hpp"
 #include "desktop_shell/widgets/bluetooth/bluetooth_paint.hpp"
@@ -102,6 +103,7 @@ static const char* dock_popup_layer_namespace_for_kind(DockApp::PopupKind kind) 
       return eh::shell::kPopupNamespace;
     case DockApp::PopupKind::Vpn:
     case DockApp::PopupKind::Battery:
+    case DockApp::PopupKind::Layout:
       return eh::shell::kPopupNamespace;
     case DockApp::PopupKind::PowerConfirm:
       return eh::shell::kPopupNamespace;
@@ -216,6 +218,7 @@ bool dock_popup_create_layer_surface_ex(DockApp& app, int anchorLocalX, wl_outpu
                         app.popupKind == DockApp::PopupKind::VolumeMixer ||
                         app.popupKind == DockApp::PopupKind::Vpn ||
                         app.popupKind == DockApp::PopupKind::Battery ||
+                        app.popupKind == DockApp::PopupKind::Layout ||
                         app.popupKind == DockApp::PopupKind::PowerConfirm);
   cfg.keyboard = wantKbd ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND
                          : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
@@ -1057,6 +1060,23 @@ void popup_open_bluetooth(DockApp& app, int anchorX, uint32_t serial) {
   app.popupKind = DockApp::PopupKind::Bluetooth;
   app.popupW = eh::widgets::kBluetoothPopupW;
   app.popupH = eh::widgets::bluetooth_popup_height();
+  app.popupAnchorX = anchorX;
+  app.popupItems.clear();
+  app.popupOpen = true;
+  if (!app.configured) { app.popupOpen = false; app.popupKind = DockApp::PopupKind::None; return; }
+  if (!app.compositor || !app.layerShell) { app.popupOpen = false; app.popupKind = DockApp::PopupKind::None; return; }
+  (void)serial;
+  if (!dock_popup_create_layer_surface(app, anchorX)) { popup_close(app); return; }
+  wl_display_flush(app.display);
+}
+
+void popup_open_layout(DockApp& app, int anchorX, uint32_t serial) {
+   
+  popup_close(app);
+  if (app.display) (void)wl_display_roundtrip(app.display);
+  app.popupKind = DockApp::PopupKind::Layout;
+  app.popupW = eh::shell::dock::popup::layout::kLayoutPopupW;
+  app.popupH = eh::shell::dock::popup::layout::layout_popup_height();
   app.popupAnchorX = anchorX;
   app.popupItems.clear();
   app.popupOpen = true;

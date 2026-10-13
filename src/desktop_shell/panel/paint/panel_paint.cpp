@@ -88,7 +88,7 @@ bool panel_widget_blocked(const PanelApp& app, const eh::config::ShellConfig& sc
   return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" ||
          impl == "workspaces" || impl == "control_center" || impl == "notifications" ||
          impl == "volume_mixer" || impl == "battery" || impl == "bluetooth" || impl == "vpn" ||
-         impl == "overview";
+         impl == "layout" || impl == "overview";
 }
 
 Kind panel_kind_for_token(const std::string& wid) {
@@ -104,6 +104,7 @@ Kind panel_kind_for_token(const std::string& wid) {
   if (impl == "world_clock") return Kind::WorldClock;
   if (impl == "volume_mixer") return Kind::VolumeMixer;
   if (impl == "vpn") return Kind::Vpn;
+  if (impl == "layout") return Kind::Layout;
   if (impl == "overview") return Kind::Overview;
   if (impl == "smenu") return Kind::Smenu;
   if (impl == "trash") return Kind::Trash;
@@ -133,6 +134,8 @@ double panel_slot_width_uncached(PanelApp& app, const eh::config::ShellConfig& s
       return eh::shell::dock_slot_hooks::dock_battery_slot_width(nullptr, sc, s.key, icon, boxH);
     case Kind::Bluetooth:
       return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, sc, s.key, icon, boxH);
+    case Kind::Layout:
+      return eh::shell::dock_slot_hooks::dock_layout_slot_width(nullptr, sc, s.key, icon, boxH);
     case Kind::WorldClock:
       return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, sc, s.key, icon, boxH);
     case Kind::Separator:
@@ -480,6 +483,11 @@ void panel_paint_widget_bar(PanelApp& app, cairo_t* cr, double x, double y, doub
       } else if (s.kind == Kind::Bluetooth) {
         eh::shell::dock_slot_hooks::paint_bluetooth_slot(cr, sc, s.key, ix, slotY, slotW, icon, icon, hovered,
                                                          pressed);
+        if (hovered) hover_overlay(ix, slotY, slotW);
+        drew = true;
+      } else if (s.kind == Kind::Layout) {
+        eh::shell::dock_slot_hooks::paint_layout_slot(cr, sc, s.key, ix, slotY, slotW, icon, icon, hovered,
+                                                      pressed);
         if (hovered) hover_overlay(ix, slotY, slotW);
         drew = true;
       } else if (s.kind == Kind::WorldClock) {

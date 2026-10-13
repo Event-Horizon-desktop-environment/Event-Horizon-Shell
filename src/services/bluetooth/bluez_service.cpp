@@ -1,5 +1,6 @@
 #include "services/bluetooth/bluez_service.hpp"
 
+#include "services/bluetooth/bluetooth_agent.hpp"
 #include "configuration/shell_config.hpp"
 #include "platform/radio_block.h"
 #include "desktop_shell/common/log/debug_log.hpp"
@@ -16,7 +17,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fcntl.h>
 #include <sys/eventfd.h>
+#include <sys/file.h>
 #include <unistd.h>
 #include <filesystem>
 #include <fstream>
@@ -117,6 +120,91 @@ DeviceInfo make_device(const sdbus::ObjectPath& path, const IfaceProps& props) {
   return d;
 }
 
+// Serializes Pair/Connect D-Bus calls across processes. Every shell process
+// (dock/taskbar/stage/settings) runs its own BluezService + auto-reconnect
+// worker, so a manual Pair in settings can otherwise collide with a background
+// Connect from another process on the same device — BlueZ answers the loser
+// with AuthenticationRejected (seen 12:06:40). Manual ops take the lock
+// blocking; auto-reconnect takes it non-blocking and skips on contention.
+std::string bt_op_lock_path() {
+  std::string toml;
+  try {
+    toml = eh::config::state_component_toml_path("bluetooth");
+  } catch (...) {
+    toml.clear();
+  }
+  if (toml.empty()) {
+    const char* xdg = std::getenv("XDG_STATE_HOME");
+    std::string base;
+    if (xdg && xdg[0])
+      base = std::string(xdg) + "/event-horizon";
+    else if (const char* h = std::getenv("HOME"))
+      base = std::string(h) + "/.local/state/event-horizon";
+    else
+      base = "/tmp/event-horizon";
+    toml = base + "/bluetooth/bluetooth.toml";
+  }
+  const auto slash = toml.find_last_of('/');
+  const std::string dir =
+      (slash == std::string::npos) ? toml : toml.substr(0, slash);
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  return dir + "/bt-op.lock";
+}
+
+int acquire_bt_op_lock(bool blocking) {
+  const std::string path = bt_op_lock_path();
+  const int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
+  if (fd < 0) return -1;
+  const int op = LOCK_EX | (blocking ? 0 : LOCK_NB);
+  if (::flock(fd, op) != 0) {
+    ::close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+void release_bt_op_lock(int fd) {
+  if (fd < 0) return;
+  ::flock(fd, LOCK_UN);
+  ::close(fd);
+}
+
+struct BtFreshState {
+  bool ok = false;
+  bool paired = false;
+  bool connected = false;
+  std::string address;
+};
+
+// Best-effort fresh read straight from BlueZ (no cached state, no mtx_).
+// Lets a worker correct a stale UI decision (Pair vs Connect) and lets a
+// failed op detect "connected anyway" instead of reporting an error.
+BtFreshState read_bt_device_fresh(const std::string& path) {
+  BtFreshState st;
+  try {
+    auto bus = sdbus::createSystemBusConnection();
+    auto dev = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{path});
+    try {
+      st.paired = dev->getProperty("Paired").onInterface(kDevice).get<bool>();
+    } catch (...) {
+    }
+    try {
+      st.connected =
+          dev->getProperty("Connected").onInterface(kDevice).get<bool>();
+    } catch (...) {
+    }
+    try {
+      st.address =
+          dev->getProperty("Address").onInterface(kDevice).get<std::string>();
+    } catch (...) {
+    }
+    st.ok = true;
+  } catch (...) {
+  }
+  return st;
+}
+
 }
 
 BluezService& BluezService::instance() {
@@ -170,6 +258,25 @@ void BluezService::start() {
     }
     bind_signals_locked();
     refresh_locked();
+    try {
+      agent_ = std::make_unique<BluetoothAgent>(*bus_);
+      debug_log("bluetooth", "agent registered (NoInputNoOutput)");
+    } catch (const std::exception& e) {
+      debug_log("bluetooth", "agent FAILED: %s", e.what());
+    }
+    // Pairing is impossible while the adapter itself is not pairable
+    // (bluetoothctl showed `Pairable: no`). Best-effort, off-thread.
+    {
+      std::string adapter = snap_.adapter_path;
+      std::thread([adapter]() {
+        try {
+          auto bus = sdbus::createSystemBusConnection();
+          auto proxy = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{adapter});
+          proxy->setProperty("Pairable").onInterface(kAdapter).toValue(true);
+        } catch (...) {
+        }
+      }).detach();
+    }
     bus_->enterEventLoopAsync();
     worker_ = std::thread([this]() { auto_reconnect_worker(); });
   } catch (const std::exception& e) {
@@ -663,6 +770,9 @@ bool BluezService::auto_reconnect() const noexcept {
 // Caller must hold mtx_.
 void BluezService::mark_connected_locked(const std::string& address) {
   if (address.empty()) return;
+  // A live connection moots any prior Pair/Connect error banner (the 12:06:40
+  // race showed "Pair failed: AuthenticationRejected" while Connected=1).
+  if (!last_error_.empty()) last_error_.clear();
   bool changed = false;
   if (everConnected_.insert(address).second) changed = true;
   if (last_connected_address_ != address) {
@@ -739,6 +849,25 @@ void BluezService::attempt_auto_reconnects() {
   }
 
   for (const auto& c : candidates) {
+    // A manual Pair/Connect in another process holds this lock for the whole
+    // D-Bus round-trip; skip instead of colliding into AuthenticationRejected.
+    const int lock_fd = acquire_bt_op_lock(false);
+    if (lock_fd < 0) {
+      debug_log("bluetooth", "auto-reconnect %s skipped (op in progress)",
+                c.address.c_str());
+      continue;
+    }
+    // Cached state may be stale: re-read before paging. Another process may
+    // have just connected/paired it.
+    const BtFreshState fresh = read_bt_device_fresh(c.path);
+    if (fresh.ok && (fresh.connected || !fresh.paired)) {
+      release_bt_op_lock(lock_fd);
+      const auto after = std::chrono::steady_clock::now();
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
+      if (fresh.connected && !c.address.empty()) mark_connected_locked(c.address);
+      reconnectCooldown_[c.address] = after + std::chrono::seconds(60);
+      continue;
+    }
     std::string attempt_err;
     try {
       // Fresh connection per attempt: never touch the shared bus_/objmgr_
@@ -751,6 +880,7 @@ void BluezService::attempt_auto_reconnects() {
     } catch (const std::exception& e) {
       attempt_err = e.what();
     }
+    release_bt_op_lock(lock_fd);
     if (attempt_err.empty())
       debug_log("bluetooth", "auto-reconnect %s ok", c.address.c_str());
     else
@@ -952,6 +1082,7 @@ void BluezService::run_device_method_async(std::string path, std::string method,
   std::thread([this, path = std::move(path), method = std::move(method), mark_connecting]() {
     std::string err;
     std::string addr;
+    std::string effective = method;
     {
       std::lock_guard<std::recursive_mutex> lock(mtx_);
       for (const auto& d : devices_) {
@@ -961,33 +1092,121 @@ void BluezService::run_device_method_async(std::string path, std::string method,
         }
       }
     }
+    // Serialize with auto-reconnect workers in other processes (blocking:
+    // this is already off the UI thread and shows a spinner).
+    const int lock_fd = acquire_bt_op_lock(true);
+    // Paging while a scan is active destabilizes many adapters (the 12:26:23
+    // Pair succeeded with scanning=1, then dropped 6s later). Stop the scan
+    // first; it is cheap to restart from the UI.
+    {
+      std::string adapter;
+      {
+        std::lock_guard<std::recursive_mutex> lock(mtx_);
+        adapter = snap_.adapter_path;
+      }
+      if (!adapter.empty() && (effective == "Pair" || effective == "Connect")) {
+        std::lock_guard<std::mutex> dlock(discovery_mtx_);
+        if (discovery_bus_) {
+          try {
+            auto proxy =
+                sdbus::createProxy(*discovery_bus_, kBluez, sdbus::ObjectPath{adapter});
+            proxy->callMethod("StopDiscovery")
+                .onInterface(kAdapter)
+                .withTimeout(std::chrono::seconds(5));
+            debug_log("bluetooth", "StopDiscovery before %s ok", effective.c_str());
+          } catch (const std::exception& e) {
+            debug_log("bluetooth", "StopDiscovery before %s: %s", effective.c_str(),
+                      e.what());
+          }
+        }
+        std::lock_guard<std::recursive_mutex> lock(mtx_);
+        if (snap_.scanning) {
+          snap_.scanning = false;
+          fire_change_locked();
+        }
+      }
+    }
+    // Correct stale UI decisions against live BlueZ state before paging.
+    {
+      const BtFreshState fresh = read_bt_device_fresh(path);
+      if (fresh.ok) {
+        if (!fresh.address.empty()) addr = fresh.address;
+        if (effective == "Pair" && fresh.paired) {
+          debug_log("bluetooth", "%s %s already paired -> Connect instead",
+                    method.c_str(), path.c_str());
+          effective = "Connect";
+        }
+        if (effective == "Connect" && fresh.connected) {
+          debug_log("bluetooth", "%s %s already connected -> ok", method.c_str(),
+                    path.c_str());
+          release_bt_op_lock(lock_fd);
+          std::lock_guard<std::recursive_mutex> lock(mtx_);
+          if (mark_connecting) set_connecting_locked(path, false);
+          if (!addr.empty()) mark_connected_locked(addr);
+          fire_change_locked();
+          mark_refresh_needed();
+          return;
+        }
+      }
+    }
     try {
       // Fresh bus per operation: the shared bus_/objmgr_ proxies stay on the
       // service/event-loop threads, and the UI thread never blocks here.
       auto bus = sdbus::createSystemBusConnection();
+      if (effective == "Pair") {
+        // Belt and braces: pairing is rejected while the adapter itself is
+        // not pairable (seen `Pairable: no` + `No agent available`).
+        try {
+          std::string adapter;
+          {
+            std::lock_guard<std::recursive_mutex> lock(mtx_);
+            adapter = snap_.adapter_path;
+          }
+          if (!adapter.empty()) {
+            auto ap = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{adapter});
+            ap->setProperty("Pairable").onInterface(kAdapter).toValue(true);
+          }
+        } catch (...) {
+        }
+      }
       auto dev = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{path});
-      dev->callMethod(method).onInterface(kDevice).withTimeout(std::chrono::seconds(25));
+      dev->callMethod(effective).onInterface(kDevice).withTimeout(std::chrono::seconds(25));
     } catch (const sdbus::Error& e) {
       err = e.what();
     } catch (const std::exception& e) {
       err = e.what();
     }
+    // A failed op can still leave a usable bond (cross-process Pair vs
+    // Connect race). Only suppress the error when BlueZ shows a real bond:
+    // Connected AND Paired. Connected-alone with Paired=no is the classic
+    // "headphones not in pairing mode" pattern (brief link, then drop ~2s
+    // later) and must keep its error banner.
+    if (!err.empty() && (effective == "Pair" || effective == "Connect")) {
+      const BtFreshState after = read_bt_device_fresh(path);
+      if (after.ok && after.connected && after.paired) {
+        debug_log("bluetooth", "%s %s failed but device bonded+connected -> ok",
+                  effective.c_str(), path.c_str());
+        err.clear();
+        if (!after.address.empty()) addr = after.address;
+      }
+    }
+    release_bt_op_lock(lock_fd);
     {
       std::lock_guard<std::recursive_mutex> lock(mtx_);
       if (mark_connecting) set_connecting_locked(path, false);
-      debug_log("bluetooth", "%s %s %s", method.c_str(), path.c_str(),
+      debug_log("bluetooth", "%s %s %s", effective.c_str(), path.c_str(),
                   err.empty() ? "ok" : ("FAILED: " + err).c_str());
       if (!err.empty()) {
-        set_last_error_locked(method + " failed: " + err);
+        set_last_error_locked(effective + " failed: " + err);
         // Back off this device for a bit so auto-reconnect doesn't hammer it.
         if (!addr.empty())
           reconnectCooldown_[addr] = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-      } else if (method == "Connect" && !addr.empty()) {
+      } else if (effective == "Connect" && !addr.empty()) {
         mark_connected_locked(addr);
       }
       fire_change_locked();
     }
-    if (err.empty() && method == "Pair") {
+    if (err.empty() && effective == "Pair") {
       // Best-effort: trust freshly paired devices so later auto-reconnects and
       // incoming connections work without another prompt.
       try {

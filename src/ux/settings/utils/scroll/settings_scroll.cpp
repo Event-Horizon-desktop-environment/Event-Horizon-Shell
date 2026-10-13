@@ -20,6 +20,7 @@
 #include "ux/settings/settings_tab_autostart/settings_tab_autostart.hpp"
 #include "ux/settings/settings_tab_wallpaper/settings_tab_wallpaper.hpp"
 #include "ux/settings/settings_tab_appearance/settings_tab_appearance.hpp"
+#include "ux/settings/settings_tab_bluetooth/settings_tab_bluetooth.hpp"
 #include "ux/settings/settings_tab_mango/settings_tab_mango.hpp"
 #include "ux/settings/settings_tab_hyprland/settings_tab_hyprland.hpp"
 #include "ux/settings/settings_tab_launcher/settings_tab_launcher.hpp"
@@ -521,6 +522,12 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
     const int step = static_cast<int>(std::lround(delta_px));
     if (step == 0) return;
     app.settingsBluetoothScrollPx = std::max(0, app.settingsBluetoothScrollPx - step);
+    {
+      const int viewH = app.height - kContentTop - kSpacingL;
+      const int maxScroll =
+          std::max(0, bluetooth_tab_content_bottom() + kSpacingL - viewH);
+      app.settingsBluetoothScrollPx = std::clamp(app.settingsBluetoothScrollPx, 0, maxScroll);
+    }
     settings_scroll_sync_after_clamp(app);
     scroll_draw(app);
     return;

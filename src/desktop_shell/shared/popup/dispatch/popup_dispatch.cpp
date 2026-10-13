@@ -10,6 +10,7 @@
 #include "desktop_shell/widgets/popup/volume_mixer/volume_mixer_popup.hpp"
 #include "desktop_shell/widgets/popup/media_player/media_player_popup.hpp"
 #include "desktop_shell/widgets/popup/vpn/vpn_popup.hpp"
+#include "desktop_shell/widgets/popup/layout/layout_popup.hpp"
 #include "desktop_shell/widgets/battery/battery_paint.hpp"
 #include "desktop_shell/widgets/bluetooth/bluetooth_paint.hpp"
 #include "desktop_shell/dock/input/dock_pick.hpp"
@@ -62,6 +63,10 @@ bool popup_handle_click(DockApp& app, double x, double y, uint32_t serial) {
     case DockApp::PopupKind::Bluetooth:
       eh::widgets::dock_bluetooth_popup_handle_click(app, x, y, serial);
       app.popupDismissedThisPress = DockApp::PopupKind::Bluetooth;
+      break;
+    case DockApp::PopupKind::Layout:
+      eh::shell::dock::popup::layout::dock_layout_popup_handle_click(app, x, y, serial);
+      app.popupDismissedThisPress = DockApp::PopupKind::Layout;
       break;
     default:
       return false;
@@ -135,6 +140,7 @@ bool popup_handle_escape(DockApp& app) {
     case DockApp::PopupKind::Vpn:
     case DockApp::PopupKind::Battery:
     case DockApp::PopupKind::Bluetooth:
+    case DockApp::PopupKind::Layout:
       popup_close(app);
       wl_display_flush(app.display);
       return true;
@@ -157,6 +163,8 @@ bool popup_keep_open_for_slot(DockApp::PopupKind kind, int slotKind, const std::
       return slotKind == static_cast<int>(PickSlot::Kind::Battery);
     case PK::Bluetooth:
       return slotKind == static_cast<int>(PickSlot::Kind::Bluetooth);
+    case PK::Layout:
+      return slotKind == static_cast<int>(PickSlot::Kind::Layout);
     case PK::AppMenu:
       return slotKind == static_cast<int>(PickSlot::Kind::AppMenu) ||
              slotKind == static_cast<int>(PickSlot::Kind::AppDrawer) ||
@@ -193,6 +201,9 @@ bool popup_dispatch_paint(DockApp& app, cairo_t* cr) {
       break;
     case DockApp::PopupKind::Bluetooth:
       eh::widgets::dock_bluetooth_popup_paint(app.pointerX, app.pointerY, cr, sc);
+      break;
+    case DockApp::PopupKind::Layout:
+      eh::shell::dock::popup::layout::dock_layout_popup_paint(app, cr, sc);
       break;
     default:
       return false;
@@ -245,6 +256,14 @@ bool popup_dispatch_slot(DockApp& app, int slotKind, int slotCenterX, uint32_t s
         return true;
       }
       popup_open_bluetooth(app, slotCenterX, serial);
+      return true;
+    case PK::Layout:
+      if (dismissed_this_press(DockApp::PopupKind::Layout)) return true;
+      if (app.popupOpen && app.popupKind == DockApp::PopupKind::Layout) {
+        popup_close(app);
+        return true;
+      }
+      popup_open_layout(app, slotCenterX, serial);
       return true;
     case PK::ControlCenter:
       if (dismissed_this_press(DockApp::PopupKind::ControlCenter)) return true;

@@ -351,6 +351,21 @@ These open as separate popup surfaces when their inline widget is clicked. Each 
 - `vpn_popup_remove_entry(idx)` - removes connection via NetworkManager
 - `dock_vpn_popup_handle_click(app, lx, ly)` - handles close, remove, connect/disconnect buttons
 
+### `popup/layout/layout_popup.hpp` + `layout_popup.cpp` + `layout_popup.tpp`
+
+**Constants:** `kLayoutPopupW = 320`. Single column of full rows (icon tile + title + description + check) for a handful of layouts; two-column grid of compact cells (icon tile + title + check) when there are more than 6 (MangoWM's 14).
+
+**Geometry:** `layout_popup_size()` / `layout_popup_cell_rect()` / `layout_popup_close_rect()` in `layout_popup.hpp` are shared by paint and click, so the two can never disagree.
+
+**Functions:**
+- `dock_layout_popup_paint(app, cr, config)` - renders header + one cell per backend layout (Hyprland header vs MangoWM header)
+- `layout_popup_click_action(x, y)` - hit-tests close button + cells; applying a cell calls `layout_apply()` (Hyprland: live `keyword general:layout` + persisted `write_general`; MangoWM: live `dispatch setlayout,<name>`)
+- `dock_layout_popup_handle_click(app, lx, ly)` - Close closes, cell click applies + redraws
+
+**Slot:** `layout/layout_paint.hpp` (`layout_backend()`, `layout_current()`, `layout_apply()`, `dock_layout_slot_width()`, `paint_layout_slot()`) - icon-only pill showing the active layout glyph. Backend picked via `detect_compositor_kind()`: Hyprland offers dwindle/master/scrolling/monocle, MangoWM offers the wiki's 14 layouts with tile first. Debug override via `EH_LAYOUT_DEBUG`.
+
+**Data source:** Hyprland IPC (`keyword` / `getoption general:layout`) with fallback to the managed hyprland config (`general.layout`); MangoWM IPC (`dispatch setlayout,<name>`, live state probed via `get all-monitors` / `get all-tags`, fallback to last-applied default `tile`).
+
 ### `popup/weather/weather_popup.hpp` (39 lines) + `weather_popup.cpp` (12 lines)
 
 **Constants:** `kWeatherPopupW = 360`, `kWeatherPopupH = 360`
@@ -373,3 +388,4 @@ These open as separate popup surfaces when their inline widget is clicked. Each 
 | **Spacer** | `dock_spacer_slot_width` | `paint_spacer_slot` | -- | No data |
 | **Volume Mixer** | (control center) | (control center) | `volume_mixer_popup` | PipeWire via `pipewire_service.hpp` |
 | **VPN** | (control center) | (control center) | `vpn_popup` | NetworkManager via `network_manager_service.hpp` |
+| **Window Layout** | `dock_layout_slot_width` | `paint_layout_slot` | `layout_popup` | Hyprland IPC (`general:layout`) + config; MangoWM IPC (`setlayout`) |

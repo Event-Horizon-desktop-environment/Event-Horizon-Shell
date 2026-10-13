@@ -23,6 +23,7 @@ enum class PanelPopupKind : std::uint8_t {
   Battery = 7,
   MediaPlayer = 8,
   Bluetooth = 9,
+  Layout = 10,
 };
 
 struct PanelPopupItem {

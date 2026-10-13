@@ -1000,7 +1000,7 @@ void embed_maximize_toggle() {
 void embed_show_tab(int tab_index) {
    
   if (!g_embed) return;
-  const int tab = std::clamp(tab_index, 0, 48);
+  const int tab = std::clamp(tab_index, 0, 51);
   if (embed_window_visible()) {
     g_embed->activeTab = tab;
     draw(*g_embed);

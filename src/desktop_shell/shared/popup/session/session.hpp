@@ -44,6 +44,7 @@ void popup_open_media_player(DockApp& app, int anchorX, uint32_t serial);
 void popup_open_vpn(DockApp& app, int anchorX, uint32_t serial);
 void popup_open_battery(DockApp& app, int anchorX, uint32_t serial);
 void popup_open_bluetooth(DockApp& app, int anchorX, uint32_t serial);
+void popup_open_layout(DockApp& app, int anchorX, uint32_t serial);
 void popup_open_for_app(DockApp& app, const std::string& appKey, zwlr_foreign_toplevel_handle_v1* chosenHandle,
                         int anchorX, int anchorY, uint32_t serial);
 

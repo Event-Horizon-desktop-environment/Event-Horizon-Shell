@@ -26,6 +26,8 @@
 #include "desktop_shell/widgets/popup/weather/weather_popup.hpp"
 #include "desktop_shell/widgets/popup/volume_mixer/volume_mixer_popup.hpp"
 #include "desktop_shell/widgets/popup/vpn/vpn_popup.hpp"
+#include "desktop_shell/widgets/popup/layout/layout_popup.hpp"
+#include "desktop_shell/widgets/layout/layout_paint.hpp"
 #include "desktop_shell/desktop/widgets/weather_fancy/fancy_weather_card_paint.hpp"
 #include "desktop_shell/controlcenter/paint/control_center_popup_paint.hpp"
 #include "desktop_shell/controlcenter/layout/control_center_panel_geometry.hpp"
@@ -274,6 +276,19 @@ void panel_pointer_button(void* data, wl_pointer*, std::uint32_t, std::uint32_t,
         panel_popup_draw(app);
         return;
       }
+    }
+    if (state == WL_POINTER_BUTTON_STATE_RELEASED && app.popupKind == PanelPopupKind::Layout) {
+      switch (eh::shell::dock::popup::layout::layout_popup_click_action(app.pointerX, app.pointerY)) {
+        case eh::shell::dock::popup::layout::LayoutPopupClick::Close:
+          panel_popup_close(app);
+          break;
+        case eh::shell::dock::popup::layout::LayoutPopupClick::Redraw:
+          panel_popup_draw(app);
+          break;
+        case eh::shell::dock::popup::layout::LayoutPopupClick::None:
+          break;
+      }
+      return;
     }
     return;
   }
@@ -974,6 +989,8 @@ std::string panel_tooltip_text_for(const PanelApp& app, int slotIdx) {
       return "Volume";
     case PanelPaintSlot::Kind::Vpn:
       return "VPN";
+    case PanelPaintSlot::Kind::Layout:
+      return std::string("Window Layout: ") + eh::widgets::layout_title_for(eh::widgets::layout_current());
     case PanelPaintSlot::Kind::Tray:
       return "Tray";
     case PanelPaintSlot::Kind::Settings:
@@ -1312,6 +1329,14 @@ void panel_open_popup_for_slot(PanelApp& app, const PanelWidgetHit& hit, PanelPa
         panel_popup_draw(app);
       return;
     }
+    case PanelPaintSlot::Kind::Layout: {
+      if (panel_toggle_closed(app, PanelPopupKind::Layout)) return;
+      if (panel_popup_open(app, PanelPopupKind::Layout, anchorX,
+                           eh::shell::dock::popup::layout::kLayoutPopupW,
+                           eh::shell::dock::popup::layout::layout_popup_height()))
+        panel_popup_draw(app);
+      return;
+    }
     case PanelPaintSlot::Kind::Tray: {
       const PanelTrayItem* ti = nullptr;
       {
@@ -1577,6 +1602,8 @@ void panel_popup_draw(PanelApp& app) {
     eh::widgets::popup::volume_mixer::volume_mixer_popup_paint(app, cr, sc);
   } else if (app.popupKind == PanelPopupKind::Vpn) {
     eh::widgets::popup::vpn::vpn_popup_paint(app, cr, sc);
+  } else if (app.popupKind == PanelPopupKind::Layout) {
+    eh::widgets::popup::layout::layout_popup_paint(app, cr, sc);
   } else if (app.popupKind == PanelPopupKind::Tray && !app.popupItems.empty()) {
     cairo_select_font_face(cr, "Inter", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr, 13.0);
@@ -1617,6 +1644,9 @@ void panel_popup_draw(PanelApp& app) {
         break;
       case PanelPopupKind::Vpn:
         title = "VPN";
+        break;
+      case PanelPopupKind::Layout:
+        title = "Layout";
         break;
       case PanelPopupKind::MediaPlayer:
         title = "Media";

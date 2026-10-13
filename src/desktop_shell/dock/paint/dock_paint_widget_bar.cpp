@@ -251,6 +251,11 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       bt.kind = Slot::Kind::Bluetooth;
       bt.key = wid;
       out.push_back(std::move(bt));
+    } else if (eh::config::widget_implementation_type(wid) == "layout") {
+      Slot lo;
+      lo.kind = Slot::Kind::Layout;
+      lo.key = wid;
+      out.push_back(std::move(lo));
     } else if (eh::config::widget_implementation_type(wid) == "world_clock") {
       Slot wcs;
       wcs.kind = Slot::Kind::WorldClock;
@@ -307,6 +312,9 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
     }
     if (s.kind == Slot::Kind::Bluetooth) {
       return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, scPaint, s.key, icon, boxH);
+    }
+    if (s.kind == Slot::Kind::Layout) {
+      return eh::shell::dock_slot_hooks::dock_layout_slot_width(nullptr, scPaint, s.key, icon, boxH);
     }
     if (s.kind == Slot::Kind::WorldClock) {
       return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, scPaint, s.key, icon, boxH);
@@ -418,6 +426,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         case Slot::Kind::Vpn: r.kind = "vpn"; break;
         case Slot::Kind::Battery: r.kind = "battery"; break;
         case Slot::Kind::Bluetooth: r.kind = "bluetooth"; break;
+        case Slot::Kind::Layout: r.kind = "layout"; break;
         case Slot::Kind::WorldClock: r.kind = "world_clock"; break;
         case Slot::Kind::Overview: r.kind = "overview"; break;
         case Slot::Kind::Separator: r.kind = "separator"; break;
@@ -581,7 +590,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
           s.kind != Slot::Kind::Weather &&
           s.kind != Slot::Kind::Media &&           s.kind != Slot::Kind::Workspaces && s.kind != Slot::Kind::ControlCenter &&
           s.kind != Slot::Kind::VolumeMixer && s.kind != Slot::Kind::Vpn && s.kind != Slot::Kind::Battery &&
-          s.kind != Slot::Kind::Bluetooth &&          s.kind != Slot::Kind::Settings &&
+          s.kind != Slot::Kind::Bluetooth && s.kind != Slot::Kind::Layout &&          s.kind != Slot::Kind::Settings &&
           s.kind != Slot::Kind::Spotlight && s.kind != Slot::Kind::AppDrawer &&
           s.kind != Slot::Kind::Smenu &&
           s.kind != Slot::Kind::Trash && s.kind != Slot::Kind::Overview &&
@@ -591,7 +600,7 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
       if (s.kind != Slot::Kind::Clock && s.kind != Slot::Kind::WorldClock &&
           s.kind != Slot::Kind::Weather && s.kind != Slot::Kind::Media && s.kind != Slot::Kind::Workspaces &&
           s.kind != Slot::Kind::VolumeMixer && s.kind != Slot::Kind::Vpn && s.kind != Slot::Kind::Battery &&
-          s.kind != Slot::Kind::Bluetooth &&          s.kind != Slot::Kind::ControlCenter &&
+          s.kind != Slot::Kind::Bluetooth && s.kind != Slot::Kind::Layout &&          s.kind != Slot::Kind::ControlCenter &&
           s.kind != Slot::Kind::Settings && s.kind != Slot::Kind::Spotlight &&
           s.kind != Slot::Kind::AppDrawer && s.kind != Slot::Kind::Smenu &&
           s.kind != Slot::Kind::Trash && s.kind != Slot::Kind::Overview && s.kind != Slot::Kind::AppMenu &&
@@ -881,6 +890,10 @@ void dock_paint_widget_bar(DockApp& app, cairo_t* cr, double x, double y, double
         drew = true;
       } else if (s.kind == Slot::Kind::Bluetooth) {
         eh::shell::dock_slot_hooks::paint_bluetooth_slot(cr, scPaint, s.key, ix, iconY + liftY, slotW, icon, icon, false, false);
+        if (cellHovered) hover_overlay();
+        drew = true;
+      } else if (s.kind == Slot::Kind::Layout) {
+        eh::shell::dock_slot_hooks::paint_layout_slot(cr, scPaint, s.key, ix, iconY + liftY, slotW, icon, icon, false, false);
         if (cellHovered) hover_overlay();
         drew = true;
       } else if (s.kind == Slot::Kind::Overview) {

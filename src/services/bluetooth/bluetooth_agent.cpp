@@ -19,7 +19,7 @@ const sdbus::ObjectPath kBluezRoot{"/org/bluez"};
 const sdbus::ObjectPath kAgentObjectPath{"/org/ehde/BluetoothAgent"};
 constexpr auto kAgentInterface = "org.bluez.Agent1";
 constexpr auto kAgentManagerInterface = "org.bluez.AgentManager1";
-constexpr auto kCapability = "KeyboardDisplay";
+constexpr auto kCapability = "NoInputNoOutput";
 
 const sdbus::Error::Name kErrRejected{"org.bluez.Error.Rejected"};
 const sdbus::Error::Name kErrCanceled{"org.bluez.Error.Canceled"};

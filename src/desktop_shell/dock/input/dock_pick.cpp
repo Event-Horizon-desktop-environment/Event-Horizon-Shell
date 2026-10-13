@@ -84,7 +84,8 @@ double dock_gap_after_pick(const DockSettings& st, const std::vector<PickSlot>& 
     return false;
   const std::string impl = eh::config::widget_implementation_type(widgetToken);
   return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" || impl == "control_center" ||
-         impl == "notifications" || impl == "volume_mixer" || impl == "app_drawer" || impl == "overview";
+         impl == "notifications" || impl == "volume_mixer" || impl == "app_drawer" || impl == "overview" ||
+         impl == "layout";
 }
 
 void dock_fill_pick_result_slots(DockApp& app, const eh::shell::shared::RunningSnapshot& hitSnap,
@@ -231,6 +232,11 @@ void dock_fill_pick_result_slots(DockApp& app, const eh::shell::shared::RunningS
       bt.kind = PickSlot::Kind::Bluetooth;
       bt.key = w;
       out.push_back(std::move(bt));
+    } else if (eh::config::widget_implementation_type(w) == "layout") {
+      PickSlot lo;
+      lo.kind = PickSlot::Kind::Layout;
+      lo.key = w;
+      out.push_back(std::move(lo));
     } else if (eh::config::widget_implementation_type(w) == "world_clock") {
       PickSlot wcs;
       wcs.kind = PickSlot::Kind::WorldClock;
@@ -299,6 +305,9 @@ double dock_pick_layout_total_width(const DockApp& app, const std::vector<PickSl
     if (s.kind == PickSlot::Kind::Bluetooth) {
       return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight));
     }
+    if (s.kind == PickSlot::Kind::Layout) {
+      return eh::shell::dock_slot_hooks::dock_layout_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight));
+    }
     if (s.kind == PickSlot::Kind::WorldClock) {
       return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, scPick, s.key, icon, static_cast<double>(app.dockHeight));
     }
@@ -342,6 +351,9 @@ DockStripGeom dock_compute_strip_geom(const DockApp& app, const DockPickResult& 
     }
     if (s.kind == PickSlot::Kind::Bluetooth) {
       return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, scPick, s.key, g.icon, static_cast<double>(app.dockHeight));
+    }
+    if (s.kind == PickSlot::Kind::Layout) {
+      return eh::shell::dock_slot_hooks::dock_layout_slot_width(nullptr, scPick, s.key, g.icon, static_cast<double>(app.dockHeight));
     }
     if (s.kind == PickSlot::Kind::WorldClock) {
       return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, scPick, s.key, g.icon, static_cast<double>(app.dockHeight));

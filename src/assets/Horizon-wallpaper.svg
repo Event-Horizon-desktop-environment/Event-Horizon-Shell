@@ -1,79 +1,121 @@
-<svg aria-labelledby="title desc" viewBox="0 0 200 200" height="200" width="200" xmlns="http://www.w3.org/2000/svg">
-  <title>Horizon Wallpaper Icon</title>
-  <desc id="desc">Minimalist horizon landscape with sunset, mountains, water reflections, enhanced sun glow + bloom, and rounded style.</desc>
-  
-  
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" xmlns:c2pa="http://c2pa.org/manifest"><metadata><c2pa:manifest>AAAWgmp1bWIAAAAeanVtZGMycGEAEQAQgAAAqgA4m3EDYzJwYQAAABZcanVtYgAAAEdqdW1kYzJtYQARABCAAACqADibcQN1cm46YzJwYToxMGFiMWY3Yy01OTcwLTQ5ZmMtYTFlMy0wY2UxNTU5NzIzYWEAAAADl2p1bWIAAAApanVtZGMyYXMAEQAQgAAAqgA4m3EDYzJwYS5hc3NlcnRpb25zAAAAALxqdW1iAAAARGp1bWRjYm9yABEAEIAAAKoAOJtxE2MycGEuaW5ncmVkaWVudC52MwAAAAAYYzJzaJPl4Nrv4OtiaiWBXI1YYzEAAABwY2JvcqNpZGM6Zm9ybWF0bWltYWdlL3N2Zyt4bWxqaW5zdGFuY2VJRHgseG1wOmlpZDowNzBlNDFkYi1lYzYwLTQzY2MtODU3My04M2ZlYTY1MjYzNmVscmVsYXRpb25zaGlwaHBhcmVudE9mAAAB4mp1bWIAAABBanVtZGNib3IAEQAQgAAAqgA4m3ETYzJwYS5hY3Rpb25zLnYyAAAAABhjMnNoxMZzNSyjCuxAvLpwzkvKqwAAAZljYm9yomdhY3Rpb25zgqJmYWN0aW9ua2MycGEub3BlbmVkanBhcmFtZXRlcnOha2luZ3JlZGllbnRzgaJjdXJseC1zZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmluZ3JlZGllbnQudjNkaGFzaFggwpSWN1cnE5FdjQF7gVm4ULJceqU/jVqjruheoEUm2rCkZmFjdGlvbngdY29tLmFudGhyb3BpYy5jbGF1ZGUucHJvdmlkZWRqcGFyYW1ldGVyc6F4H2NvbS5hbnRocm9waWMub3JpZ2luLWNvbmZpZGVuY2VndW5rbm93bmtkZXNjcmlwdGlvbnhmQ2xhdWRlIHByb3ZpZGVkIHRoaXMgZmlsZSBhdCB0aGUgcmVxdWVzdCBvZiBhIHVzZXIgYW5kIG1heSBoYXZlIGNyZWF0ZWQgb3IgbW9kaWZpZWQgdGhlIGZpbGUgY29udGVudHMubXNvZnR3YXJlQWdlbnShZG5hbWVmQ2xhdWRlcmFsbEFjdGlvbnNJbmNsdWRlZPUAAADIanVtYgAAAEBqdW1kY2JvcgARABCAAACqADibcRNjMnBhLmhhc2guZGF0YQAAAAAYYzJzaAHmcp41rm1eKywxUiUqevwAAACAY2JvcqVjYWxnZnNoYTI1NmNwYWRNAAAAAAAAAAAAAAAAAGRoYXNoWCCtZ9ddSBdwoNPq9j+oaZyLaTcuZLYHIHhPGNytMcxjEmRuYW1lbmp1bWJmIG1hbmlmZXN0amV4Y2x1c2lvbnOBomVzdGFydBi9Zmxlbmd0aBkeBAAAAj5qdW1iAAAAJ2p1bWRjMmNsABEAEIAAAKoAOJtxA2MycGEuY2xhaW0udjIAAAACD2Nib3KlY2FsZ2ZzaGEyNTZpc2lnbmF0dXJleE1zZWxmI2p1bWJmPS9jMnBhL3VybjpjMnBhOjEwYWIxZjdjLTU5NzAtNDlmYy1hMWUzLTBjZTE1NTk3MjNhYS9jMnBhLnNpZ25hdHVyZWppbnN0YW5jZUlEeCx4bXA6aWlkOjViMjBhYmFmLTE3YzgtNDVkYi1iNDM4LWZmYjBkZjU4YzkyNHJjcmVhdGVkX2Fzc2VydGlvbnODomN1cmx4LXNlbGYjanVtYmY9YzJwYS5hc3NlcnRpb25zL2MycGEuaW5ncmVkaWVudC52M2RoYXNoWCDClJY3VycTkV2NAXuBWbhQslx6pT+NWqOu6F6gRSbasKJjdXJseCpzZWxmI2p1bWJmPWMycGEuYXNzZXJ0aW9ucy9jMnBhLmFjdGlvbnMudjJkaGFzaFggMO+4XFBJx0mEVoTc/KJtQrlkSwK+jOcEXl72VtrG3jKiY3VybHgpc2VsZiNqdW1iZj1jMnBhLmFzc2VydGlvbnMvYzJwYS5oYXNoLmRhdGFkaGFzaFggn6gwp1ht5oJc+DQHbHwNBbqAhJLMTBWBzVIjVHQda1F0Y2xhaW1fZ2VuZXJhdG9yX2luZm+jZG5hbWVvQW50aHJvcGljIEZpbGVzZ3ZlcnNpb25lMS4wLjBrc3BlY1ZlcnNpb25lMi40LjAAABA4anVtYgAAAChqdW1kYzJjcwARABCAAACqADibcQNjMnBhLnNpZ25hdHVyZQAAABAIY2JvctKEWQISogEmGCFZAgowggIGMIIBjaADAgECAhRA5aAK7sI50L64g/oGQgU9Z1UTADAKBggqhkjOPQQDAzBJMRcwFQYDVQQKEw5BbnRocm9waWMsIFBCQzEuMCwGA1UEAxMlQW50aHJvcGljIENvbnRlbnQgQ3JlZGVudGlhbHMgUm9vdCBDQTAeFw0yNjA4MDcxODQzNTZaFw0yODA4MDYxOTQzNTZaMEQxFzAVBgNVBAoTDkFudGhyb3BpYywgUEJDMSkwJwYDVQQDEyBBbnRocm9waWMgQ2xhdWRlIENvbnRlbnQgU2lnbmluZzBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABJh6CmvLUBgFFNU0vUKlOVtE6djd17L5SuwX0LemFisBM3dkd/3cyjxFA3Qo5S46fX0/ihY0VZ7mfb9KF703t5OjWDBWMA4GA1UdDwEB/wQEAwIHgDAVBgNVHSUEDjAMBgorBgEEAYPoXgIBMAwGA1UdEwEB/wQCMAAwHwYDVR0jBBgwFoAUzlHiBIFOZFsj+OPEz5o+nMHXXMIwCgYIKoZIzj0EAwMDZwAwZAIwMXMdFJ4BetLLVY7ORuE9noqbbAZOZn/aArXyTwFAZfKrPzxF2vPoJNf1+UCdg1XGAjBwX1zd9WGqYkqmL5SFqw1QySjr1zJfpJM9+1rdDwSPLMOPOjKuiXjoU/pUUeG9RwmhY3BhZFkNngAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPZYQF5PtXLjmokm2TmCM5sZTpKpX5gWZwApzfZ7ZFNQ8ygdtxKuU7rzaJ9Ifkt+N6RpvGrWVSjcjPBlY6WX33qX07U=</c2pa:manifest></metadata>
+  <title>Live Wallpaper</title>
   <defs>
-    
-    <linearGradient y2="100%" x2="0%" y1="0%" x1="0%" id="skyGradient">
-      <stop stop-color="#FF6B4A" offset="0%"></stop>
-      <stop stop-color="#FF8C42" offset="35%"></stop>
-      <stop stop-color="#FFB74D" offset="55%"></stop>
-      <stop stop-color="#4A90E2" offset="78%"></stop>
-      <stop stop-color="#2C5F9E" offset="100%"></stop>
+    <linearGradient id="casing" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f1f4f8"/>
+      <stop offset="0.55" stop-color="#cfd6e1"/>
+      <stop offset="1" stop-color="#9ba7ba"/>
     </linearGradient>
-    
-    
-    <radialGradient fy="27%" fx="58%" r="38%" cy="32%" cx="65%" id="sunBloom1">
-      <stop stop-opacity="0.95" stop-color="#FFEE9E" offset="0%"></stop>
-      <stop stop-opacity="0.75" stop-color="#FFCC6E" offset="35%"></stop>
-      <stop stop-opacity="0.35" stop-color="#FF8C42" offset="65%"></stop>
-      <stop stop-opacity="0" stop-color="#FF6B4A" offset="100%"></stop>
+    <linearGradient id="bg" gradientUnits="userSpaceOnUse" x1="0" y1="60" x2="0" y2="452">
+      <stop offset="0" stop-color="#162052"/>
+      <stop offset="1" stop-color="#0a1024"/>
+    </linearGradient>
+    <radialGradient id="bloom" gradientUnits="userSpaceOnUse" cx="400" cy="130" r="230">
+      <stop offset="0" stop-color="#4a6df0" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#4a6df0" stop-opacity="0"/>
     </radialGradient>
-    
-    <radialGradient fy="27%" fx="58%" r="48%" cy="32%" cx="65%" id="sunBloom2">
-      <stop stop-opacity="0.65" stop-color="#FFEE9E" offset="0%"></stop>
-      <stop stop-opacity="0.4" stop-color="#FFB74D" offset="45%"></stop>
-      <stop stop-opacity="0" stop-color="#FF6B4A" offset="100%"></stop>
+    <linearGradient id="r1" gradientUnits="userSpaceOnUse" x1="40" y1="0" x2="500" y2="0">
+      <stop offset="0" stop-color="#6a4df0"/>
+      <stop offset="0.55" stop-color="#2f6ff0"/>
+      <stop offset="1" stop-color="#3fb4ff"/>
+    </linearGradient>
+    <linearGradient id="r2" gradientUnits="userSpaceOnUse" x1="40" y1="0" x2="500" y2="0">
+      <stop offset="0" stop-color="#2f6ff0"/>
+      <stop offset="0.6" stop-color="#44c8ff"/>
+      <stop offset="1" stop-color="#9cf2ff"/>
+    </linearGradient>
+    <linearGradient id="r3" gradientUnits="userSpaceOnUse" x1="40" y1="0" x2="500" y2="0">
+      <stop offset="0" stop-color="#6fd6ff"/>
+      <stop offset="0.7" stop-color="#d4f8ff"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+    <linearGradient id="scrim" gradientUnits="userSpaceOnUse" x1="0" y1="350" x2="0" y2="452">
+      <stop offset="0" stop-color="#050810" stop-opacity="0"/>
+      <stop offset="1" stop-color="#050810" stop-opacity="0.8"/>
+    </linearGradient>
+    <linearGradient id="prog" gradientUnits="userSpaceOnUse" x1="112" y1="0" x2="290" y2="0">
+      <stop offset="0" stop-color="#2f6ff0"/>
+      <stop offset="1" stop-color="#6fd6ff"/>
+    </linearGradient>
+    <linearGradient id="gloss" gradientUnits="userSpaceOnUse" x1="0" y1="60" x2="0" y2="200">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.09"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="led" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#8cc2ff"/>
+      <stop offset="1" stop-color="#2f6ff0"/>
     </radialGradient>
-    
-    
-    <radialGradient r="50%" cy="50%" cx="50%" id="sunCore">
-      <stop stop-color="#FFEE9E" offset="0%"></stop>
-      <stop stop-color="#FFCC6E" offset="70%"></stop>
-      <stop stop-color="#FF8C42" offset="100%"></stop>
-    </radialGradient>
+    <clipPath id="screen">
+      <rect x="60" y="60" width="392" height="392" rx="64"/>
+    </clipPath>
+    <filter id="bodyShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <filter id="blur" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
+    <filter id="knobShadow" x="-100%" y="-100%" width="300%" height="300%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="2" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+    <filter id="ledGlow" x="-200%" y="-200%" width="500%" height="500%">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
   </defs>
 
-  
-  <rect stroke-width="8" stroke="#1F2A38" fill="none" ry="28" rx="28" height="192" width="192" y="4" x="4"></rect>
+  <!-- Casing -->
+  <rect x="36" y="46" width="440" height="440" rx="88" fill="#000000" opacity="0.38" filter="url(#bodyShadow)"/>
+  <rect x="36" y="36" width="440" height="440" rx="88" fill="url(#casing)"/>
+  <rect x="37" y="37" width="438" height="438" rx="87" fill="none" stroke="#ffffff" stroke-opacity="0.75" stroke-width="2"/>
+  <rect x="36" y="36" width="440" height="440" rx="88" fill="none" stroke="#6b778d" stroke-opacity="0.55" stroke-width="1.5"/>
 
-  
-  <rect fill="url(#skyGradient)" rx="20" height="112" width="184" y="8" x="8"></rect>
+  <!-- Screen recess -->
+  <rect x="60" y="61.5" width="392" height="392" rx="64" fill="#ffffff" opacity="0.7"/>
+  <rect x="60" y="60" width="392" height="392" rx="64" fill="#0a1024"/>
 
-  
-  <circle fill="url(#sunCore)" r="29" cy="55" cx="130"></circle>
-  <circle fill="url(#sunBloom1)" r="42" cy="55" cx="130"></circle>
-  <circle fill="url(#sunBloom2)" r="52" cy="55" cx="130"></circle>
+  <!-- Wallpaper -->
+  <g clip-path="url(#screen)">
+    <rect x="60" y="60" width="392" height="392" fill="url(#bg)"/>
+    <rect x="60" y="60" width="392" height="392" fill="url(#bloom)"/>
 
-  
-  
-  <path fill="#2C3E50" d="M0 120 L38 62 L82 120 Z"></path>
-  
-  <path fill="#34495E" d="M48 120 L95 44 L148 120 Z"></path>
-  
-  <path fill="#2C3E50" d="M118 120 L167 68 L200 120 Z"></path>
+    <g fill="#ffffff">
+      <circle cx="118" cy="110" r="2" opacity="0.7"/>
+      <circle cx="176" cy="88" r="1.5" opacity="0.5"/>
+      <circle cx="248" cy="124" r="1.5" opacity="0.45"/>
+      <circle cx="96" cy="170" r="1.5" opacity="0.4"/>
+      <circle cx="292" cy="84" r="2" opacity="0.6"/>
+    </g>
 
-  
-  <rect fill="#1F2A38" height="6" width="200" y="118" x="0"></rect>
+    <g transform="translate(0 -24)">
+      <!-- Glow layer -->
+      <g filter="url(#blur)" opacity="0.7">
+        <path d="M40,350 C140,290 220,390 310,310 C400,235 440,215 500,225 L500,290 C440,280 400,300 310,375 C220,455 140,355 40,415 Z" fill="url(#r2)"/>
+        <path d="M40,250 C120,200 200,280 280,215 C350,160 430,120 500,110 L500,144 C430,154 350,194 280,249 C200,314 120,234 40,284 Z" fill="url(#r3)"/>
+      </g>
 
-  
-  <rect fill="#1E4B7A" rx="8" height="78" width="200" y="122" x="0"></rect>
+      <!-- Ribbons -->
+      <path d="M40,300 C130,230 210,330 300,250 C390,170 430,160 500,150 L500,230 C430,240 390,250 300,330 C210,410 130,310 40,380 Z" fill="url(#r1)" opacity="0.9"/>
+      <path d="M40,350 C140,290 220,390 310,310 C400,235 440,215 500,225 L500,290 C440,280 400,300 310,375 C220,455 140,355 40,415 Z" fill="url(#r2)" opacity="0.92"/>
+      <path d="M40,250 C120,200 200,280 280,215 C350,160 430,120 500,110 L500,144 C430,154 350,194 280,249 C200,314 120,234 40,284 Z" fill="url(#r3)"/>
+      <path d="M40,300 C130,230 210,330 300,250 C390,170 430,160 500,150" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="1.5"/>
+      <path d="M40,350 C140,290 220,390 310,310 C400,235 440,215 500,225" fill="none" stroke="#ffffff" stroke-opacity="0.4" stroke-width="1.5"/>
+    </g>
 
-  
-  
-  <path opacity="0.75" fill="none" stroke-width="4" stroke="#7CC6FF" d="M8 130 Q38 124 72 133 Q115 127 162 139 Q195 134 200 140"></path>
-  
-  
-  <path opacity="0.65" fill="none" stroke-width="3" stroke="#5AA8E8" d="M12 140 Q45 135 79 147 Q125 139 168 150 Q192 145 198 152"></path>
-  
-  
-  <path opacity="0.5" fill="none" stroke-width="2.5" stroke="#4A9EDB" d="M5 150 Q35 145 68 157 Q110 149 155 161 Q188 155 200 163"></path>
-  
-  
-  <path opacity="0.35" fill="none" stroke-width="2" stroke="#7CC6FF" d="M18 158 Q55 153 88 165 Q130 157 175 170"></path>
+    <rect x="60" y="350" width="392" height="102" fill="url(#scrim)"/>
 
-  
-  <path opacity="0.88" fill="#1F2A38" d="M0 122 L18 104 L48 122 L72 96 L98 122 L128 105 L158 122 L182 107 L200 122 Z"></path>
+    <!-- Playback scrubber -->
+    <path d="M78,404 L78,422 L94,413 Z" fill="#ffffff" fill-opacity="0.92" stroke="#ffffff" stroke-opacity="0.92" stroke-width="2" stroke-linejoin="round"/>
+    <rect x="112" y="410" width="308" height="6" rx="3" fill="#ffffff" fill-opacity="0.22"/>
+    <rect x="112" y="410" width="178" height="6" rx="3" fill="url(#prog)"/>
+    <circle cx="290" cy="413" r="8" fill="#ffffff" filter="url(#knobShadow)"/>
 
+    <!-- Glass reflection -->
+    <rect x="60" y="60" width="392" height="140" fill="url(#gloss)"/>
+  </g>
+  <rect x="60" y="60" width="392" height="392" rx="64" fill="none" stroke="#06090f" stroke-opacity="0.6" stroke-width="2"/>
+
+  <!-- Activity LED -->
+  <circle cx="420" cy="464" r="6" fill="#2f6ff0" opacity="0.8" filter="url(#ledGlow)"/>
+  <circle cx="420" cy="464" r="5" fill="url(#led)"/>
+  <circle cx="420" cy="464" r="5" fill="none" stroke="#ffffff" stroke-opacity="0.5" stroke-width="1"/>
 </svg>

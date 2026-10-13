@@ -56,6 +56,7 @@ std::string widget_display_title(const std::string& id) {
   if (id == "vpn" || eh::config::widget_implementation_type(id) == "vpn") return "VPN";
   if (id == "battery" || eh::config::widget_implementation_type(id) == "battery") return "Battery";
   if (id == "bluetooth" || eh::config::widget_implementation_type(id) == "bluetooth") return "Bluetooth";
+  if (id == "layout" || eh::config::widget_implementation_type(id) == "layout") return "Window Layout";
   return id;
 }
 

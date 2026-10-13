@@ -21,6 +21,8 @@
 #include "desktop_shell/widgets/popup/volume_mixer/volume_mixer_popup.hpp"
 #include "desktop_shell/widgets/popup/media_player/media_player_popup.hpp"
 #include "desktop_shell/widgets/popup/vpn/vpn_popup.hpp"
+#include "desktop_shell/widgets/popup/layout/layout_popup.hpp"
+#include "desktop_shell/widgets/layout/layout_paint.hpp"
 #include "services/network/core/network_manager_service.hpp"
 #include "desktop_shell/controlcenter/paint/control_center_popup_paint.hpp"
 #include "services/mpris/mpris_player.hpp"
@@ -1017,6 +1019,9 @@ void taskbar_popup_draw(TaskbarApp& app) {
     case TaskbarPopupKind::Vpn:
       eh::widgets::popup::vpn::vpn_popup_paint(app, cr, sc);
       break;
+    case TaskbarPopupKind::Layout:
+      eh::widgets::popup::layout::layout_popup_paint(app, cr, sc);
+      break;
     case TaskbarPopupKind::Battery:
       eh::widgets::dock_battery_popup_paint(app.pointerX, app.pointerY, cr, sc);
       break;
@@ -1901,6 +1906,20 @@ static void taskbar_handle_popup_click(TaskbarApp& app, uint32_t serial) {
                                eh::widgets::bluetooth_popup_height());
           break;
         case eh::widgets::BluetoothPopupClick::None:
+          break;
+      }
+      wl_display_flush(app.display);
+      return;
+    }
+    case TaskbarPopupKind::Layout: {
+      switch (eh::shell::dock::popup::layout::layout_popup_click_action(app.pointerX, app.pointerY)) {
+        case eh::shell::dock::popup::layout::LayoutPopupClick::Close:
+          taskbar_popup_close(app);
+          break;
+        case eh::shell::dock::popup::layout::LayoutPopupClick::Redraw:
+          taskbar_popup_draw(app);
+          break;
+        case eh::shell::dock::popup::layout::LayoutPopupClick::None:
           break;
       }
       wl_display_flush(app.display);
@@ -4060,6 +4079,22 @@ static void taskbar_pointer_button(void* data, wl_pointer* p, uint32_t serial,
     return;
   }
 
+  if (type == "layout") {
+    if (dismissedPopKind == TaskbarPopupKind::Layout) {
+      wl_display_flush(app.display);
+      return;
+    }
+    if (app.popupSurface && app.popupKind == TaskbarPopupKind::Layout) { taskbar_popup_close(app); }
+    else {
+      app.popupKind = TaskbarPopupKind::Layout;
+      taskbar_popup_create(app, slotCenterX,
+                           eh::shell::dock::popup::layout::kLayoutPopupW,
+                           eh::shell::dock::popup::layout::layout_popup_height());
+    }
+    wl_display_flush(app.display);
+    return;
+  }
+
   if (type == "trash") { launch_exec_command("xdg-open trash:///"); wl_display_flush(app.display); return; }
 
   // Default: app activation / launch
@@ -5299,6 +5334,8 @@ static std::string tb_tooltip_text(TaskbarApp& app, int layer, int slotIdx) {
   const auto& hit = hits[static_cast<size_t>(slotIdx)];
   if (hit.widgetId == eh::shell::taskbar::kTbChevronKey) return std::string("More windows");
   if (eh::config::widget_implementation_type(hit.widgetId) == "overview") return std::string("Overview");
+  if (eh::config::widget_implementation_type(hit.widgetId) == "layout")
+    return std::string("Window Layout: ") + eh::widgets::layout_title_for(eh::widgets::layout_current());
   if (hit.widgetId.rfind("__eh_tl_", 0) == 0 && hit.chosenSerial != 0 && app.toplevels) {
     // Per-window labeled buttons: tooltip shows the full (untrimmed) title.
     if (const auto* tl = thumbs_toplevel_by_serial(*app.toplevels, hit.chosenSerial)) {

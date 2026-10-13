@@ -24,6 +24,7 @@ enum class SlotKind : uint8_t {
   Battery,
   Bluetooth,
   Vpn,
+  Layout,
   Smenu,
   WorldClock,
   Overview,

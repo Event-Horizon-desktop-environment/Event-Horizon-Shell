@@ -66,6 +66,7 @@ static const SettingsSearchEntry kSettingsSearchEntries[] = {
     {32, "Power", "System", "power sleep suspend battery performance cpu", "power_settings_new"},
     {46, "Accounts", "System", "accounts users password hostname login", "account_circle"},
     {48, "Startup", "System", "startup autostart login apps", "play_arrow"},
+    {51, "Updates", "System", "updates upgrade version release install", "system_update"},
     {6, "Wallpaper", "Wallpaper Settings", "wallpaper background image gallery", "wallpaper"},
     {16, "Bing Wallpaper", "Wallpaper Settings", "bing wallpaper daily archive download", "photo_library"},
     {17, "Wi-Fi", "Network", "wifi wireless network", "wifi"},
@@ -319,6 +320,13 @@ static const SettingsSearchEntry kSettingsSearchEntries[] = {
     {48, "Start delay", "Startup", "startup delay seconds", "timer"},
     {48, "Enable", "Startup", "startup enable disable entry", "check"},
     {48, "Reset to System", "Startup", "startup reset system default", "restart_alt"},
+
+    // ── Updates (51) ──
+    {51, "Check for updates", "Updates", "updates check github release version", "system_update"},
+    {51, "Download update", "Updates", "updates download package rpm deb pacman", "download"},
+    {51, "Install update", "Updates", "updates install pkexec sudo package", "install_desktop"},
+    {51, "Restart shell", "Updates", "updates restart shell reboot apply", "restart_alt"},
+    {51, "Auto-check", "Updates", "updates auto check background notify", "autorenew"},
 
     // ── Wallpaper (6) ──
     {6, "Columns", "Wallpaper", "wallpaper grid columns gallery", "grid_view"},

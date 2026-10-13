@@ -893,6 +893,27 @@ struct App {
 
   m3::Button testNotifBtn;
 
+  // ── Software Update tab (51, transient UI state; prefs live in UpdaterService) ──
+  int settingsUpdaterScrollPx = 0;
+  bool updBusyChecking = false;
+  bool updBusyDownloading = false;
+  bool updBusyInstalling = false;
+  bool updNewer = false;
+  std::string updStatusText{"No update check yet."};
+  std::string updStatusType{"idle"};  // idle | info | success | error
+  std::string updRemoteTag;
+  std::string updRemoteName;
+  std::string updAssetName;
+  std::string updAssetUrl;
+  std::string updLocalPath;
+  std::string updNotes;
+  std::string updError;
+  bool updAutoCheck = true;
+  bool updAutoCheckLoaded = false;
+  long long updLastPollMs = 0;
+  bool updRestartArmed = false;
+  long long updRestartArmMs = 0;
+
   // Tab content cache (for scroll animation).
   cairo_surface_t* tabContentCache = nullptr;
   int tabContentCacheW = 0;

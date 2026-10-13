@@ -30,6 +30,7 @@ enum class TaskbarPopupKind : uint8_t {
   Bluetooth = 12,
   Spotlight = 13,
   Thumbs = 14,
+  Layout = 15,
 };
 
 struct TaskbarPopupItem {

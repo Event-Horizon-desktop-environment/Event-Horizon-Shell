@@ -305,7 +305,8 @@ void shell_pointer_button(void* data, wl_pointer*  , uint32_t serial, uint32_t  
                              app.popupKind == DockApp::PopupKind::MediaPlayer ||
                              app.popupKind == DockApp::PopupKind::Vpn ||
                               app.popupKind == DockApp::PopupKind::Battery ||
-                              app.popupKind == DockApp::PopupKind::Bluetooth) &&
+                              app.popupKind == DockApp::PopupKind::Bluetooth ||
+                              app.popupKind == DockApp::PopupKind::Layout) &&
       !onPopupSurface) {
     const auto dismissedKind = app.popupKind;
     popup_close(app);

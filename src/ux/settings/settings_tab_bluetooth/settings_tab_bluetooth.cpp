@@ -167,18 +167,13 @@ static std::vector<eh::bt::DeviceInfo> bt_tab_ordered_devices(
   return out;
 }
 
-// This tab does not scroll, so the list must be capped — anything past the
-// fold would be painted but unreachable. Connected/remembered sort first, so
-// truncating the tail only ever cuts anonymous nearby noise. All three passes
-// (paint/click/hover) must use this same helper.
-static constexpr int kMaxVisibleDevices = 12;
-
+// The tab scrolls (settings_app clips + translates by the tab scroll offset),
+// so show every device instead of truncating anonymous LE noise. All three
+// passes (paint/click/hover) must use this same helper.
 static std::vector<eh::bt::DeviceInfo> bt_tab_visible_devices(
     const std::vector<eh::bt::DeviceInfo>& ordered, int& total_out) {
   total_out = static_cast<int>(ordered.size());
-  if (static_cast<int>(ordered.size()) <= kMaxVisibleDevices) return ordered;
-  return std::vector<eh::bt::DeviceInfo>(ordered.begin(),
-                                         ordered.begin() + kMaxVisibleDevices);
+  return ordered;
 }
 
 // Second-line status: kind, connection state, signal/last-used hints, address.
@@ -307,6 +302,37 @@ static double bt_tab_action_y(int rowY) {
   return static_cast<double>(rowY) + (static_cast<double>(kDevRowH) - 24.0) * 0.5;
 }
 
+// Raw BlueZ D-Bus errors mean nothing to users ("org.bluez.Error.X").
+// Map the common ones to actionable one-liners; fall back to truncated raw.
+static std::string bt_friendly_error(const std::string& raw) {
+  if (raw.find("AuthenticationRejected") != std::string::npos)
+    return "Headphones refused pairing (not in pairing mode) — hold them in pairing "
+           "mode until the LED flashes, forget the PC on the buds if listed, Forget "
+           "here, then Pair once.";
+  if (raw.find("AuthenticationFailed") != std::string::npos)
+    return "Authentication failed — retry pairing with the device in pairing mode.";
+  if (raw.find("AuthenticationCanceled") != std::string::npos)
+    return "Pairing canceled — retry when ready.";
+  if (raw.find("AlreadyExists") != std::string::npos)
+    return "Already paired — use Connect instead of Pair.";
+  if (raw.find("NotAvailable") != std::string::npos)
+    return "Device not available — make sure it is powered and in range.";
+  if (raw.find("Failed") != std::string::npos && raw.find("Pair") != std::string::npos)
+    return "Pairing failed — put the device in pairing mode and retry.";
+  std::string s = raw;
+  if (s.size() > 96) s.resize(96);
+  return s;
+}
+
+// Page-coordinate bottom of the tab (mirrors the paint-pass card stack) so
+// the scroll clamp knows the true extent once the list is uncapped.
+int bluetooth_tab_content_bottom() {
+  const auto ordered = bt_tab_ordered_devices(eh::bt::BluezService::instance().devices());
+  const auto plan = bt_tab_plan(ordered);
+  const int devCardTop = kScanCardTop + kScanCardH + kCardGap;
+  return devCardTop + 52 + devices_content_height(plan);
+}
+
 void paint_bluetooth_tab(App& app, cairo_t* cr, int contentX, int contentW, double glassOv) {
 
   auto& bt = eh::bt::BluezService::instance();
@@ -394,10 +420,9 @@ void paint_bluetooth_tab(App& app, cairo_t* cr, int contentX, int contentW, doub
       const double statusMaxW = std::max(24.0, btnX - 10.0 - (cardX + kCardPad));
       const double statusY = kScanBodyTop + 20.0;
       if (!last_err.empty()) {
-        std::string short_err = last_err;
+        std::string short_err = bt_friendly_error(last_err);
         // BlueZ errors carry a "org.bluez.Error.X: " prefix + detail; keep it
         // to one helper line.
-        if (short_err.size() > 96) short_err.resize(96);
         settings_show_text_w(cr, cardX + kCardPad, statusY, short_err.c_str(), 12.0f, 400,
                              statusMaxW, 1.00f, 0.43f, 0.38f, 0.92f);
       } else if (!snap.powered) {
@@ -515,7 +540,10 @@ void paint_bluetooth_tab(App& app, cairo_t* cr, int contentX, int contentW, doub
         double actBtnX = cardX + cardW - kCardPad - kSpacingS;
         double btnAreaLeft = actBtnX;
         const bool rowBusy = dev.connecting;
-        if (dev.paired && !dev.connecting) {
+        // Forget clears the BlueZ object even when unpaired: a stale cached
+        // device (bond lost, headphones still holding the old key) can only be
+        // re-paired after RemoveDevice. Hidden only while an op is in flight.
+        if (!dev.connecting) {
           const double forgetBtnW = settings_btn_w("Forget");
           actBtnX -= forgetBtnW;
           btnAreaLeft = actBtnX;
@@ -683,8 +711,8 @@ bool settings_bluetooth_consume_pointer_down(App& app, int contentX, int content
     const double actBtnY = bt_tab_action_y(rowY);
     double actBtnX = cardX + cardW - kCardPad - kSpacingS;
 
-    // Forget button
-    if (dev.paired) {
+    // Forget button (paired or not — clears stale BlueZ objects).
+    {
       const double forgetBtnW = settings_btn_w("Forget");
       actBtnX -= forgetBtnW;
       if (point_in_rect(app.pointerX, ly,

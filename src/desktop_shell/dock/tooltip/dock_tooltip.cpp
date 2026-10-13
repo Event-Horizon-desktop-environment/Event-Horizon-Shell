@@ -5,6 +5,7 @@
 #include "desktop_shell/dock/output/dock_layer_outputs.hpp"
 #include "desktop_shell/dock/input/dock_pick.hpp"
 #include "desktop_shell/dock/input/dock_position.hpp"
+#include "desktop_shell/widgets/layout/layout_paint.hpp"
 #include "desktop_shell/dock/paint/dock_strip_geometry.hpp"
 #include "desktop_shell/desktop/entries/desktop_entries.hpp"
 #include "configuration/shell_config.hpp"
@@ -74,6 +75,8 @@ std::string resolve_text_for_slot(const PickSlot& slot, const DockPickResult& pr
     case PickSlot::Kind::Workspaces:      return "Workspaces";
     case PickSlot::Kind::Overview:       return "Overview";
     case PickSlot::Kind::VolumeMixer:     return "Volume";
+    case PickSlot::Kind::Layout:
+      return std::string("Window Layout: ") + eh::widgets::layout_title_for(eh::widgets::layout_current());
     default: return {};
   }
 }

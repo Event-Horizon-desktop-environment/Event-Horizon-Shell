@@ -26,6 +26,7 @@ struct PickSlot {
     Vpn,
     Battery,
     Bluetooth,
+    Layout,
     Smenu,
     WorldClock,
     Overview

@@ -522,7 +522,7 @@ TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
     const std::string impl = eh::config::widget_implementation_type(w);
     return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" ||
            impl == "control_center" || impl == "notifications" || impl == "volume_mixer" ||
-           impl == "app_drawer" || impl == "overview";
+           impl == "app_drawer" || impl == "overview" || impl == "layout";
   };
 
   auto slot_width = [&](const Slot& s) -> double {
@@ -544,6 +544,8 @@ TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
       return eh::shell::dock_slot_hooks::dock_battery_slot_width(nullptr, sc, s.key, icon, barH);
     if (s.kind == Slot::Kind::Bluetooth)
       return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, sc, s.key, icon, barH);
+    if (s.kind == Slot::Kind::Layout)
+      return eh::shell::dock_slot_hooks::dock_layout_slot_width(nullptr, sc, s.key, icon, barH);
     if (s.kind == Slot::Kind::WorldClock)
       return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, sc, s.key, icon, barH);
     if (s.kind == Slot::Kind::App)
@@ -589,6 +591,7 @@ TaskbarSectionWidths taskbar_measure_sections(TaskbarApp& app,
     else if (eh::config::widget_implementation_type(wid) == "battery") { Slot bs; bs.kind = Slot::Kind::Battery; bs.key = wid; out.push_back(std::move(bs)); }
     else if (eh::config::widget_implementation_type(wid) == "bluetooth") { Slot bts; bts.kind = Slot::Kind::Bluetooth; bts.key = wid; out.push_back(std::move(bts)); }
     else if (eh::config::widget_implementation_type(wid) == "vpn") { Slot vs; vs.kind = Slot::Kind::Vpn; vs.key = wid; out.push_back(std::move(vs)); }
+    else if (eh::config::widget_implementation_type(wid) == "layout") { Slot lo; lo.kind = Slot::Kind::Layout; lo.key = wid; out.push_back(std::move(lo)); }
     else if (eh::config::widget_implementation_type(wid) == "world_clock") { Slot wcs; wcs.kind = Slot::Kind::WorldClock; wcs.key = wid; out.push_back(std::move(wcs)); }
     else if (eh::config::widget_implementation_type(wid) == "overview") { Slot ov; ov.kind = Slot::Kind::Overview; ov.key = wid; out.push_back(std::move(ov)); }
   };
@@ -877,7 +880,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     const std::string impl = eh::config::widget_implementation_type(w);
     return impl == "clock" || impl == "world_clock" || impl == "weather" || impl == "media" || impl == "workspaces" ||
            impl == "control_center" || impl == "notifications" || impl == "volume_mixer" ||
-           impl == "app_drawer" || impl == "overview";
+           impl == "app_drawer" || impl == "overview" || impl == "layout";
   };
 
   auto append_widget = [&](std::vector<Slot>& out, const std::string& wid) {
@@ -934,6 +937,8 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
       Slot bts; bts.kind = Slot::Kind::Bluetooth; bts.key = wid; out.push_back(std::move(bts));
     } else if (eh::config::widget_implementation_type(wid) == "vpn") {
       Slot vs; vs.kind = Slot::Kind::Vpn; vs.key = wid; out.push_back(std::move(vs));
+    } else if (eh::config::widget_implementation_type(wid) == "layout") {
+      Slot lo; lo.kind = Slot::Kind::Layout; lo.key = wid; out.push_back(std::move(lo));
     } else if (eh::config::widget_implementation_type(wid) == "world_clock") {
       Slot wcs; wcs.kind = Slot::Kind::WorldClock; wcs.key = wid; out.push_back(std::move(wcs));
     } else if (eh::config::widget_implementation_type(wid) == "overview") {
@@ -1034,6 +1039,9 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
     }
     if (s.kind == Slot::Kind::Bluetooth) {
       return eh::shell::dock_slot_hooks::dock_bluetooth_slot_width(nullptr, sc, s.key, icon, boxH);
+    }
+    if (s.kind == Slot::Kind::Layout) {
+      return eh::shell::dock_slot_hooks::dock_layout_slot_width(nullptr, sc, s.key, icon, boxH);
     }
     if (s.kind == Slot::Kind::WorldClock) {
       return eh::shell::dock_slot_hooks::dock_world_clock_slot_width(nullptr, sc, s.key, icon, boxH);
@@ -1248,7 +1256,7 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
           slots[idx].kind != Slot::Kind::Tray && slots[idx].kind != Slot::Kind::Workspaces &&
           slots[idx].kind != Slot::Kind::VolumeMixer && slots[idx].kind != Slot::Kind::Vpn &&
           slots[idx].kind != Slot::Kind::Battery && slots[idx].kind != Slot::Kind::Overview &&
-          slots[idx].kind != Slot::Kind::Bluetooth) ly -= taskbarHoverLiftPx;
+          slots[idx].kind != Slot::Kind::Bluetooth && slots[idx].kind != Slot::Kind::Layout) ly -= taskbarHoverLiftPx;
       if (gIdx == taskbarPressedSlot && slots[idx].kind == Slot::Kind::App) ly -= kPressLiftPx;
       // Launch feedback: the launching/activating app slot hops (damped sine,
       // dock parity). Widget slots never bounce — they don't launch apps.
@@ -1535,6 +1543,10 @@ void taskbar_paint_widget_bar(TaskbarApp& app, cairo_t* cr,
         drew = true;
       } else if (s.kind == Slot::Kind::Bluetooth) {
         eh::shell::dock_slot_hooks::paint_bluetooth_slot(cr, sc, s.key, ix, iconY + liftY, slotW, icon, icon, false, false);
+        if (hovered) hover_overlay();
+        drew = true;
+      } else if (s.kind == Slot::Kind::Layout) {
+        eh::shell::dock_slot_hooks::paint_layout_slot(cr, sc, s.key, ix, iconY + liftY, slotW, icon, icon, false, false);
         if (hovered) hover_overlay();
         drew = true;
       } else if (s.kind == Slot::Kind::Overview) {

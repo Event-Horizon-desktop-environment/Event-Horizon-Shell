@@ -253,6 +253,7 @@ struct DockApp : WaylandState {
     Battery = 12,
     MediaPlayer = 13,
     Bluetooth = 14,
+    Layout = 15,
   };
   struct PopupMenuItem {
     std::string label{};

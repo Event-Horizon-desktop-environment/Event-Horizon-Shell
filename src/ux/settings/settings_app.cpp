@@ -112,6 +112,7 @@
 #include "ux/settings/settings_tab_bluetooth/settings_tab_bluetooth.hpp"
 #include "ux/settings/settings_tab_accounts/settings_tab_accounts.hpp"
 #include "ux/settings/settings_tab_autostart/settings_tab_autostart.hpp"
+#include "ux/settings/settings_tab_updater/settings_tab_updater.hpp"
 #include "ux/settings/settings_serialize.hpp"
 #include "ux/settings/common/logo/settings_logo.hpp"
 #include "ux/settings/utils/gpu/settings_gpu.hpp"
@@ -323,9 +324,9 @@ static const int kPanelsAndUITabIds[] = {0, 1, 11, 9, 29, 27};
 static const char* const kDisplaySubs[] = {"Monitors", "Appearance", "Themes", "Color Themes", "Icons", "Nightlight"};
 static const char* const kDisplaySubGlyphs[] = {"monitor", "palette", "palette", "colorize", "photo_library", "dark_mode"};
 static const int kDisplayTabIds[] = {7, 2, 45, 50, 44, 19};
-static const char* const kSystemSubs[] = {"Notifications", "Sound", "Default Apps", "Time", "Keyboard & Language", "Bluetooth", "Power", "Accounts", "Startup"};
-static const char* const kSystemSubGlyphs[] = {"notifications", "volume_up", "app_registration", "schedule", "keyboard", "bluetooth", "power_settings_new", "account_circle", "play_arrow"};
-static const int kSystemTabIds[] = {5, 8, 10, 30, 31, 47, 32, 46, 48};
+static const char* const kSystemSubs[] = {"Notifications", "Sound", "Default Apps", "Time", "Keyboard & Language", "Bluetooth", "Power", "Accounts", "Startup", "Updates"};
+static const char* const kSystemSubGlyphs[] = {"notifications", "volume_up", "app_registration", "schedule", "keyboard", "bluetooth", "power_settings_new", "account_circle", "play_arrow", "system_update"};
+static const int kSystemTabIds[] = {5, 8, 10, 30, 31, 47, 32, 46, 48, 51};
 static const char* const kWallpaperSettingsSubs[] = {"Wallpaper", "Bing Wallpaper"};
 static const char* const kWallpaperSettingsSubGlyphs[] = {"wallpaper", "photo_library"};
 static const int kWallpaperSettingsTabIds[] = {6, 16};
@@ -339,7 +340,7 @@ static const SidebarItemDef kSidebarDefs[] = {
     {13, "Display", "display_settings", kDisplaySubs, kDisplaySubGlyphs, 6, true, kDisplayTabIds},
     {16, "MangoWM", "view_module", kMangoSubs, kMangoSubGlyphs, 7, true, kMangoTabIds},
     {33, "Hyprland", "view_module", nullptr, nullptr, 0, false, nullptr},
-    {14, "System", "tune", kSystemSubs, kSystemSubGlyphs, 9, true, kSystemTabIds},
+    {14, "System", "tune", kSystemSubs, kSystemSubGlyphs, 10, true, kSystemTabIds},
     {15, "Wallpaper Settings", "wallpaper", kWallpaperSettingsSubs, kWallpaperSettingsSubGlyphs, 2, true, kWallpaperSettingsTabIds},
     {17, "Network", "wifi", kNetworkSubs, kNetworkSubGlyphs, 3, true, kNetworkTabIds},
 };
@@ -1482,7 +1483,7 @@ void draw(App& app) {
               app.activeTab, app.width, app.height, app.widgetPickerOpen ? 1 : 0, b0, b1,
               app.pendingRedraw ? 1 : 0, app.embedPresentT);
   }
-  if (app.activeTab > 48 && app.activeTab != 50) app.activeTab = 44;
+  if (app.activeTab > 48 && app.activeTab != 50 && app.activeTab != 51) app.activeTab = 44;
   if (app.activeTab == 3) app.activeTab = 7;  // UI Layout page removed; fall back to Monitors.
   if (app.activeTab != 10) app.defaultAppsPillRectValid = false;
   if (app.activeTab == 7 && !app.monitorsTabDidInitialRefresh) {
@@ -1641,7 +1642,12 @@ void draw(App& app) {
   else if (app.activeTab == 11) settings_clamp_taskbar_scroll_px(app);
   else if (app.activeTab == 46) settings_clamp_accounts_scroll_px(app);
   else if (app.activeTab == 48) settings_clamp_autostart_scroll_px(app);
-  else if (app.activeTab == 47) app.settingsBluetoothScrollPx = std::max(0, app.settingsBluetoothScrollPx);
+  else if (app.activeTab == 47) {
+    const int viewH = app.height - kContentTop - kSpacingL;
+    const int maxScroll =
+        std::max(0, bluetooth_tab_content_bottom() + kSpacingL - viewH);
+    app.settingsBluetoothScrollPx = std::clamp(app.settingsBluetoothScrollPx, 0, maxScroll);
+  }
   else if (app.activeTab >= 20 && app.activeTab <= 26) settings_clamp_mango_scroll_px(app);
   else if (app.activeTab == 33) settings_clamp_hyprland_scroll_px(app);
   else if (app.activeTab == 9) settings_clamp_launcher_scroll_px(app);
@@ -2567,6 +2573,8 @@ void draw(App& app) {
     cairo_translate(cr, 0.0, -paintPointerYOffset);
     paint_autostart_tab(app, cr, contentX, contentW, glassOv);
     cairo_restore(cr);
+  } else if (app.activeTab == 51) {
+    paint_updater_tab(app, cr, contentX, contentW, glassOv);
   }
   if (app.activeTab >= 20 && app.activeTab <= 26) {
     cairo_save(cr);

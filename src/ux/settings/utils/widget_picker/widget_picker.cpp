@@ -120,6 +120,8 @@ static const char* widget_display_desc(const std::string& id) {
     return "Battery percentage and charging state from UPower";
   if (id == "bluetooth" || eh::config::widget_implementation_type(id) == "bluetooth")
     return "Bluetooth adapter status, connected devices, and power toggle";
+  if (id == "layout" || eh::config::widget_implementation_type(id) == "layout")
+    return "Hyprland + MangoWM window layout switcher (click to swap live)";
   if (id == "weather_fancy")
     return "Detailed weather with animated icons, feels-like, wind, humidity";
   if (id == "calendar")

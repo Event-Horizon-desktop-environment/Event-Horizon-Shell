@@ -1,7 +1,7 @@
 project(
   'event-horizon',
   ['c', 'cpp'],
-  version: '0.9.7-beta3',
+  version: '0.9.7.1-beta-3',
   meson_version: '>=1.8.5',
   default_options: [
     'prefix=/usr',
@@ -615,10 +615,12 @@ shell_cpp_sources = [
   'src/desktop_shell/widgets/media/media_paint.cpp',
   'src/desktop_shell/widgets/battery/battery_paint.cpp',
   'src/desktop_shell/widgets/bluetooth/bluetooth_paint.cpp',
+  'src/desktop_shell/widgets/layout/layout_paint.cpp',
   'src/desktop_shell/widgets/popup/calendar/calendar_popup.cpp',
   'src/desktop_shell/widgets/popup/weather/weather_popup.cpp',
   'src/desktop_shell/widgets/popup/volume_mixer/volume_mixer_popup.cpp',
   'src/desktop_shell/widgets/popup/vpn/vpn_popup.cpp',
+  'src/desktop_shell/widgets/popup/layout/layout_popup.cpp',
   'src/desktop_shell/widgets/popup/media_player/media_player_popup.cpp',
   'src/desktop_shell/widgets/workspaces/workspaces_paint.cpp',
 
@@ -758,11 +760,13 @@ shell_cpp_sources = [
   'src/ux/settings/settings_tab_accounts/settings_tab_accounts.cpp',
   'src/ux/settings/settings_tab_accounts/accounts_users.cpp',
   'src/ux/settings/settings_tab_autostart/settings_tab_autostart.cpp',
+  'src/ux/settings/settings_tab_updater/settings_tab_updater.cpp',
   'src/ux/settings/settings_tab_wallpaper/settings_tab_wallpaper.cpp',
   'src/ux/settings/settings_tab_color_themes/settings_tab_color_themes.cpp',
   'src/ux/settings/theme_manager.cpp',
 
   'src/services/bing/bing_wallpaper.cpp',
+  'src/services/updater/updater_service.cpp',
   'src/services/ipc/ipc_server.cpp',
   'src/services/ipc/ipc_protocol.cpp',
   'src/services/ipc/client.cpp',
