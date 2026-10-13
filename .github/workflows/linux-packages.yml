@@ -41,6 +41,9 @@ jobs:
     container:
       image: fedora:44
     steps:
+      # Fedora images ship without git, which actions/checkout requires.
+      - name: Install git for checkout
+        run: dnf -y install git
       - uses: actions/checkout@v6
         with:
           submodules: recursive
