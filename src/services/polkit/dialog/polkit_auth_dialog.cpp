@@ -2,6 +2,7 @@
 
 #include "services/polkit/dialog/polkit_auth_dialog.hpp"
 #include "services/polkit/service/polkit_auth_service.hpp"
+#include "services/polkit/polkit_log.hpp"
 
 #include "configuration/shell_config.hpp"
 #include "desktop_shell/common/glyph/material_glyph.hpp"
@@ -354,9 +355,10 @@ PolkitAuthDialog::~PolkitAuthDialog() {
 }
 
 void PolkitAuthDialog::show(wl_output* primary_output) {
-   
+  
   impl_->visible = true;
   if (!impl_->surf) {
+    polkit_log("dlg show: creating surface");
     if (!impl_->compositor || !impl_->layer_shell) return;
     eh::wayland::LayerSurfaceConfig cfg{};
     cfg.nameSpace = eh::shell::kPolkitNamespace;
@@ -385,6 +387,7 @@ void PolkitAuthDialog::show(wl_output* primary_output) {
     // Surface already exists from a previous show/hide cycle; re-map it.
     // The compositor won't send a new configure for an existing surface,
     // so restore configured=true and paint immediately.
+    polkit_log("dlg show: re-mapping existing surface");
     impl_->configured = true;
     zwlr_layer_surface_v1_set_keyboard_interactivity(
         impl_->layer, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
@@ -394,7 +397,8 @@ void PolkitAuthDialog::show(wl_output* primary_output) {
 }
 
 void PolkitAuthDialog::hide() {
-   
+  
+  polkit_log("dlg hide");
   impl_->visible = false;
   impl_->configured = false;
   wipe_password(impl_->password_field);
@@ -402,6 +406,12 @@ void PolkitAuthDialog::hide() {
   // Unmap the surface without destroying it so the compositor can
   // re-assign keyboard focus to the dialog on the next show().
   if (impl_->surf) {
+    // Deterministically drop the EXCLUSIVE keyboard grab: if this surface
+    // somehow stays mapped, the compositor must not keep routing all keys
+    // here (that reads as a full-shell freeze). show() re-arms EXCLUSIVE.
+    if (impl_->layer)
+      zwlr_layer_surface_v1_set_keyboard_interactivity(
+          impl_->layer, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
     wl_surface_attach(impl_->surf, nullptr, 0, 0);
     wl_surface_commit(impl_->surf);
     if (impl_->display) wl_display_flush(impl_->display);
@@ -450,11 +460,18 @@ void PolkitAuthDialog::pointer_button(uint32_t button, uint32_t state) {
     if (btn == 1 &&
         (Impl::point_in_rect(impl_->ptr_x, impl_->ptr_y, impl_->hit_close) ||
          Impl::point_in_rect(impl_->ptr_x, impl_->ptr_y, impl_->hit_cancel))) {
+      polkit_log("dlg click: Cancel/close -> cancel_request enter");
       PolkitAuthService::instance().cancel_request();
+      polkit_log("dlg click: cancel_request returned");
+      impl_->paint();
     } else if (btn == 2 &&
                Impl::point_in_rect(impl_->ptr_x, impl_->ptr_y, impl_->hit_auth)) {
+      polkit_log("dlg click: Confirm -> submit_response");
       PolkitAuthService::instance().submit_response(impl_->password_field);
       wipe_password(impl_->password_field);
+      impl_->paint();
+    } else {
+      impl_->paint();
     }
   }
 }
@@ -470,7 +487,9 @@ bool PolkitAuthDialog::consume_keyboard_key(uint32_t state, uint32_t sym, const 
   if (state != WL_KEYBOARD_KEY_STATE_PRESSED && state != WL_KEYBOARD_KEY_STATE_REPEATED) return false;
 
   if (sym == XKB_KEY_Escape) {
+    polkit_log("dlg key: Escape -> cancel_request enter");
     PolkitAuthService::instance().cancel_request();
+    polkit_log("dlg key: cancel_request returned");
     return true;
   }
   if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {

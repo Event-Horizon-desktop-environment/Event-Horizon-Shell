@@ -87,6 +87,12 @@ static void on_completed(PolkitAgentSession *session, gboolean gained_authorizat
   EhPolkitListener *listener = EH_PL(user_data);
   (void)session;
 
+  {
+    char msg[128];
+    snprintf(msg, sizeof msg, "on_completed enter gained=%d", gained_authorization ? 1 : 0);
+    eh_polkit_log_c(msg);
+  }
+
   eh_polkit_bridge_end_prompt(gained_authorization ? 1 : 0);
 
   if (listener->task) {
@@ -105,11 +111,13 @@ static void on_completed(PolkitAgentSession *session, gboolean gained_authorizat
     g_object_unref(listener->cancellable);
     listener->cancellable = NULL;
   }
+  eh_polkit_log_c("on_completed exit");
 }
 
 static void on_request(PolkitAgentSession *session, gchar *request, gboolean echo_on, gpointer user_data) {
   EhPolkitListener *listener = EH_PL(user_data);
   (void)listener;
+  eh_polkit_log_c("on_request (password prompt incoming)");
   eh_polkit_bridge_store_session(session, echo_on != FALSE);
   eh_polkit_bridge_show_info_line(request ? request : "");
 }
@@ -129,6 +137,7 @@ static void on_show_info(PolkitAgentSession *session, gchar *text, gpointer user
 static void on_cancelled(GCancellable *cancellable, gpointer user_data) {
   EhPolkitListener *listener = EH_PL(user_data);
   (void)cancellable;
+  eh_polkit_log_c("on_cancelled (polkitd is cancelling us)");
   if (listener->active_session) polkit_agent_session_cancel(listener->active_session);
 }
 
@@ -142,12 +151,20 @@ static void eh_polkit_listener_initiate_authentication(PolkitAgentListener *_lis
   (void)icon_name;
   (void)details;
 
+  {
+    char msg[256];
+    snprintf(msg, sizeof msg, "initiate_authentication enter action='%s' cookie='%s'",
+             action_id ? action_id : "", cookie ? cookie : "");
+    eh_polkit_log_c(msg);
+  }
+
   if (listener->active_session != NULL) {
     GTask *task = g_task_new(G_OBJECT(listener), cancellable, callback, user_data);
     g_task_set_source_tag(task, EH_AUTH_SOURCE_TAG);
     g_task_return_new_error(task, POLKIT_ERROR, POLKIT_ERROR_FAILED,
                             "An authentication session is already underway.");
     g_object_unref(task);
+    eh_polkit_log_c("initiate_authentication rejected: session already underway");
     return;
   }
 
@@ -156,6 +173,7 @@ static void eh_polkit_listener_initiate_authentication(PolkitAgentListener *_lis
     g_task_set_source_tag(task, EH_AUTH_SOURCE_TAG);
     g_task_return_new_error(task, POLKIT_ERROR, POLKIT_ERROR_FAILED, "No identities available.");
     g_object_unref(task);
+    eh_polkit_log_c("initiate_authentication rejected: no identities");
     return;
   }
 
@@ -165,6 +183,7 @@ static void eh_polkit_listener_initiate_authentication(PolkitAgentListener *_lis
     g_task_set_source_tag(task, EH_AUTH_SOURCE_TAG);
     g_task_return_new_error(task, POLKIT_ERROR, POLKIT_ERROR_FAILED, "No suitable identity.");
     g_object_unref(task);
+    eh_polkit_log_c("initiate_authentication rejected: no suitable identity");
     return;
   }
 
@@ -189,7 +208,9 @@ static void eh_polkit_listener_initiate_authentication(PolkitAgentListener *_lis
   listener->cancel_id =
       listener->cancellable ? g_cancellable_connect(listener->cancellable, G_CALLBACK(on_cancelled), listener, NULL) : 0;
 
+  eh_polkit_log_c("initiate_authentication: session created, calling initiate");
   polkit_agent_session_initiate(listener->active_session);
+  eh_polkit_log_c("initiate_authentication: initiate returned");
 }
 
 static gboolean eh_polkit_listener_initiate_authentication_finish(PolkitAgentListener *_listener, GAsyncResult *res,

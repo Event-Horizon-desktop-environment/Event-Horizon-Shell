@@ -16,7 +16,7 @@
 #include <sdbus-c++/VTableItems.h>
 
 #ifndef EH_SHELL_VERSION
-#define EH_SHELL_VERSION "0.9.7.2-beta-3"
+#define EH_SHELL_VERSION "0.9.7.3-beta-3"
 #endif
 
 namespace eh::shell::notifications {

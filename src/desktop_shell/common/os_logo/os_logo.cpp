@@ -293,7 +293,9 @@ cairo_surface_t* load_distro_logo_cairo_surface() {
 #ifdef EH_HAVE_RSVG
   if (is_svg) {
     static bool logged = false;
-    cairo_surface_t* s = cairo_from_svg_file(p, 128);
+    // Render large: the fetch widget paints the logo up to 256px and
+    // downscaling stays crisp, while upscaling a 128px raster would blur.
+    cairo_surface_t* s = cairo_from_svg_file(p, 256);
     if (s && !logged && eh_verbose_enabled()) {
       logged = true;
       std::cout << "[os_logo] rendered SVG path='" << p << "'\n";

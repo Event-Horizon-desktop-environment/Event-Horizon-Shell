@@ -20,6 +20,9 @@ void eh_polkit_bridge_cancel_session(void);
 
 void eh_polkit_bridge_store_session(PolkitAgentSession* session, int echo_on);
 
+// C-side event trail into ~/EH-logs/polkit.log (implemented C++ side).
+void eh_polkit_log_c(const char* msg);
+
 #ifdef __cplusplus
 }
 #endif

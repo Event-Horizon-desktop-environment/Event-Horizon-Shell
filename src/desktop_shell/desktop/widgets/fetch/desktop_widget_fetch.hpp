@@ -42,13 +42,19 @@ struct DesktopFetchWidget : DesktopWidget {
   static FetchSnapshot read_fetch();
   // Measures the current snapshot and settles m_width/m_height so the host
   // reads a correct footprint *before* it clips and paints.
-  void relayout();
+  // IMPORTANT: measure with the cairo_t that will paint. Pango resolves text
+  // extents against the cr's transform/font options, so measuring on a
+  // different context (e.g. the identity-scale scratch) can under-measure on
+  // scaled outputs and every long value ends up truncated with "…".
+  void relayout(cairo_t* cr = nullptr);
 
   std::string m_widgetId;
   int m_width = 440;
   int m_height = 240;
   double m_keyCol = 74.0;  // measured key column width
   double m_valMax = 260.0; // measured value column width
+  double m_logoBox = 108.0; // logo square, grows with content height (fastfetch-style)
+  bool m_layoutDirty = false;
 
   cairo_surface_t* m_logo = nullptr;
 

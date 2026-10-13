@@ -4,6 +4,7 @@
 
 #include "services/polkit/listener/polkit_bridge_capi.h"
 #include "services/polkit/listener/eh_polkit_listener.h"
+#include "services/polkit/polkit_log.hpp"
 
 #include <polkit/polkit.h>
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE
@@ -58,6 +59,11 @@ struct PolkitAuthService::Impl {
   bool echo_on = true;
   bool failed_flag = false;
   bool prompt_active = false;
+  // Set when the user cancels. Late `request` signals from the dying session
+  // are dropped (see store path), and completion of the cancelled session
+  // simply resolves an already-hidden dialog. Cleared on the next
+  // begin/end_prompt so a fresh auth is unaffected.
+  bool cancel_armed = false;
 
   std::atomic<bool> pending_begin{false};
   std::atomic<bool> pending_end{false};
@@ -84,14 +90,17 @@ struct PolkitAuthService::Impl {
       std::lock_guard<std::mutex> lock(impl->mtx);
       if (g_cancellable_is_cancelled(cancel)) {
         std::cerr << "[polkit] listener registration cancelled\n";
+        polkit_log("svc registration cancelled");
         impl->register_ok = false;
       } else if (!handle) {
         std::cerr << "[polkit] listener_register failed: "
                   << (err && err->message ? err->message : "?") << "\n";
+        polkit_log("svc registration FAILED: %s", err && err->message ? err->message : "?");
         if (err) g_error_free(err);
         impl->register_ok = false;
       } else {
         std::cerr << "[polkit] session agent registered at " << k_agentObjectPath << "\n";
+        polkit_log("svc registration ok at %s", k_agentObjectPath);
         impl->register_ok = true;
       }
       impl->reg = handle;
@@ -140,27 +149,43 @@ struct PolkitAuthService::Impl {
   }
 
   void begin_prompt(const char* act, const char* msg, const char* ck) {
-     
-    std::lock_guard<std::mutex> lock(mtx);
-    action_id = act ? act : "";
-    message = msg ? msg : "";
-    cookie = ck ? ck : "";
-    supplementary_error.clear();
-    input_prompt.clear();
-    failed_flag = false;
-    state = AuthState::Pending;
-    pending_begin = true;
-    state_changed = true;
+    
+    PolkitAgentSession* stale = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mtx);
+      stale = active_session;
+      active_session = nullptr;
+      action_id = act ? act : "";
+      message = msg ? msg : "";
+      cookie = ck ? ck : "";
+      supplementary_error.clear();
+      input_prompt.clear();
+      failed_flag = false;
+      cancel_armed = false;
+      state = AuthState::Pending;
+      pending_begin = true;
+      state_changed = true;
+    }
+    // Single-flight is enforced C-side; a stale ref here is only defensive.
+    if (stale) g_object_unref(stale);
   }
 
   void end_prompt(int gained) {
-     
-    std::lock_guard<std::mutex> lock(mtx);
-    state = gained ? AuthState::Success : AuthState::Failed;
-    prompt_active = false;
-    active_session = nullptr;
-    pending_end = true;
-    state_changed = true;
+    
+    PolkitAgentSession* stale = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mtx);
+      stale = active_session;
+      active_session = nullptr;
+      state = gained ? AuthState::Success : AuthState::Failed;
+      prompt_active = false;
+      cancel_armed = false;
+      pending_end = true;
+      state_changed = true;
+    }
+    // Completion for a session we already consumed (cancel/deliver raced
+    // it): drop our ref; the listener owns its own.
+    if (stale) g_object_unref(stale);
   }
 
   void store_session(PolkitAgentSession* /*session*/, int echo) {
@@ -173,38 +198,73 @@ struct PolkitAuthService::Impl {
   }
 
   void deliver_response(const char* response) {
-     
+    
     PolkitAgentSession* session = nullptr;
     {
       std::lock_guard<std::mutex> lock(mtx);
       session = active_session;
       active_session = nullptr;
     }
-    if (session) polkit_agent_session_response(session, response);
+    polkit_log("svc deliver_response have_session=%d", session ? 1 : 0);
+    if (session) {
+      polkit_agent_session_response(session, response);
+      g_object_unref(session);
+    }
   }
 
   void cancel_session() {
-     
+    // The dialog holds an EXCLUSIVE keyboard grab while visible: if the
+    // `completed` round-trip from polkitd never arrives (session already
+    // gone, D-Bus hiccup, cancel raced with completion), the old code left
+    // the dialog up forever — a frozen shell. Tear down locally FIRST so
+    // the next dispatch hides the dialog even with no completion, then
+    // tell polkitd. A late `completed` (end_prompt) is idempotent.
+    //
+    // Proven by ~/EH-logs/polkit.log: polkit_agent_session_cancel() itself
+    // can block indefinitely, wedging the main loop thread. It therefore
+    // runs on a detached worker; the transferred service ref keeps the
+    // object alive until the worker is done with it.
     PolkitAgentSession* session = nullptr;
     {
       std::lock_guard<std::mutex> lock(mtx);
       session = active_session;
       active_session = nullptr;
+      state = AuthState::Failed;
+      prompt_active = false;
+      cancel_armed = true;
+      state_changed = true;
     }
-    if (session) polkit_agent_session_cancel(session);
+    polkit_log("svc cancel_session enter have_session=%d", session ? 1 : 0);
+    if (session) {
+      std::thread([session] {
+        polkit_log("svc cancel worker: calling session_cancel");
+        polkit_agent_session_cancel(session);
+        polkit_log("svc cancel worker: session_cancel returned");
+        g_object_unref(session);
+      }).detach();
+    } else {
+      polkit_log("svc cancel_session no live session (nothing to tell polkitd)");
+    }
   }
 };
 
 // C bridge functions
+extern "C" void eh_polkit_log_c(const char* msg) {
+  polkit_log("c %s", msg ? msg : "");
+}
+
 extern "C" void eh_polkit_bridge_begin_prompt(const char* action_id, const char* message,
                                               const char* cookie) {
-   
+  
+  polkit_log("svc begin_prompt action='%s' cookie='%s'", action_id ? action_id : "",
+             cookie ? cookie : "");
   auto& svc = PolkitAuthService::instance();
   svc.impl()->begin_prompt(action_id, message, cookie);
 }
 
 extern "C" void eh_polkit_bridge_end_prompt(int gained_authorization) {
-   
+  
+  polkit_log("svc end_prompt gained=%d", gained_authorization);
   auto& svc = PolkitAuthService::instance();
   svc.impl()->end_prompt(gained_authorization);
 }
@@ -227,9 +287,22 @@ extern "C" void eh_polkit_bridge_show_info_line(const char* text) {
 }
 
 extern "C" void eh_polkit_bridge_store_session(PolkitAgentSession* session, int echo_on) {
-   
+  
   auto& svc = PolkitAuthService::instance();
   std::lock_guard<std::mutex> lock(svc.impl()->mtx);
+  // Drop prompts from a session the user already cancelled: accepting one
+  // would re-show the dialog on a dead session and wedge the UI again.
+  // A genuinely new auth always passes through begin_prompt first, which
+  // clears cancel_armed.
+  if (svc.impl()->cancel_armed) {
+    polkit_log("svc store_session DROPPED (cancel_armed)");
+    return;
+  }
+  // The service owns one ref; the C listener keeps its own. Split ownership
+  // so a cancel racing a natural completion can't use-after-free.
+  if (session) g_object_ref(session);
+  if (svc.impl()->active_session) g_object_unref(svc.impl()->active_session);
+  polkit_log("svc store_session echo=%d", echo_on);
   svc.impl()->active_session = session;
   svc.impl()->echo_on = echo_on != 0;
   svc.impl()->prompt_active = true;
@@ -266,10 +339,11 @@ PolkitAuthService& PolkitAuthService::instance() {
 }
 
 void PolkitAuthService::start() {
-   
+  
   std::lock_guard<std::mutex> lock(impl_->mtx);
   if (impl_->started) return;
   impl_->started = true;
+  polkit_log("svc start pid=%d", static_cast<int>(::getpid()));
 
   impl_->ctx = g_main_context_default();
 
@@ -306,7 +380,8 @@ void PolkitAuthService::start() {
 }
 
 void PolkitAuthService::stop() {
-   
+  
+  polkit_log("svc stop");
   {
     std::lock_guard<std::mutex> lock(impl_->mtx);
     if (impl_->cancellable) {
@@ -327,21 +402,27 @@ void PolkitAuthService::stop() {
     impl_->listener = nullptr;
   }
 
-  std::lock_guard<std::mutex> lock(impl_->mtx);
-  impl_->ctx = nullptr;
-  impl_->started = false;
-  impl_->state = AuthState::Idle;
-  impl_->prompt_active = false;
-  impl_->failed_flag = false;
-  impl_->active_session = nullptr;
-  impl_->action_id.clear();
-  impl_->message.clear();
-  impl_->cookie.clear();
-  impl_->input_prompt.clear();
-  impl_->supplementary_error.clear();
-  impl_->pending_begin = false;
-  impl_->pending_end = false;
-  impl_->state_changed = false;
+  PolkitAgentSession* stale = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(impl_->mtx);
+    stale = impl_->active_session;
+    impl_->active_session = nullptr;
+    impl_->ctx = nullptr;
+    impl_->started = false;
+    impl_->state = AuthState::Idle;
+    impl_->prompt_active = false;
+    impl_->failed_flag = false;
+    impl_->cancel_armed = false;
+    impl_->action_id.clear();
+    impl_->message.clear();
+    impl_->cookie.clear();
+    impl_->input_prompt.clear();
+    impl_->supplementary_error.clear();
+    impl_->pending_begin = false;
+    impl_->pending_end = false;
+    impl_->state_changed = false;
+  }
+  if (stale) g_object_unref(stale);
 }
 
 void PolkitAuthService::set_change_callback(ChangeCallback cb) {
@@ -421,12 +502,14 @@ void PolkitAuthService::dispatch_glib(const pollfd* poll_fds, int nfds) {
 
   // Process pending begin/end from C bridge
   bool did_state_change = false;
+  bool went_idle = false;
   {
     std::lock_guard<std::mutex> lock(impl_->mtx);
     if (impl_->pending_end) {
       impl_->pending_end = false;
       impl_->state = AuthState::Idle;
       impl_->prompt_active = false;
+      went_idle = true;
     }
     if (impl_->pending_begin) {
       impl_->pending_begin = false;
@@ -437,9 +520,20 @@ void PolkitAuthService::dispatch_glib(const pollfd* poll_fds, int nfds) {
     }
   }
 
-  if (!impl_->ctx) return;
+  if (!impl_->ctx) {
+    // No GLib pumping (service never fully started), but a queued
+    // transition (e.g. cancel teardown) must still notify — otherwise the
+    // dialog can stick on a state change nobody delivers.
+    if (did_state_change && impl_->on_change) impl_->on_change();
+    return;
+  }
 
-  if (!g_main_context_acquire(impl_->ctx)) return;
+  if (!g_main_context_acquire(impl_->ctx)) {
+    // Context contended elsewhere: still deliver the queued transition so
+    // the dialog can't stick; GLib traffic is picked up on the next poll.
+    if (did_state_change && impl_->on_change) impl_->on_change();
+    return;
+  }
 
   for (auto& gf : impl_->glib_fds) {
     gf.revents = 0;
@@ -477,8 +571,11 @@ void PolkitAuthService::dispatch_glib(const pollfd* poll_fds, int nfds) {
   }
 
   // Notify change callback only when state actually transitioned
+  if (went_idle) polkit_log("svc dispatch -> Idle (dialog hides)");
   if (did_state_change && impl_->on_change) {
+    polkit_log("svc dispatch notifying change");
     impl_->on_change();
+    polkit_log("svc dispatch notify done");
   }
 }
 

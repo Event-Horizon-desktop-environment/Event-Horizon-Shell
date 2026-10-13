@@ -33,7 +33,8 @@ constexpr double kPadT = 16.0;
 constexpr double kPadB = 16.0;
 constexpr double kRowH = 20.0;
 constexpr double kKeyValGap = 14.0;
-constexpr double kLogoCol = 108.0; // width reserved for the distro logo
+constexpr double kLogoBoxMin = 108.0; // small cards keep the old footprint
+constexpr double kLogoBoxMax = 256.0; // large cards get a fastfetch-scale logo
 constexpr double kLogoGap = 20.0;  // gutter between logo and rows
 constexpr double kColGap = 12.0;   // header -> rows
 constexpr double kRadius = 15.0;
@@ -42,8 +43,8 @@ constexpr double kRadius = 15.0;
 // are only belt-and-braces caps so a pathological value can't make a
 // screen-wide card.
 constexpr double kKeyColMax = 190.0;
-constexpr double kValColMax = 640.0;
-constexpr double kWidthMax = 1000.0;
+constexpr double kValColMax = 880.0;
+constexpr double kWidthMax = 1440.0;
 
 void measure_text(cairo_t* cr, const char* fontDesc, const char* str, int* outW, int* outH) {
   PangoLayout* lay = pango_cairo_create_layout(cr);
@@ -148,8 +149,8 @@ FetchSnapshot DesktopFetchWidget::read_fetch() {
 
 /* ---- Sizing ---- */
 
-void DesktopFetchWidget::relayout() {
-  cairo_t* cr = eh::widgets::get_measure_cr();
+void DesktopFetchWidget::relayout(cairo_t* cr) {
+  if (!cr) cr = eh::widgets::get_measure_cr();
 
   FetchSnapshot snap;
   {
@@ -158,7 +159,10 @@ void DesktopFetchWidget::relayout() {
   }
 
   // Key column is driven by the longest key; value column by the longest
-  // value. Both capped only as a safety net.
+  // value. Both capped only as a safety net. A few px of slack absorbs
+  // sub-pixel rounding between measure and paint so the "…" fallback stays
+  // a last resort for pathological values rather than a common case.
+  constexpr double kMeasureSlack = 6.0;
   double keyW = 0.0, valW = 0.0;
   for (const auto& [key, value] : snap.rows) {
     int w = 0;
@@ -167,8 +171,8 @@ void DesktopFetchWidget::relayout() {
     measure_text(cr, "Inter 11", value.c_str(), &w, nullptr);
     valW = std::max(valW, static_cast<double>(w));
   }
-  m_keyCol = std::clamp(keyW, 74.0, kKeyColMax);
-  m_valMax = std::clamp(valW, 200.0, kValColMax);
+  m_keyCol = std::clamp(keyW + kMeasureSlack, 74.0, kKeyColMax);
+  m_valMax = std::clamp(valW + kMeasureSlack, 200.0, kValColMax);
 
   int titleH = 0;
   measure_text(cr, "Inter Bold 18", snap.title.c_str(), nullptr, &titleH);
@@ -179,11 +183,15 @@ void DesktopFetchWidget::relayout() {
   const double rowsH = kRowH * static_cast<double>(snap.rows.size());
 
   const double contentH = rowsTop + rowsH + kPadB;
+  // Logo scales with the card like fastfetch's full-height ASCII logo, so a
+  // 25-row fetch card gets a large logo instead of a 108px stamp.
+  m_logoBox = std::clamp(contentH - kPadT - kPadB, kLogoBoxMin, kLogoBoxMax);
   // Logo column must at least fit its square.
-  m_height = static_cast<int>(std::ceil(std::max(contentH, kLogoCol + kPadT + kPadB)));
+  m_height = static_cast<int>(std::ceil(std::max(contentH, m_logoBox + kPadT + kPadB)));
 
-  const double contentW = kPadL + kLogoCol + kLogoGap + colW + kPadR;
+  const double contentW = kPadL + m_logoBox + kLogoGap + colW + kPadR;
   m_width = static_cast<int>(std::ceil(std::min(contentW, kWidthMax)));
+  m_layoutDirty = false;
 }
 
 /* ---- Widget ---- */
@@ -212,7 +220,8 @@ void DesktopFetchWidget::create() {
   if (m_readFuture.valid()) {
     if (m_readFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
       m_readFuture.get();
-      relayout();
+      // Snapshot changed — paint() will relayout with the painting cr.
+      m_layoutDirty = true;
     } else {
       return;
     }
@@ -230,12 +239,21 @@ void DesktopFetchWidget::create() {
     FetchSnapshot next = read_fetch();
     std::lock_guard lk(m_dataMutex);
     m_snapshot = std::move(next);
+    // Relayout is deferred to paint() so it measures with the painting cr.
+    // (Measuring here on the scratch context can disagree with scaled
+    // outputs — see relayout().)
+    m_layoutDirty = true;
   });
 }
 
 /* ---- Paint ---- */
 
 void DesktopFetchWidget::paint(cairo_t* cr, const eh::config::ShellConfig& sc) {
+  // Re-measure with the painting cr when data changed. The host clips to the
+  // previous intrinsic size for this frame and picks up the corrected size on
+  // the next tick; from then on measure and paint agree exactly.
+  if (m_layoutDirty) relayout(cr);
+
   FetchSnapshot snap;
   {
     std::lock_guard lk(m_dataMutex);
@@ -254,21 +272,24 @@ void DesktopFetchWidget::paint(cairo_t* cr, const eh::config::ShellConfig& sc) {
   eh::shell::shared::paint_glass_card(cr, 0.0, 0.0, W, H, kRadius, mc, backdropAlpha);
 
   // --- Distro logo, left column, vertically centered ---
-  const double logoTop = (H - kLogoCol) * 0.5;
+  // The box grows with the card (see relayout) so a full fetch readout gets
+  // a fastfetch-scale logo instead of a small stamp.
+  const double logoBox = m_logoBox;
+  const double logoTop = (H - logoBox) * 0.5;
   if (m_logo) {
     // Backplate keeps light logos readable on a dark card.
     cairo_save(cr);
-    rounded_rect(cr, kPadL, logoTop, kLogoCol, kLogoCol, kLogoCol * 0.28);
+    rounded_rect(cr, kPadL, logoTop, logoBox, logoBox, logoBox * 0.28);
     cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.05);
     cairo_fill(cr);
     cairo_restore(cr);
 
-    eh_os_logo::paint_logo_surface_in_square(cr, m_logo, kPadL, logoTop, kLogoCol,
+    eh_os_logo::paint_logo_surface_in_square(cr, m_logo, kPadL, logoTop, logoBox,
                                              false, 0.0, 0.0, 0.0);
   }
 
   // --- Right column geometry ---
-  const double colX = kPadL + kLogoCol + kLogoGap;
+  const double colX = kPadL + logoBox + kLogoGap;
   const double valX = colX + m_keyCol + kKeyValGap;
   const double valMaxW = std::min(m_valMax, W - kPadR - valX);
 
