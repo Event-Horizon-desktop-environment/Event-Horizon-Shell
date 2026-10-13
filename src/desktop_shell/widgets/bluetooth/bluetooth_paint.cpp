@@ -376,6 +376,9 @@ bool bluetooth_widget_poll() {
     eh::bt::BluezService& bt = eh::bt::BluezService::instance();
     if (bt.snapshot().connected) bt.refresh();
   }
+  // Picks up re-enumerations flagged from signal/worker threads (throttled
+  // internally; a no-op when nothing is pending).
+  eh::bt::BluezService::instance().refresh_if_needed();
 
   return g_btStateChanged.exchange(false, std::memory_order_relaxed);
 }

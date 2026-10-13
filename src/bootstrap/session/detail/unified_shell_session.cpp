@@ -51,6 +51,7 @@
 #include "desktop_shell/taskbar/core/taskbar.hpp"
 
 #include "services/network/core/network_manager_service.hpp"
+#include "services/bluetooth/bluez_service.hpp"
 #include "services/autostart/autostart_service.hpp"
 
 #include "desktop_shell/common/log/debug_log.hpp"
@@ -392,6 +393,17 @@ std::vector<FdHandler> UnifiedShellSession::build_handlers() {
     if (nfd >= 0) {
       handlers.emplace_back(nfd, POLLIN, [](short) {
         eh::net::NetworkManagerService::instance().handle_wake();
+      });
+    }
+  }
+  {
+    // Rebuilt every pass, so the lazily started Bluetooth service is picked up
+    // once its tab opens. Wakes embedded Settings (same process) the moment
+    // discovery results, connects, or errors land.
+    const int bfd = eh::bt::BluezService::instance().wake_fd();
+    if (bfd >= 0) {
+      handlers.emplace_back(bfd, POLLIN, [](short) {
+        eh::bt::BluezService::instance().handle_wake();
       });
     }
   }

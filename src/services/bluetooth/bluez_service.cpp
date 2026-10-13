@@ -2,15 +2,24 @@
 
 #include "configuration/shell_config.hpp"
 #include "platform/radio_block.h"
+#include "desktop_shell/common/log/debug_log.hpp"
 
 #include <sdbus-c++/Error.h>
 #include <sdbus-c++/IConnection.h>
 #include <sdbus-c++/IProxy.h>
+#include <sdbus-c++/Message.h>
 #include <sdbus-c++/Types.h>
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <exception>
+#include <sys/eventfd.h>
+#include <unistd.h>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <string>
@@ -124,6 +133,15 @@ BluezService::~BluezService() {
   }
   worker_cv_.notify_all();
   if (worker_.joinable()) worker_.join();
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  if (wake_fd_ >= 0) {
+    close(wake_fd_);
+    wake_fd_ = -1;
+  }
+  {
+    std::lock_guard<std::mutex> dlock(discovery_mtx_);
+    discovery_bus_.reset();
+  }
 }
 
 void BluezService::start() {
@@ -135,60 +153,48 @@ void BluezService::start() {
     objmgr_ = sdbus::createProxy(*bus_, kBluez, kBluezRoot);
     autoReconnect_.store(eh::config::shell_config_snapshot().bluetooth.autoReconnect,
                          std::memory_order_relaxed);
+    load_persisted_state_locked();
+    if (wake_fd_ < 0) {
+      wake_fd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+      if (wake_fd_ < 0) std::cerr << "[bluetooth] eventfd creation failed\n";
+    }
+    {
+      std::lock_guard<std::mutex> dlock(discovery_mtx_);
+      if (!discovery_bus_) {
+        try {
+          discovery_bus_ = sdbus::createSystemBusConnection();
+        } catch (const std::exception& e) {
+          debug_log("bluetooth", "discovery bus FAILED: %s", e.what());
+        }
+      }
+    }
     bind_signals_locked();
     refresh_locked();
     bus_->enterEventLoopAsync();
     worker_ = std::thread([this]() { auto_reconnect_worker(); });
-  } catch (const std::exception&) {
+  } catch (const std::exception& e) {
+    debug_log("bluetooth", "start FAILED: %s", e.what());
     bus_.reset();
     objmgr_.reset();
     return;
   }
   started_ = true;
+  debug_log("bluetooth", "service started (auto_reconnect=%d)",
+            autoReconnect_.load(std::memory_order_relaxed) ? 1 : 0);
 }
 
 void BluezService::start_discovery() {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_ || snap_.adapter_path.empty()) return;
-  try {
-    if (!adapter_proxy_) {
-      adapter_proxy_ = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{snap_.adapter_path});
-      cached_adapter_path_ = snap_.adapter_path;
-    }
-    adapter_proxy_->callMethod("StartDiscovery").onInterface(kAdapter);
-  } catch (const sdbus::Error&) {
-  }
+  run_adapter_method_async("StartDiscovery", {});
 }
 
 void BluezService::stop_discovery() {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_ || snap_.adapter_path.empty()) return;
-  try {
-    if (!adapter_proxy_) {
-      adapter_proxy_ = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{snap_.adapter_path});
-      cached_adapter_path_ = snap_.adapter_path;
-    }
-    adapter_proxy_->callMethod("StopDiscovery").onInterface(kAdapter);
-  } catch (const sdbus::Error&) {
-  }
+  run_adapter_method_async("StopDiscovery", {});
 }
 
 void BluezService::set_powered(bool on) {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_ || snap_.adapter_path.empty()) return;
-  try {
-    if (!adapter_proxy_) {
-      adapter_proxy_ = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{snap_.adapter_path});
-      cached_adapter_path_ = snap_.adapter_path;
-    }
-    adapter_proxy_->setProperty("Powered").onInterface(kAdapter).toValue(on);
-    snap_.powered = on;
-    if (on_change_) on_change_();
-  } catch (const sdbus::Error&) {
-  }
+  // Async: BlueZ SetPowered can block for seconds (adapter init); never hold
+  // the UI thread or mtx_ across the D-Bus round-trip (DE freeze).
+  run_set_powered_async(on);
 }
 
 void BluezService::refresh() {
@@ -225,12 +231,8 @@ void BluezService::bind_signals_locked() {
     
   if (!objmgr_) return;
 
-  auto debounce_ms = [this]() -> std::chrono::milliseconds {
-    return snap_.scanning ? std::chrono::milliseconds(500) : std::chrono::milliseconds(200);
-  };
-
   objmgr_->uponSignal("InterfacesAdded").onInterface(kObjMgr).call(
-      [this, debounce_ms](const sdbus::ObjectPath& path,
+      [this](const sdbus::ObjectPath& path,
                           const std::map<std::string, IfaceProps>& interfaces) {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     auto devIt = interfaces.find(kDevice);
@@ -242,10 +244,13 @@ void BluezService::bind_signals_locked() {
         d.has_battery = true;
         d.battery_percent = get_or<uint8_t>(batIt->second, "Percentage", 0);
       }
+      debug_log("bluetooth", "signal InterfacesAdded dev=%s alias='%s' paired=%d connected=%d",
+                  d.path.c_str(), d.alias.c_str(), d.paired ? 1 : 0, d.connected ? 1 : 0);
       if (d.connected) mark_connected_locked(d.address);
       bool found = false;
       for (auto& existing : devices_) {
         if (existing.path == d.path) {
+          d.connecting = existing.connecting && !d.connected;
           existing = std::move(d);
           found = true;
           break;
@@ -259,18 +264,16 @@ void BluezService::bind_signals_locked() {
         if (dev.connected) snap_.connected_count++;
       }
       snap_.connected = (snap_.powered && snap_.connected_count > 0);
-      if (on_change_) on_change_();
+      fire_change_locked();
     } else {
-      auto now = std::chrono::steady_clock::now();
-      if (now - lastRefreshDebounce_ >= debounce_ms()) {
-        lastRefreshDebounce_ = now;
-        refresh_locked();
-      }
+      // Non-device change: flag a re-enumeration for UI threads instead of
+      // blocking this event thread in D-Bus.
+      mark_refresh_needed();
     }
   });
 
   objmgr_->uponSignal("InterfacesRemoved").onInterface(kObjMgr).call(
-      [this, debounce_ms](const sdbus::ObjectPath& path,
+      [this](const sdbus::ObjectPath& path,
                           const std::vector<std::string>& ) {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     bool removed = false;
@@ -282,6 +285,7 @@ void BluezService::bind_signals_locked() {
       }
     }
     if (removed) {
+      debug_log("bluetooth", "signal InterfacesRemoved dev=%s", std::string(path).c_str());
       snap_.paired_count = 0;
       snap_.connected_count = 0;
       for (const auto& dev : devices_) {
@@ -289,121 +293,158 @@ void BluezService::bind_signals_locked() {
         if (dev.connected) snap_.connected_count++;
       }
       snap_.connected = (snap_.powered && snap_.connected_count > 0);
-      if (on_change_) on_change_();
+      fire_change_locked();
     } else {
-      auto now = std::chrono::steady_clock::now();
-      if (now - lastRefreshDebounce_ >= debounce_ms()) {
-        lastRefreshDebounce_ = now;
-        refresh_locked();
-      }
+      mark_refresh_needed();
     }
   });
 
-  objmgr_->uponSignal("PropertiesChanged").onInterface(kProps).call(
-      [this, debounce_ms](const std::string& iface,
-                          const std::map<std::string, sdbus::Variant>& props,
-                          const std::vector<std::string>& ) {
-    if (iface != kAdapter && iface != kDevice && iface != kBattery) return;
-    std::lock_guard<std::recursive_mutex> lock(mtx_);
-    if (iface == kAdapter) {
-      auto pit = props.find("Powered");
-      if (pit != props.end()) {
-        try { snap_.powered = pit->second.get<bool>(); } catch (...) {}
+  // Live PropertiesChanged from adapters/devices/batteries. This MUST be a
+  // connection-level match: proxy signal subscriptions are pinned to the
+  // proxy's own object path ("/" here), so the previous
+  // objmgr_->uponSignal("PropertiesChanged") form silently dropped every
+  // adapter/device signal and live updates never happened. path_namespace
+  // covers the whole BlueZ tree with one rule; InterfacesAdded/Removed above
+  // stay on the proxy (they are emitted from "/" itself).
+  try {
+    const std::string match =
+        std::string("type='signal',sender='org.bluez',interface='") + kProps +
+        "',member='PropertiesChanged',path_namespace='/org/bluez'";
+    bus_->addMatch(match, [this](sdbus::Message msg) {
+      on_bluez_properties_changed(std::move(msg));
+    });
+  } catch (const sdbus::Error& e) {
+    debug_log("bluetooth", "PropertiesChanged match FAILED: %s", e.what());
+  } catch (const std::exception& e) {
+    debug_log("bluetooth", "PropertiesChanged match FAILED: %s", e.what());
+  }
+}
+
+
+void BluezService::on_bluez_properties_changed(sdbus::Message msg) {
+  std::string iface;
+  std::map<std::string, sdbus::Variant> props;
+  std::vector<std::string> invalidated;
+  std::string path;
+  try {
+    msg >> iface >> props >> invalidated;
+    path = msg.getPath();
+  } catch (...) {
+    return;
+  }
+  if (iface != kAdapter && iface != kDevice && iface != kBattery) return;
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  if (iface == kAdapter) {
+    // Only track our adapter; extra controllers are ignored like elsewhere.
+    if (!snap_.adapter_path.empty() && path != snap_.adapter_path) return;
+    const bool was_powered = snap_.powered;
+    const bool was_scanning = snap_.scanning;
+    auto pit = props.find("Powered");
+    if (pit != props.end()) {
+      try { snap_.powered = pit->second.get<bool>(); } catch (...) {}
+    }
+    auto dit = props.find("Discovering");
+    if (dit != props.end()) {
+      try { snap_.scanning = dit->second.get<bool>(); } catch (...) {}
+    }
+    if (snap_.powered != was_powered)
+      debug_log("bluetooth", "adapter Powered=%d", snap_.powered ? 1 : 0);
+    if (snap_.scanning != was_scanning)
+      debug_log("bluetooth", "adapter Discovering=%d", snap_.scanning ? 1 : 0);
+    fire_change_locked();
+    return;
+  }
+  bool known = false;
+  for (auto& dev : devices_) {
+    if (dev.path != path) continue;
+    known = true;
+    if (iface == kDevice) {
+      auto it = props.find("Connected");
+      if (it != props.end()) {
+        const bool was = dev.connected;
+        try {
+          dev.connected = it->second.get<bool>();
+        } catch (...) {
+        }
+        if (dev.connected) {
+          dev.connecting = false;
+          debug_log("bluetooth", "device Connected alias='%s' addr=%s",
+                    dev.alias.c_str(), dev.address.c_str());
+          mark_connected_locked(dev.address);
+        } else if (was) {
+          dev.connecting = false;
+          debug_log("bluetooth", "device Disconnected alias='%s' addr=%s",
+                    dev.alias.c_str(), dev.address.c_str());
+        }
       }
-      auto dit = props.find("Discovering");
-      if (dit != props.end()) {
-        try { snap_.scanning = dit->second.get<bool>(); } catch (...) {}
+      it = props.find("Paired");
+      if (it != props.end()) {
+        try { dev.paired = it->second.get<bool>(); } catch (...) {}
       }
-      if (on_change_) on_change_();
-    } else if (iface == kDevice) {
-      // Extract device path from the signal message sender
-      try {
-        auto msg = objmgr_->getCurrentlyProcessedMessage();
-        std::string path = msg.getPath();
-        for (auto& dev : devices_) {
-          if (dev.path == path) {
-            auto it = props.find("Connected");
-            if (it != props.end()) dev.connected = it->second.get<bool>();
-            if (dev.connected) mark_connected_locked(dev.address);
-            it = props.find("Paired");
-            if (it != props.end()) dev.paired = it->second.get<bool>();
-            it = props.find("Trusted");
-            if (it != props.end()) dev.trusted = it->second.get<bool>();
-            it = props.find("RSSI");
-            if (it != props.end()) { dev.has_rssi = true; dev.rssi = it->second.get<int16_t>(); }
-            it = props.find("Alias");
-            if (it != props.end()) dev.alias = it->second.get<std::string>();
-            it = props.find("Name");
-            if (it != props.end() && dev.alias.empty()) dev.alias = it->second.get<std::string>();
-            it = props.find("Icon");
-            if (it != props.end()) {
-              std::string icon = it->second.get<std::string>();
-              dev.kind = classify_icon(icon);
-              if (dev.kind == BluetoothDeviceKind::Unknown) {
-                auto cit = props.find("Class");
-                if (cit != props.end()) {
-                  uint32_t cod = cit->second.get<uint32_t>();
-                  dev.kind = classify_class(cod);
-                }
-              }
-            }
-            it = props.find("Class");
-            if (it != props.end() && dev.kind == BluetoothDeviceKind::Unknown) {
-              uint32_t cod = it->second.get<uint32_t>();
+      it = props.find("Trusted");
+      if (it != props.end()) {
+        try { dev.trusted = it->second.get<bool>(); } catch (...) {}
+      }
+      it = props.find("RSSI");
+      if (it != props.end()) {
+        try { dev.has_rssi = true; dev.rssi = it->second.get<int16_t>(); } catch (...) {}
+      }
+      it = props.find("Alias");
+      if (it != props.end()) {
+        try { dev.alias = it->second.get<std::string>(); } catch (...) {}
+      }
+      it = props.find("Name");
+      if (it != props.end() && dev.alias.empty()) {
+        try { dev.alias = it->second.get<std::string>(); } catch (...) {}
+      }
+      it = props.find("Icon");
+      if (it != props.end()) {
+        try {
+          std::string icon = it->second.get<std::string>();
+          dev.kind = classify_icon(icon);
+          if (dev.kind == BluetoothDeviceKind::Unknown) {
+            auto cit = props.find("Class");
+            if (cit != props.end()) {
+              uint32_t cod = cit->second.get<uint32_t>();
               dev.kind = classify_class(cod);
             }
-            // Recalculate counts
-            snap_.paired_count = 0;
-            snap_.connected_count = 0;
-            for (const auto& d : devices_) {
-              if (d.paired) snap_.paired_count++;
-              if (d.connected) snap_.connected_count++;
-            }
-            snap_.connected = (snap_.powered && snap_.connected_count > 0);
-            if (on_change_) on_change_();
-            return;
           }
-        }
-      } catch (const sdbus::Error&) {
-      } catch (const std::exception&) {
+        } catch (...) {}
       }
-      // Device not found in list or failed to read message path — full refresh
-      auto now = std::chrono::steady_clock::now();
-      if (now - lastRefreshDebounce_ >= debounce_ms()) {
-        lastRefreshDebounce_ = now;
-        refresh_locked();
+      it = props.find("Class");
+      if (it != props.end() && dev.kind == BluetoothDeviceKind::Unknown) {
+        try {
+          uint32_t cod = it->second.get<uint32_t>();
+          dev.kind = classify_class(cod);
+        } catch (...) {}
       }
-    } else if (iface == kBattery) {
-      // Live battery updates (org.bluez.Battery1) — headphones, HID devices,
-      // GATT Battery Service etc. report here and we must forward them so the
-      // dock label and popup stay current without a full re-enumeration.
-      try {
-        auto msg = objmgr_->getCurrentlyProcessedMessage();
-        std::string path = msg.getPath();
-        for (auto& dev : devices_) {
-          if (dev.path == path) {
-            auto pit = props.find("Percentage");
-            if (pit != props.end()) {
-              try {
-                dev.battery_percent = pit->second.get<uint8_t>();
-                dev.has_battery = true;
-              } catch (...) {}
-            }
-            if (on_change_) on_change_();
-            return;
-          }
-        }
-      } catch (const sdbus::Error&) {
-      } catch (const std::exception&) {
+      // Recalculate counts
+      snap_.paired_count = 0;
+      snap_.connected_count = 0;
+      for (const auto& d : devices_) {
+        if (d.paired) snap_.paired_count++;
+        if (d.connected) snap_.connected_count++;
       }
-      // Device not in the cached list — full refresh picks it up.
-      auto now = std::chrono::steady_clock::now();
-      if (now - lastRefreshDebounce_ >= debounce_ms()) {
-        lastRefreshDebounce_ = now;
-        refresh_locked();
-      }
+      snap_.connected = (snap_.powered && snap_.connected_count > 0);
+      fire_change_locked();
+      return;
     }
-  });
+    // org.bluez.Battery1 lives on the device object path itself.
+    auto pit = props.find("Percentage");
+    if (pit != props.end()) {
+      try {
+        dev.battery_percent = pit->second.get<uint8_t>();
+        dev.has_battery = true;
+      } catch (...) {}
+    }
+    fire_change_locked();
+    return;
+  }
+  if (!known) {
+    // Signal for a device we haven't enumerated — flag it; the next UI-thread
+    // refresh_if_needed() picks it up. Never block this event thread in D-Bus.
+    mark_refresh_needed();
+  }
 }
 
 void BluezService::refresh_locked() {
@@ -432,7 +473,7 @@ void BluezService::refresh_locked() {
   }
 
   if (!adapterPath) {
-    if (on_change_) on_change_();
+    fire_change_locked();
     return;
   }
 
@@ -528,75 +569,87 @@ void BluezService::refresh_locked() {
   snap_.paired_count = paired;
   snap_.connected_count = connected;
   snap_.connected = (snap_.powered && connected > 0);
+  // Preserve in-flight `connecting` flags: refresh rebuilds the vector from
+  // scratch, which would otherwise clear the spinner the async Connect/Pair
+  // path just set (and the UI would flicker back to idle mid-operation).
+  {
+    std::unordered_set<std::string> still_connecting;
+    for (const auto& d : devices_)
+      if (d.connecting && !d.connected) still_connecting.insert(d.path);
+    if (!still_connecting.empty()) {
+      for (auto& d : newDevices) {
+        if (!d.connected && still_connecting.count(d.path)) d.connecting = true;
+      }
+    }
+  }
   devices_ = std::move(newDevices);
-
-  if (on_change_) on_change_();
+  debug_log("bluetooth", "refresh adapter=%s powered=%d scanning=%d paired=%d connected=%d total=%d",
+            snap_.adapter_path.c_str(), snap_.powered ? 1 : 0, snap_.scanning ? 1 : 0,
+            snap_.paired_count, snap_.connected_count, static_cast<int>(devices_.size()));
+  fire_change_locked();
 }
 
 void BluezService::connect_device(const std::string& path) {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_) return;
-  try {
-    auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
-    dev->callMethod("Connect").onInterface(kDevice);
-  } catch (const sdbus::Error&) {
-  }
+  // Async: org.bluez.Device1.Connect routinely blocks 5-30s. The old code ran
+  // it synchronously while holding mtx_, so every paint (full_state) blocked
+  // behind it and the whole DE froze. Now we flag `connecting` for instant UI
+  // feedback and do the D-Bus call on a detached thread.
+  run_device_method_async(path, "Connect", true);
 }
 
 void BluezService::disconnect_device(const std::string& path) {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_) return;
-  // Honour explicit disconnects: keep auto-reconnect away from this device for
-  // a few minutes instead of immediately bringing it back.
-  for (const auto& d : devices_) {
-    if (d.path == path) {
-      settle_on_disconnected(d.address);
-      break;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    for (const auto& d : devices_) {
+      if (d.path == path) {
+        settle_on_disconnected(d.address);
+        break;
+      }
     }
   }
-  try {
-    auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
-    dev->callMethod("Disconnect").onInterface(kDevice);
-  } catch (const sdbus::Error&) {
-  }
+  run_device_method_async(path, "Disconnect", false);
 }
 
 void BluezService::forget_device(const std::string& path) {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_ || snap_.adapter_path.empty()) return;
-  try {
-    if (!adapter_proxy_) {
-      adapter_proxy_ = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{snap_.adapter_path});
-      cached_adapter_path_ = snap_.adapter_path;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    if (!started_) return;
+    for (const auto& d : devices_) {
+      if (d.path == path && !d.address.empty()) {
+        everConnected_.erase(d.address);
+        reconnectCooldown_.erase(d.address);
+        if (last_connected_address_ == d.address) last_connected_address_.clear();
+        save_persisted_state_locked();
+        break;
+      }
     }
-    adapter_proxy_->callMethod("RemoveDevice").onInterface(kAdapter).withArguments(sdbus::ObjectPath{path});
-  } catch (const sdbus::Error&) {
   }
+  run_adapter_method_async("RemoveDevice", path);
 }
 
 void BluezService::pair_device(const std::string& path) {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_) return;
-  try {
-    auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
-    dev->callMethod("Pair").onInterface(kDevice);
-  } catch (const sdbus::Error&) {
-  }
+  // Pairing can block on agent interaction; same async treatment as Connect.
+  run_device_method_async(path, "Pair", true);
 }
 
 void BluezService::set_device_trust(const std::string& path, bool trusted) {
-   
-  std::lock_guard<std::recursive_mutex> lock(mtx_);
-  if (!started_) return;
-  try {
-    auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{path});
-    dev->setProperty("Trusted").onInterface(kDevice).toValue(trusted);
-  } catch (const sdbus::Error&) {
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    if (!started_) return;
   }
+  std::thread([this, path, trusted]() {
+    debug_log("bluetooth", "request Trusted=%d %s", trusted ? 1 : 0, path.c_str());
+    try {
+      auto bus = sdbus::createSystemBusConnection();
+      auto dev = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{path});
+      dev->setProperty("Trusted").onInterface(kDevice).toValue(trusted);
+      debug_log("bluetooth", "Trusted=%d %s ok", trusted ? 1 : 0, path.c_str());
+    } catch (const std::exception& e) {
+      debug_log("bluetooth", "Trusted %s FAILED: %s", path.c_str(), e.what());
+    } catch (...) {
+    }
+    mark_refresh_needed();
+  }).detach();
 }
 
 void BluezService::set_auto_reconnect(bool enabled) {
@@ -610,10 +663,24 @@ bool BluezService::auto_reconnect() const noexcept {
 // Caller must hold mtx_.
 void BluezService::mark_connected_locked(const std::string& address) {
   if (address.empty()) return;
-  everConnected_.insert(address);
+  bool changed = false;
+  if (everConnected_.insert(address).second) changed = true;
+  if (last_connected_address_ != address) {
+    last_connected_address_ = address;
+    changed = true;
+  }
   // A freshly connected device is no longer in a cooldown; a later drop can be
   // retried promptly.
   reconnectCooldown_.erase(address);
+  // Persist so "remember last device" survives restarts instead of living only
+  // in this process' memory. Writes only when something actually changed (this
+  // runs on every refresh while connected, so unconditional writes would churn
+  // the disk every few seconds).
+  if (changed) {
+    debug_log("bluetooth", "remembered %s (last-connected, ever=%zu)",
+              address.c_str(), everConnected_.size());
+    save_persisted_state_locked();
+  }
 }
 
 // Caller must hold mtx_. Pushes the next auto-reconnect attempt for this device
@@ -642,35 +709,388 @@ void BluezService::attempt_auto_reconnects() {
     std::string address;
   };
   std::vector<Candidate> candidates;
+  std::string last;
   {
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     if (!started_ || !bus_ || !snap_.available || !snap_.powered || snap_.scanning) return;
+    last = last_connected_address_;
     const auto now = std::chrono::steady_clock::now();
     for (const auto& d : devices_) {
-      if (!d.paired || d.connected || d.address.empty()) continue;
+      if (!d.paired || d.connected || d.connecting || d.address.empty()) continue;
       // Only nudge devices that are currently visible (RSSI present) or have
-      // been connected during this process lifetime. This avoids paging
-      // paired-but-never-used devices forever.
+      // been connected before (persisted ever-connected set). This avoids
+      // paging paired-but-never-used devices forever.
       if (!d.has_rssi && everConnected_.count(d.address) == 0) continue;
       auto it = reconnectCooldown_.find(d.address);
       if (it != reconnectCooldown_.end() && now < it->second) continue;
       candidates.push_back({d.path, d.address});
     }
+    if (!candidates.empty())
+      debug_log("bluetooth", "auto-reconnect: %zu candidate(s) last=%s",
+                candidates.size(), last.empty() ? "-" : last.c_str());
+    // The last-used device connects first so it wins the race when several
+    // remembered devices are in range.
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [&](const Candidate& a, const Candidate& b) {
+                       const bool a_last = (!last.empty() && a.address == last);
+                       const bool b_last = (!last.empty() && b.address == last);
+                       return a_last && !b_last;
+                     });
   }
 
   for (const auto& c : candidates) {
+    std::string attempt_err;
     try {
-      auto dev = sdbus::createProxy(*bus_, kBluez, sdbus::ObjectPath{c.path});
-      dev->callMethod("Connect").onInterface(kDevice);
-    } catch (const sdbus::Error&) {
-    } catch (const std::exception&) {
+      // Fresh connection per attempt: never touch the shared bus_/objmgr_
+      // proxies from this worker thread.
+      auto bus = sdbus::createSystemBusConnection();
+      auto dev = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{c.path});
+      dev->callMethod("Connect").onInterface(kDevice).withTimeout(std::chrono::seconds(15));
+    } catch (const sdbus::Error& e) {
+      attempt_err = e.what();
+    } catch (const std::exception& e) {
+      attempt_err = e.what();
     }
+    if (attempt_err.empty())
+      debug_log("bluetooth", "auto-reconnect %s ok", c.address.c_str());
+    else
+      debug_log("bluetooth", "auto-reconnect %s FAILED: %s", c.address.c_str(),
+                attempt_err.c_str());
     // One attempt per minute per device keeps the radio quiet while a device
     // is out of range, but reconnects promptly once it comes back.
     const auto after = std::chrono::steady_clock::now();
     std::lock_guard<std::recursive_mutex> lock(mtx_);
     reconnectCooldown_[c.address] = after + std::chrono::seconds(60);
   }
+}
+
+std::string BluezService::persisted_state_path() const {
+  try {
+    return eh::config::state_component_toml_path("bluetooth");
+  } catch (...) {
+  }
+  const char* xdg = std::getenv("XDG_STATE_HOME");
+  std::string base;
+  if (xdg && xdg[0])
+    base = std::string(xdg) + "/event-horizon";
+  else if (const char* h = std::getenv("HOME"))
+    base = std::string(h) + "/.local/state/event-horizon";
+  else
+    base = "/tmp/event-horizon";
+  return base + "/bluetooth/bluetooth.toml";
+}
+
+void BluezService::load_persisted_state_locked() {
+  everConnected_.clear();
+  last_connected_address_.clear();
+  const std::string path = persisted_state_path();
+  std::ifstream f(path);
+  if (!f) return;
+  std::string line;
+  while (std::getline(f, line)) {
+    const size_t s = line.find_first_not_of(" \t\r\n");
+    if (s == std::string::npos || line[s] == '#') continue;
+    if (line.compare(s, 14, "last_connected") == 0) {
+      const size_t q1 = line.find('"', s);
+      const size_t q2 = (q1 == std::string::npos) ? std::string::npos : line.find('"', q1 + 1);
+      if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1 + 1) {
+        const std::string addr = line.substr(q1 + 1, q2 - q1 - 1);
+        if (!addr.empty()) {
+          last_connected_address_ = addr;
+          everConnected_.insert(addr);
+        }
+      }
+    } else if (line.compare(s, 14, "ever_connected") == 0) {
+      size_t pos = s;
+      while (true) {
+        const size_t q1 = line.find('"', pos);
+        if (q1 == std::string::npos) break;
+        const size_t q2 = line.find('"', q1 + 1);
+        if (q2 == std::string::npos) break;
+        const std::string addr = line.substr(q1 + 1, q2 - q1 - 1);
+        if (!addr.empty() && addr.find(':') != std::string::npos) everConnected_.insert(addr);
+        pos = q2 + 1;
+      }
+    }
+  }
+  debug_log("bluetooth", "memory loaded from %s: last=%s ever=%zu",
+            persisted_state_path().c_str(),
+            last_connected_address_.empty() ? "-" : last_connected_address_.c_str(),
+            everConnected_.size());
+}
+
+void BluezService::save_persisted_state_locked() {
+  const std::string path = persisted_state_path();
+  try {
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+    const std::string tmp = path + ".tmp";
+    {
+      std::ofstream f(tmp, std::ios::trunc);
+      if (!f) return;
+      f << "# Event Horizon Bluetooth memory (auto-generated)\n";
+      f << "last_connected = \"" << last_connected_address_ << "\"\n";
+      f << "ever_connected = [";
+      bool first = true;
+      for (const auto& a : everConnected_) {
+        if (!first) f << ", ";
+        f << "\"" << a << "\"";
+        first = false;
+      }
+      f << "]\n";
+      f.flush();
+      if (!f) return;
+    }
+    std::error_code rec;
+    std::filesystem::rename(tmp, path, rec);
+    debug_log("bluetooth", "memory saved to %s: last=%s ever=%zu", path.c_str(),
+              last_connected_address_.empty() ? "-" : last_connected_address_.c_str(),
+              everConnected_.size());
+  } catch (...) {
+  }
+}
+
+void BluezService::set_connecting_locked(const std::string& path, bool connecting) {
+  for (auto& d : devices_) {
+    if (d.path == path) {
+      d.connecting = connecting;
+      return;
+    }
+  }
+}
+
+void BluezService::set_last_error_locked(std::string msg) {
+  last_error_ = std::move(msg);
+  last_error_time_ = std::chrono::steady_clock::now();
+}
+
+std::string BluezService::last_connected_address() const {
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  return last_connected_address_;
+}
+
+std::string BluezService::last_error() const {
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  // Errors older than 2 minutes are stale; report empty so the UI clears.
+  if (!last_error_.empty() &&
+      std::chrono::steady_clock::now() - last_error_time_ > std::chrono::minutes(2))
+    return {};
+  return last_error_;
+}
+
+void BluezService::clear_error() {
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  last_error_.clear();
+}
+
+void BluezService::fire_change_locked() {
+  const auto now = std::chrono::steady_clock::now();
+  if (wake_fd_ >= 0 && now - last_wake_kick_ >= std::chrono::milliseconds(250)) {
+    last_wake_kick_ = now;
+    uint64_t v = 1;
+    (void)write(wake_fd_, &v, sizeof(v));
+  }
+  if (on_change_) on_change_();
+}
+
+void BluezService::mark_refresh_needed() {
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  refresh_needed_ = true;
+  fire_change_locked();
+}
+
+void BluezService::refresh_if_needed() {
+  bool do_it = false;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    const auto now = std::chrono::steady_clock::now();
+    if (refresh_needed_ && now - last_dirty_refresh_ >= std::chrono::milliseconds(500)) {
+      refresh_needed_ = false;
+      last_dirty_refresh_ = now;
+      do_it = true;
+    }
+  }
+  if (do_it) refresh();
+}
+
+int BluezService::wake_fd() const {
+  std::lock_guard<std::recursive_mutex> lock(mtx_);
+  return wake_fd_;
+}
+
+void BluezService::handle_wake() {
+  int fd = -1;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    fd = wake_fd_;
+  }
+  if (fd >= 0) {
+    // Drain the counter; concurrent fires coalesce into one wakeup.
+    uint64_t v = 0;
+    while (read(fd, &v, sizeof(v)) == static_cast<ssize_t>(sizeof(v))) {
+    }
+  }
+}
+
+void BluezService::run_device_method_async(std::string path, std::string method, bool mark_connecting) {
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    if (!started_) return;
+    debug_log("bluetooth", "request %s %s", method.c_str(), path.c_str());
+    if (mark_connecting) {
+      for (auto& d : devices_) {
+        if (d.path == path) {
+          if (d.connected || d.connecting) return;  // already there / in flight
+          d.connecting = true;
+          break;
+        }
+      }
+      last_error_.clear();
+      fire_change_locked();
+    }
+  }
+  std::thread([this, path = std::move(path), method = std::move(method), mark_connecting]() {
+    std::string err;
+    std::string addr;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
+      for (const auto& d : devices_) {
+        if (d.path == path) {
+          addr = d.address;
+          break;
+        }
+      }
+    }
+    try {
+      // Fresh bus per operation: the shared bus_/objmgr_ proxies stay on the
+      // service/event-loop threads, and the UI thread never blocks here.
+      auto bus = sdbus::createSystemBusConnection();
+      auto dev = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{path});
+      dev->callMethod(method).onInterface(kDevice).withTimeout(std::chrono::seconds(25));
+    } catch (const sdbus::Error& e) {
+      err = e.what();
+    } catch (const std::exception& e) {
+      err = e.what();
+    }
+    {
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
+      if (mark_connecting) set_connecting_locked(path, false);
+      debug_log("bluetooth", "%s %s %s", method.c_str(), path.c_str(),
+                  err.empty() ? "ok" : ("FAILED: " + err).c_str());
+      if (!err.empty()) {
+        set_last_error_locked(method + " failed: " + err);
+        // Back off this device for a bit so auto-reconnect doesn't hammer it.
+        if (!addr.empty())
+          reconnectCooldown_[addr] = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+      } else if (method == "Connect" && !addr.empty()) {
+        mark_connected_locked(addr);
+      }
+      fire_change_locked();
+    }
+    if (err.empty() && method == "Pair") {
+      // Best-effort: trust freshly paired devices so later auto-reconnects and
+      // incoming connections work without another prompt.
+      try {
+        auto bus = sdbus::createSystemBusConnection();
+        auto dev = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{path});
+        dev->setProperty("Trusted").onInterface(kDevice).toValue(true);
+      } catch (...) {
+      }
+    }
+    // State sync arrives via signals; the flag covers anything missed. Workers
+    // must not block in D-Bus on shared connections.
+    mark_refresh_needed();
+  }).detach();
+}
+
+void BluezService::run_adapter_method_async(std::string method, std::string device_path) {
+  std::string adapter;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    if (!started_ || snap_.adapter_path.empty()) return;
+    adapter = snap_.adapter_path;
+    if (method == "StartDiscovery" && !snap_.scanning) {
+      snap_.scanning = true;
+      fire_change_locked();
+    } else if (method == "StopDiscovery" && snap_.scanning) {
+      snap_.scanning = false;
+      fire_change_locked();
+    }
+    debug_log("bluetooth", "request %s adapter=%s%s", method.c_str(), adapter.c_str(),
+              device_path.empty() ? "" : (" dev=" + device_path).c_str());
+  }
+  const bool discovery_session = (method == "StartDiscovery" || method == "StopDiscovery");
+  std::thread([this, adapter = std::move(adapter), method = std::move(method),
+               device_path = std::move(device_path), discovery_session]() {
+    std::string err;
+    try {
+      if (discovery_session) {
+        // Discovery sessions are owned by the issuing D-Bus client: BlueZ
+        // kills the scan when that client disconnects, so a throwaway per-call
+        // connection suicides the scan on thread exit. discovery_bus_ lives as
+        // long as the service and is used ONLY here (serialized), so sessions
+        // survive and no connection is ever touched by two threads at once.
+        // Still off the UI thread, so no DE freeze.
+        std::lock_guard<std::mutex> dlock(discovery_mtx_);
+        if (!discovery_bus_) throw sdbus::Error(sdbus::Error::Name{"org.bluez.Error.Failed"},
+                                                "no discovery bus");
+        auto proxy = sdbus::createProxy(*discovery_bus_, kBluez, sdbus::ObjectPath{adapter});
+        proxy->callMethod(method).onInterface(kAdapter).withTimeout(std::chrono::seconds(10));
+      } else {
+        auto bus = sdbus::createSystemBusConnection();
+        auto proxy = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{adapter});
+        proxy->callMethod("RemoveDevice")
+            .onInterface(kAdapter)
+            .withArguments(sdbus::ObjectPath{device_path})
+            .withTimeout(std::chrono::seconds(10));
+      }
+    } catch (const sdbus::Error& e) {
+      err = e.what();
+    } catch (const std::exception& e) {
+      err = e.what();
+    }
+    debug_log("bluetooth", "%s %s", method.c_str(), err.empty() ? "ok" : ("FAILED: " + err).c_str());
+    if (!err.empty()) {
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
+      set_last_error_locked(method + " failed: " + err);
+      fire_change_locked();
+    }
+    mark_refresh_needed();
+  }).detach();
+}
+
+void BluezService::run_set_powered_async(bool on) {
+  std::string adapter;
+  {
+    std::lock_guard<std::recursive_mutex> lock(mtx_);
+    if (!started_ || snap_.adapter_path.empty()) return;
+    adapter = snap_.adapter_path;
+    debug_log("bluetooth", "request Power %s", on ? "on" : "off");
+    snap_.powered = on;  // optimistic; PropertiesChanged/refresh corrects it
+    last_error_.clear();
+    fire_change_locked();
+  }
+  std::thread([this, adapter = std::move(adapter), on]() {
+    std::string err;
+    try {
+      auto bus = sdbus::createSystemBusConnection();
+      auto proxy = sdbus::createProxy(*bus, kBluez, sdbus::ObjectPath{adapter});
+      proxy->setProperty("Powered").onInterface(kAdapter).toValue(on);
+    } catch (const sdbus::Error& e) {
+      err = e.what();
+    } catch (const std::exception& e) {
+      err = e.what();
+    }
+    debug_log("bluetooth", "Power %s %s", on ? "on" : "off",
+                err.empty() ? "ok" : ("FAILED: " + err).c_str());
+    {
+      std::lock_guard<std::recursive_mutex> lock(mtx_);
+      if (!err.empty())
+        set_last_error_locked(std::string("Power ") + (on ? "on" : "off") + " failed: " + err);
+      fire_change_locked();
+    }
+    mark_refresh_needed();
+  }).detach();
 }
 
 // Helper functions.
@@ -697,17 +1117,20 @@ const char* bluetooth_device_kind_name(BluetoothDeviceKind kind) {
 const char* bluetooth_device_kind_glyph(BluetoothDeviceKind kind) {
    
   switch (kind) {
-    case BluetoothDeviceKind::Headset:
-    case BluetoothDeviceKind::Headphones:
-    case BluetoothDeviceKind::Earbuds:
-    case BluetoothDeviceKind::Speaker:
-      return "speaker";
+    // One distinct Material Symbols Rounded ligature per kind (all verified
+    // present in the vendored font via hb-shape). Audio devices must NOT
+    // collapse: A2DP sinks are headphones, HSP/HFP voice links are headset_mic,
+    // LE buds are earbuds — only actual speakers get speaker.
+    case BluetoothDeviceKind::Headset: return "headset_mic";
+    case BluetoothDeviceKind::Headphones: return "headphones";
+    case BluetoothDeviceKind::Earbuds: return "earbuds";
+    case BluetoothDeviceKind::Speaker: return "speaker";
     case BluetoothDeviceKind::Microphone: return "mic";
     case BluetoothDeviceKind::Mouse: return "mouse";
     case BluetoothDeviceKind::Keyboard: return "keyboard";
     case BluetoothDeviceKind::Phone: return "smartphone";
     case BluetoothDeviceKind::Computer: return "computer";
-    case BluetoothDeviceKind::Gamepad: return "sports_esports";
+    case BluetoothDeviceKind::Gamepad: return "gamepad";
     case BluetoothDeviceKind::Watch: return "watch";
     case BluetoothDeviceKind::Tv: return "tv";
     default: return "bluetooth";

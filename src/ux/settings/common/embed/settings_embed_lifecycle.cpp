@@ -47,6 +47,7 @@
 #include "configuration/shell_config.hpp"
 #include "bootstrap/thread/thread_dispatch.hpp"
 #include "services/network/core/network_manager_service.hpp"
+#include "services/bluetooth/bluez_service.hpp"
 
 #include "desktop_shell/common/log/debug_log.hpp"
 #include "desktop_shell/notifications/types/notifications_notify.hpp"
@@ -700,9 +701,9 @@ static void standalone_config_applied_hook(void*) {
   // hook) are drained promptly even when no fd has events.
   constexpr int kSettingsStandalonePollMs = 250;
   while (app.running && g_settings_standalone_signal == 0) {
-    pollfd pf[4]{};
+    pollfd pf[5]{};
     int n = 0;
-    int thumbIdx = -1, nmIdx = -1, ipcIdx = -1;
+    int thumbIdx = -1, nmIdx = -1, ipcIdx = -1, btIdx = -1;
     pf[n].fd = dpyFd;
     pf[n].events = POLLIN | POLLERR | POLLHUP;
     ++n;
@@ -733,6 +734,17 @@ static void standalone_config_applied_hook(void*) {
         pf[n].fd = cfd;
         pf[n].events = POLLIN | POLLERR | POLLHUP | POLLNVAL;
         ipcIdx = n;
+        ++n;
+      }
+    }
+    // Bluetooth: re-resolved every pass — BluezService starts lazily when its
+    // tab opens, so a once-captured fd would stay -1 forever.
+    {
+      const int btFd = eh::bt::BluezService::instance().wake_fd();
+      if (btFd >= 0) {
+        pf[n].fd = btFd;
+        pf[n].events = POLLIN | POLLERR | POLLHUP;
+        btIdx = n;
         ++n;
       }
     }
@@ -774,6 +786,10 @@ static void standalone_config_applied_hook(void*) {
     }
     if (nmIdx >= 0 && (pf[nmIdx].revents & POLLIN)) {
       nm.handle_wake();
+      draw(app);
+    }
+    if (btIdx >= 0 && (pf[btIdx].revents & POLLIN)) {
+      eh::bt::BluezService::instance().handle_wake();
       draw(app);
     }
     if (ipcIdx >= 0 && (pf[ipcIdx].revents & POLLIN)) {

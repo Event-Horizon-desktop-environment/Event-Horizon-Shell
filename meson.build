@@ -1254,10 +1254,18 @@ install_data(
 # Bundled fonts used at runtime. Inter ships via the `assets/fonts/inter`
 # git submodule (rsms/inter @ v4.0); Material Symbols Rounded is vendored
 # in-tree. Fira Code and SF Pro are not used by the shell and are not shipped.
-install_data(
-  'assets/fonts/inter/docs/font-files/InterVariable.ttf',
-  install_dir: get_option('datadir') / 'event-horizon' / 'assets' / 'fonts' / 'inter',
-)
+# Guarded: the Inter submodule may be absent on clones made without
+# --recurse-submodules. install_data() hard-errors on missing files, so check
+# first and tell the user exactly how to fix it instead of a bare file error.
+# Runtime lookup (find_font_path) already tolerates a missing bundled copy.
+if fs.exists('assets/fonts/inter/docs/font-files/InterVariable.ttf')
+  install_data(
+    'assets/fonts/inter/docs/font-files/InterVariable.ttf',
+    install_dir: get_option('datadir') / 'event-horizon' / 'assets' / 'fonts' / 'inter',
+  )
+else
+  warning('Inter font submodule is not checked out; the shell will fall back to system fonts. Fix: git submodule update --init assets/fonts/inter')
+endif
 # Logo + Material Symbols are in the binary when `embed_assets=true`;
 # default (false) installs them under share/ instead.
 if not get_option('embed_assets')
