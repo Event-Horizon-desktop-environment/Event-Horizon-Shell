@@ -1,0 +1,309 @@
+name: Linux packages
+
+# Automated builds and GitHub Releases for Event Horizon Shell.
+#
+# - Every push to main/master builds, tests and refreshes the `rolling`
+#   prerelease. Push a version tag (`0.9.7`, `v0.9.7`, `0.9.7-beta1`, ...)
+#   for a stable release, or run this workflow manually with `release=true`
+#   to publish whatever version `meson.build` currently declares (the tag
+#   is created for you, bare `0.9.x` style matching the existing `0.9.6` tag).
+# - Packages are built with fpm from a single release build, the same
+#   approach as .circleci/config.yml (release binaries only; no debug
+#   variants). The build runs in a fedora:44 container to match CircleCI's
+#   proven toolchain; packaging needs only ruby+fpm so it stays on plain
+#   Ubuntu runners.
+# - CI packages must stay portable: -Dnative_march=false is mandatory
+#   (local `just configure-release` builds -march=native for your own CPU).
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*', '[0-9]*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish stable release using version from meson.build'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  MESON_OPTS: --buildtype=release --prefix=/usr -Dnative_march=false -Dembed_assets=false
+
+jobs:
+  build:
+    name: build + test (Fedora 44)
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:44
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          dnf -y install git gcc-c++ cmake pkgconf python3 python3-pip \
+            wayland-devel wayland-protocols-devel \
+            cairo-devel pango-devel \
+            freetype-devel fontconfig-devel \
+            libxkbcommon-devel \
+            sdbus-cpp-devel \
+            pipewire-devel \
+            pam-devel libcurl-devel libwebp-devel libpng-devel \
+            vulkan-loader-devel vulkan-headers \
+            librsvg2-devel libdrm-devel \
+            polkit-devel glib2-devel \
+            openssl-devel libjpeg-turbo-devel \
+            dbus-devel \
+            poppler-glib-devel libarchive-devel \
+            jemalloc-devel lcms2-devel \
+            lz4-devel zlib-devel liburing-devel \
+            ffmpegthumbnailer-devel \
+            tar gzip
+          # Distro Meson lags behind meson.build's >=1.8.5 floor; Docs/Build.md
+          # recommends pip for the same reason.
+          pip install --break-system-packages "meson>=1.11" ninja
+      - name: Configure
+        run: meson setup build ${{ env.MESON_OPTS }}
+      - name: Compile
+        run: meson compile -C build
+      - name: Test (logic tests only)
+        # launch_harness needs a live Wayland compositor (WAYLAND_DISPLAY),
+        # which runners don't have; everything else is headless pure logic.
+        # vram_boost_live self-skips (exit 77) when unprivileged.
+        run: meson test -C build --print-errorlogs --exclude launch_harness
+      - name: Resolve version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(grep -oP "^[[:space:]]*version\s*:\s*'\K[^']+" meson.build)"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "build version: $VERSION"
+      - name: Stage install
+        run: |
+          set -euo pipefail
+          rm -rf staging dist
+          mkdir -p dist
+          DESTDIR="$PWD/staging" meson install -C build --no-rebuild
+          echo "$VERSION" > dist/VERSION
+          ls staging
+      - uses: actions/upload-artifact@v5
+        with:
+          name: staging
+          path: |
+            staging/
+            dist/VERSION
+
+  deb:
+    name: deb (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: staging
+          path: pkg
+      - name: Install fpm
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ruby-full build-essential
+          sudo gem install --no-document fpm
+      - name: Pack deb
+        run: |
+          set -euo pipefail
+          VERSION="$(cat pkg/dist/VERSION)"
+          mkdir -p dist
+          fpm -s dir -t deb -n event-horizon-de -v "$VERSION" \
+            --architecture amd64 \
+            --description "Event Horizon Desktop Environment" \
+            --license "MIT" \
+            --url "https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell" \
+            -C pkg/staging -p "dist/event-horizon-de_${VERSION}_amd64.deb"
+          ls -l dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: deb
+          path: dist/*.deb
+
+  rpm:
+    name: rpm (Fedora 44)
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: staging
+          path: pkg
+      - name: Install fpm
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ruby-full build-essential rpm
+          sudo gem install --no-document fpm
+      - name: Pack rpm
+        # RPM versions must not contain '-': 0.9.6-beta2 -> 0.9.6_beta2.
+        run: |
+          set -euo pipefail
+          VERSION="$(cat pkg/dist/VERSION)"
+          SAFE_VERSION="${VERSION//-/_}"
+          mkdir -p dist
+          fpm -s dir -t rpm -n event-horizon-de -v "$SAFE_VERSION" \
+            --iteration 1 --architecture x86_64 \
+            --description "Event Horizon Desktop Environment" \
+            --license "MIT" \
+            --url "https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell" \
+            -C pkg/staging -p "dist/event-horizon-de-${SAFE_VERSION}-1.x86_64.rpm"
+          ls -l dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: rpm
+          path: dist/*.rpm
+
+  arch:
+    name: pacman package (Arch)
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: staging
+          path: pkg
+      - name: Install fpm
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ruby-full build-essential zstd libarchive-tools
+          sudo gem install --no-document fpm
+      - name: Pack pacman package
+        # Pacman pkgver must not contain '-': 0.9.6-beta2 -> 0.9.6_beta2.
+        run: |
+          set -euo pipefail
+          VERSION="$(cat pkg/dist/VERSION)"
+          SAFE_VERSION="${VERSION//-/_}"
+          mkdir -p dist
+          fpm -s dir -t pacman --pacman-compression zstd \
+            --name event-horizon-de --version "$SAFE_VERSION" \
+            --iteration 1 --architecture x86_64 \
+            --description "Event Horizon Desktop Environment" \
+            --license "MIT" \
+            --url "https://github.com/Event-Horizon-desktop-environment/Event-Horizon-Shell" \
+            --depends wayland,cairo,pango,freetype2,fontconfig,libxkbcommon,sdbus-cpp,pipewire,pam,libcurl,libwebp,openssl,vulkan-icd-loader,hicolor-icon-theme,glib2,lz4 \
+            -C pkg/staging -p "dist/event-horizon-de-${SAFE_VERSION}-1-x86_64.pkg.tar.zst"
+          ls -l dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: arch
+          path: dist/*.pkg.tar.zst
+
+  tarball:
+    name: portable tarball
+    runs-on: ubuntu-24.04
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: staging
+          path: pkg
+      - name: Pack tarball
+        run: |
+          set -euo pipefail
+          VERSION="$(cat pkg/dist/VERSION)"
+          mkdir -p dist
+          tar -czf "dist/event-horizon-de-${VERSION}-x86_64.tar.gz" -C pkg/staging usr
+          ls -l dist
+      - uses: actions/upload-artifact@v5
+        with:
+          name: tarball
+          path: dist/*.tar.gz
+
+  release:
+    name: publish GitHub Release
+    runs-on: ubuntu-24.04
+    needs: [deb, rpm, arch, tarball]
+    if: (github.ref_type == 'tag' && github.ref_name != 'rolling') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Resolve version and ensure tag
+        # Repo convention is bare version tags (existing 0.9.6); a leading
+        # 'v' on a pushed tag is accepted and stripped for file names.
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="$(grep -oP "^[[:space:]]*version\s*:\s*'\K[^']+" meson.build)"
+            TAG="$VERSION"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "Release $TAG (version $VERSION)"
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            if git ls-remote --tags origin | grep -q "refs/tags/${TAG}$"; then
+              echo "Tag $TAG already exists, reusing it."
+            else
+              git tag "$TAG" "$GITHUB_SHA"
+              git push origin "$TAG"
+            fi
+          fi
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.TAG }}
+          name: ${{ env.TAG }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: dist/event-horizon-de*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  release-latest:
+    name: publish rolling release
+    runs-on: ubuntu-24.04
+    needs: [deb, rpm, arch, tarball]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Move rolling tag
+        run: |
+          git tag -f rolling ${{ github.sha }}
+          git push -f origin rolling
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: rolling
+          name: Rolling build
+          target_commitish: ${{ github.sha }}
+          draft: false
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          files: dist/event-horizon-de*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

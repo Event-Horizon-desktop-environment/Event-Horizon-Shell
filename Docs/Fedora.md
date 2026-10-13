@@ -50,7 +50,7 @@ what changed.
 EventHorizon --version
 ```
 
-Expected output: `Event Horizon 0.9.6-beta2`. If it says `just: command not found`,
+Expected output: `Event Horizon 0.9.7-beta3`. If it says `just: command not found`,
 you skipped step 2.
 
 ## 5. Run
