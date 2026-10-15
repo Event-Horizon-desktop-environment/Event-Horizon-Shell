@@ -16,10 +16,6 @@
 #include "wl/core/connection.hpp"
 #include "wl/core/seat.hpp"
 
-#if defined(EH_HAVE_POLKIT_AGENT)
-#include "services/polkit/dialog/polkit_auth_dialog.hpp"
-#endif
-
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -85,12 +81,14 @@ private:
   int taskbar_child_pid_ = -1;
   int panel_child_pid_ = -1;
   int stage_child_pid_ = -1;
+  int polkit_child_pid_ = -1;
   int sigchld_fd_ = -1;
   uint64_t desktopLastRestartMs_ = 0;
   uint64_t dockLastRestartMs_ = 0;
   uint64_t taskbarLastRestartMs_ = 0;
   uint64_t panelLastRestartMs_ = 0;
   uint64_t stageLastRestartMs_ = 0;
+  uint64_t polkitLastRestartMs_ = 0;
   // Deadline for a respawn that arrived inside the cooldown window; 0 = none
   // pending. See retry_deferred_child_respawns().
   uint64_t desktopRespawnAtMs_ = 0;
@@ -98,6 +96,7 @@ private:
   uint64_t taskbarRespawnAtMs_ = 0;
   uint64_t panelRespawnAtMs_ = 0;
   uint64_t stageRespawnAtMs_ = 0;
+  uint64_t polkitRespawnAtMs_ = 0;
   bool dockEnabledApplied_ = true;
   bool panelEnabledApplied_ = true;
 
@@ -119,12 +118,6 @@ private:
 
   std::unique_ptr<eh::windows::ToplevelBridge> toplevel_bridge_;
   std::unique_ptr<eh::service::VramBoostManager> vram_boost_;
-
-#if defined(EH_HAVE_POLKIT_AGENT)
-  std::unique_ptr<eh::wayland::WaylandConnection> polkit_conn_;
-  eh::wayland::WaylandSeat polkit_seat_;
-  std::unique_ptr<eh::polkit::PolkitAuthDialog> polkit_dialog_;
-#endif
 };
 
 }

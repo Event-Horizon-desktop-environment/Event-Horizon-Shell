@@ -845,6 +845,10 @@ if polkit_agent_opt
     'src/services/polkit/listener/polkit_bridge_capi.h',
     'src/services/polkit/service/polkit_auth_service.cpp',
     'src/services/polkit/dialog/polkit_auth_dialog.cpp',
+    # Split-out agent child: run_polkit_agent_standalone lives in eh_shell_core,
+    # the spawn helper lets the supervisor launch/kill/respawn the process.
+    'src/services/polkit/standalone/polkit_agent_standalone.cpp',
+    'src/services/polkit/spawn/polkit_agent_spawn.cpp',
   )
   shell_cpp_args += ['-DEH_HAVE_POLKIT_AGENT=1']
   shell_c_args += ['-DEH_HAVE_POLKIT_AGENT=1']
@@ -1151,6 +1155,25 @@ executable(
   install_rpath: '$ORIGIN/../' + get_option('libdir'),
   install_mode: 'rwxr-xr-x',
 )
+
+# Split-out polkit session agent: registers as the session's
+# org.freedesktop.PolicyKit1.AuthenticationAgent (libpolkit-agent re-registers
+# on polkitd restarts) and owns the auth dialog + seat input on its own
+# WaylandConnection, with its own PollMuxLoop pumping the service's GLib fds.
+# The agent code lives in eh_shell_core; this is the thin entrypoint the
+# supervisor spawns via posix_spawn (only when -Dpolkit_agent=true).
+if polkit_agent_opt
+  executable(
+    'horizon-polkit-agent',
+    sources: 'src/services/polkit/standalone_main.cpp',
+    dependencies: eh_shell_core_dep,
+    cpp_args: shell_cpp_args + jemalloc_cpp_args,
+    cpp_pch: 'src/bootstrap/pch.hpp',
+    install: true,
+    install_rpath: '$ORIGIN/../' + get_option('libdir'),
+    install_mode: 'rwxr-xr-x',
+  )
+endif
 
 _shell_gpu_vk_txt = vulkan_dep.found() ? 'linked' : 'not linked (install vulkan-loader-devel)'
 summary(

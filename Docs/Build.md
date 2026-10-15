@@ -134,6 +134,7 @@ Meson subprojects (`subprojects/`):
 | `horizon-desktop` | Standalone desktop shell |
 | `horizon-dock` | Standalone dock panel |
 | `horizon-taskbar` | Standalone taskbar panel |
+| `horizon-polkit-agent` | PolicyKit session authentication agent (own process, layer-shell password dialog) |
 
 Plus the test suite: `test_horizon_colors`, `test_contract_ipc`, `test_vram_boost`, `test_vram_boost_live`, `test_icon_cache`, `test_damage_region`.
 

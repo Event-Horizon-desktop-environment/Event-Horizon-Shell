@@ -30,7 +30,7 @@ option(
   'polkit_agent',
   type: 'boolean',
   value: true,
-  description: 'Embed a PolicyKit-1 session authentication agent (libpolkit-agent + GLib) with an Event Horizon layer-shell password dialog (default on). Disable other session agents (e.g. polkit-gnome) to avoid conflicts. Adds glib/gobject + polkit runtime deps; use -Dpolkit_agent=false to omit.',
+  description: 'Build the PolicyKit-1 session authentication agent as its own `horizon-polkit-agent` child process (libpolkit-agent + GLib + an Event Horizon layer-shell password dialog), spawned/respawned by the supervisor (default on). Disable other session agents (e.g. polkit-gnome) to avoid conflicts. Adds glib/gobject + polkit runtime deps; use -Dpolkit_agent=false to omit the agent code and binary.',
 )
 
 option(

@@ -20,6 +20,7 @@
 #include <cstring>
 #include <iostream>
 #include <mutex>
+#include <pwd.h>
 #include <thread>
 #include <vector>
 
@@ -29,6 +30,42 @@
 namespace eh::polkit {
 
 constexpr const char* k_agentObjectPath = "/org/eventhorizon/polkit1/AuthenticationAgent";
+
+namespace {
+
+// Reference agents (mate-polkit, GNOME Shell) never show a bare "Password:"
+// when authenticating as someone else — mate rewrites it to "Password for
+// <user>:". The identity here is human-readable ("user" / "Full Name (user)");
+static std::string prompt_label_for(const std::string& identity, const std::string& prompt) {
+  if (prompt.empty()) return prompt;
+  // Match "password:" + optional trailing space, case-insensitive.
+  constexpr const char* kPw = "password:";
+  constexpr std::size_t kPwLen = 9;
+  if (prompt.size() < kPwLen) return prompt;
+  for (std::size_t i = 0; i < kPwLen; ++i) {
+    if (std::tolower(static_cast<unsigned char>(prompt[i])) != kPw[i]) return prompt;
+  }
+  for (std::size_t i = kPwLen; i < prompt.size(); ++i) {
+    if (prompt[i] != ' ' && prompt[i] != '\t') return prompt;
+  }
+  // Short name: "Full Name (user)" -> "user".
+  std::string who = identity;
+  if (!who.empty() && who.back() == ')') {
+    const std::size_t open = who.rfind(" (");
+    if (open != std::string::npos) who = who.substr(open + 2, who.size() - open - 3);
+  }
+  if (who.empty()) return prompt;
+  // Authenticating as yourself keeps the bare prompt.
+  char buf[2048];
+  struct passwd pwbuf {};
+  struct passwd* result = nullptr;
+  if (getpwuid_r(getuid(), &pwbuf, buf, sizeof(buf), &result) == 0 && result != nullptr &&
+      who == result->pw_name)
+    return prompt;
+  return "Password for " + who + ":";
+}
+
+}  // namespace
 
 struct PolkitAuthService::Impl {
   GMainContext* ctx = nullptr;
@@ -54,7 +91,11 @@ struct PolkitAuthService::Impl {
   std::string action_id;
   std::string message;
   std::string cookie;
-  std::string input_prompt;
+  std::string input_prompt;   // session request ("Password:") — field label
+  std::string identity;       // who polkit is asking about (dialog subtitle)
+  std::string icon_name;      // themed icon for the action (dialog glyph)
+  std::string details;        // serialized PolkitDetails
+  std::string info_line;      // show-info text (session notes)
   std::string supplementary_error;
   bool echo_on = true;
   bool failed_flag = false;
@@ -70,20 +111,41 @@ struct PolkitAuthService::Impl {
   std::atomic<bool> state_changed{false};
 
   static void registration_thread_main(PolkitSubject* subject, Impl* impl) {
-     
+    
     GError* err = nullptr;
     GCancellable* cancel = g_cancellable_new();
     {
       std::lock_guard<std::mutex> lock(impl->mtx);
       impl->cancellable = cancel;
     }
-    gpointer handle = polkit_agent_listener_register(
-        POLKIT_AGENT_LISTENER(impl->listener),
-        POLKIT_AGENT_REGISTER_FLAGS_NONE,
-        subject,
-        k_agentObjectPath,
-        cancel,
-        &err);
+    // One shot is not enough: at login the bus/polkitd may not be ready yet,
+    // and across a DE restart the previous agent can still hold the name
+    // ("already exists" — seen live in horizon-polkit-agent.log). Retry a few
+    // times; if we still fail the standalone main exits non-zero so the
+    // supervisor respawns us. A live-but-unregistered agent answers nothing
+    // and looks healthy from the outside, which reads as "auth is broken
+    // until I restart the DE".
+    gpointer handle = nullptr;
+    constexpr int kAttempts = 6;
+    for (int attempt = 1; attempt <= kAttempts && !handle; ++attempt) {
+      if (g_cancellable_is_cancelled(cancel)) break;
+      g_clear_error(&err);
+      handle = polkit_agent_listener_register(
+          POLKIT_AGENT_LISTENER(impl->listener),
+          POLKIT_AGENT_REGISTER_FLAGS_NONE,
+          subject,
+          k_agentObjectPath,
+          cancel,
+          &err);
+      if (!handle && attempt < kAttempts && !g_cancellable_is_cancelled(cancel)) {
+        polkit_log("svc registration attempt %d/%d failed: %s; retrying in 1s", attempt,
+                   kAttempts, err && err->message ? err->message : "?");
+        std::cerr << "[polkit] listener registration attempt " << attempt << "/" << kAttempts
+                  << " failed: " << (err && err->message ? err->message : "?")
+                  << "; retrying\n";
+        g_usleep(1000 * 1000);
+      }
+    }
     g_object_unref(subject);
 
     {
@@ -145,10 +207,11 @@ struct PolkitAuthService::Impl {
     auto* impl = static_cast<Impl*>(user_data);
     (void)session;
     std::lock_guard<std::mutex> lock(impl->mtx);
-    impl->input_prompt = text ? text : "";
+    impl->info_line = text ? text : "";
   }
 
-  void begin_prompt(const char* act, const char* msg, const char* ck) {
+  void begin_prompt(const char* act, const char* msg, const char* ck, const char* icon,
+                    const char* dets) {
     
     PolkitAgentSession* stale = nullptr;
     {
@@ -158,6 +221,10 @@ struct PolkitAuthService::Impl {
       action_id = act ? act : "";
       message = msg ? msg : "";
       cookie = ck ? ck : "";
+      icon_name = icon ? icon : "";
+      details = dets ? dets : "";
+      identity.clear();
+      info_line.clear();
       supplementary_error.clear();
       input_prompt.clear();
       failed_flag = false;
@@ -168,6 +235,22 @@ struct PolkitAuthService::Impl {
     }
     // Single-flight is enforced C-side; a stale ref here is only defensive.
     if (stale) g_object_unref(stale);
+  }
+
+  // The listener's chosen identity — the dialog subtitle. Sent as its own
+  // channel because it used to share the info-line field with the session
+  // request ("Password:"), which overwrote it before anything could render it.
+  void set_identity(const char* text) {
+    std::lock_guard<std::mutex> lock(mtx);
+    identity = text ? text : "";
+    state_changed = true;
+  }
+
+  // The session's request string, rendered as the password field label.
+  void set_prompt(const char* text) {
+    std::lock_guard<std::mutex> lock(mtx);
+    input_prompt = text ? text : "";
+    state_changed = true;
   }
 
   void end_prompt(int gained) {
@@ -254,12 +337,13 @@ extern "C" void eh_polkit_log_c(const char* msg) {
 }
 
 extern "C" void eh_polkit_bridge_begin_prompt(const char* action_id, const char* message,
-                                              const char* cookie) {
+                                              const char* cookie, const char* icon_name,
+                                              const char* details) {
   
-  polkit_log("svc begin_prompt action='%s' cookie='%s'", action_id ? action_id : "",
-             cookie ? cookie : "");
+  polkit_log("svc begin_prompt action='%s' icon='%s' cookie='%s'", action_id ? action_id : "",
+             icon_name ? icon_name : "", cookie ? cookie : "");
   auto& svc = PolkitAuthService::instance();
-  svc.impl()->begin_prompt(action_id, message, cookie);
+  svc.impl()->begin_prompt(action_id, message, cookie, icon_name, details);
 }
 
 extern "C" void eh_polkit_bridge_end_prompt(int gained_authorization) {
@@ -282,8 +366,20 @@ extern "C" void eh_polkit_bridge_show_info_line(const char* text) {
    
   auto& svc = PolkitAuthService::instance();
   std::lock_guard<std::mutex> lock(svc.impl()->mtx);
-  svc.impl()->input_prompt = text ? text : "";
+  svc.impl()->info_line = text ? text : "";
   svc.impl()->state_changed = true;
+}
+
+extern "C" void eh_polkit_bridge_set_identity(const char* text) {
+  
+  auto& svc = PolkitAuthService::instance();
+  svc.impl()->set_identity(text);
+}
+
+extern "C" void eh_polkit_bridge_set_prompt(const char* text) {
+  
+  auto& svc = PolkitAuthService::instance();
+  svc.impl()->set_prompt(text);
 }
 
 extern "C" void eh_polkit_bridge_store_session(PolkitAgentSession* session, int echo_on) {
@@ -343,6 +439,8 @@ void PolkitAuthService::start() {
   std::lock_guard<std::mutex> lock(impl_->mtx);
   if (impl_->started) return;
   impl_->started = true;
+  impl_->register_done = false;
+  impl_->register_ok = false;
   polkit_log("svc start pid=%d", static_cast<int>(::getpid()));
 
   impl_->ctx = g_main_context_default();
@@ -417,6 +515,10 @@ void PolkitAuthService::stop() {
     impl_->message.clear();
     impl_->cookie.clear();
     impl_->input_prompt.clear();
+    impl_->identity.clear();
+    impl_->icon_name.clear();
+    impl_->details.clear();
+    impl_->info_line.clear();
     impl_->supplementary_error.clear();
     impl_->pending_begin = false;
     impl_->pending_end = false;
@@ -429,6 +531,18 @@ void PolkitAuthService::set_change_callback(ChangeCallback cb) {
   impl_->on_change = std::move(cb);
 }
 
+bool PolkitAuthService::registration_done() const {
+   
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  return impl_->register_done;
+}
+
+bool PolkitAuthService::registration_ok() const {
+   
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  return impl_->register_ok;
+}
+
 Snapshot PolkitAuthService::snapshot() const {
    
   std::lock_guard<std::mutex> lock(impl_->mtx);
@@ -436,7 +550,11 @@ Snapshot PolkitAuthService::snapshot() const {
   s.state = impl_->state;
   s.action_id = impl_->action_id;
   s.message = impl_->message;
-  s.prompt = impl_->input_prompt;
+  s.identity = impl_->identity;
+  s.prompt = prompt_label_for(impl_->identity, impl_->input_prompt);
+  s.icon_name = impl_->icon_name;
+  s.details = impl_->details;
+  s.info = impl_->info_line;
   s.error = impl_->supplementary_error;
   s.cookie = impl_->cookie;
   s.echo_on = impl_->echo_on;

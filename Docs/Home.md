@@ -11,6 +11,7 @@ Event Horizon is a Wayland-native desktop shell written in C++23. It runs as a l
 | `src/backends/` | Compositor-specific backends (Hyprland, Niri, Sway, etc.) |
 | `src/configuration/` | Configuration parsing (TOML) and runtime snapshot |
 | `src/services/` | D-Bus service clients (notifications, tray, MPRIS, network, etc.) |
+| `src/services/polkit/` | PolicyKit session agent (`horizon-polkit-agent`) |
 | `src/wl/` | Wayland protocol wrappers (layer shell, Vulkan, clipboard, etc.) |
 | `src/wallpaper/` | Wallpaper rendering and thumbnail service |
 | `src/ux/` | Settings UI application |

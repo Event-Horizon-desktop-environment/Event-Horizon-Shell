@@ -4,7 +4,74 @@ All notable changes to Event Horizon, newest first.
 
 ## [Unreleased]
 
+<<<<<<< Updated upstream
 ### Default Apps: File manager choice now covers FileManager1
+=======
+### Polkit — reference parity (mate-polkit, GNOME Shell) + compact dialog redesign
+
+Audited against mate-polkit (`polkitmatelistener/authenticator/dialog`) and
+GNOME Shell 51's built-in agent (`polkitAgent.js`): session lifecycle, cancel,
+retry-keep-open, info/error lines, action id, details, themed icon, prompt
+label, and Esc/Enter handling all match. Two faithful behaviors were missing
+and are now in: identity choice prefers current-user → root → first unix user
+(Shell's rule), and a bare `Password:` prompt for someone else renders as
+`Password for <user>:` (mate's fix-up). Deliberate divergences: single
+identity, no user switcher (Shell doesn't have one either), no vendor row,
+fast reject on concurrent requests instead of MATE's queue.
+
+- **Compact macOS-style card** (`dialog/polkit_auth_dialog.cpp`): 480px wide,
+  height sized to content every paint (empty rows cost nothing), no scrim — the
+  tightly-sized surface floats over the untouched desktop (a fullscreen layer
+  surface gets compositor blur smeared across the whole screen), Inter/Pango rows (15/600 title, accent `user@host · action_id` meta, wrapped
+  message, dimmed details, themed error line), placeholder-hint field with •
+  masking + accent caret, DE-standard m3 Outlined Cancel + Filled Confirm
+  (Confirm armed only when a live prompt can take the answer).
+- **Wallpaper decides the colors**: every surface comes from
+  `derived_chrome_colors()` (matugen / horizon-colors palette), and the child
+  subscribes to `config.applied` over IPC → full reload + repaint, same
+  contract as the dock/stage children.
+- **Robustness** (from live-log diagnosis): `show()` no longer wipes a typed
+  password on mid-dialog notifications (only new cookie / failed attempt);
+  empty hidden-prompt submits are swallowed instead of burning a polkit
+  attempt; registration retries 6× then the child exits for supervisor
+  respawn (no more unregistered zombies); supervisor re-arms respawn when
+  `posix_spawn` itself fails and won't stack a duplicate over a live child.
+
+### Polkit — session agent split into its own `horizon-polkit-agent` process
+
+The password dialog used to be a supervisor side-quest: `PolkitAuthService`, its
+own `WaylandConnection`, and the auth dialog were wired into
+`UnifiedShellSession` and its `PollMuxLoop`. A protocol error, a wedged
+`polkit_agent_session_cancel()`, or any polkit failure therefore landed inside
+the shell process — exactly the class of bug every other session service was
+already split out to avoid.
+
+- **New `horizon-polkit-agent` binary** (`src/services/polkit/standalone/` +
+  thin `standalone_main.cpp` with the usual jemalloc pin): registers as the
+  session's `org.freedesktop.PolicyKit1.AuthenticationAgent` at
+  `/org/eventhorizon/polkit1/AuthenticationAgent`, pumps its own GLib context
+  through the same `PollMuxLoop` hooks (`on_gather_fds` / `on_poll_timeout` /
+  `on_post_poll`), and owns the dialog + seat input on its own connection. The
+  agent code itself stays in `eh_shell_core`; libpolkit-agent still
+  re-registers on polkitd restarts.
+- **Supervisor only spawns it** (`spawn/polkit_agent_spawn.cpp`, posix_spawn +
+  setsid + log redirect to `~/.local/state/event-horizon/horizon-polkit-agent.log`),
+  with SIGCHLD reap + `kChildRespawnCooldownMs` cooldown respawn, deferred
+  respawn retry, and a graceful kill on shutdown. All in-process polkit
+  members, mux hooks, and teardown were removed from
+  `unified_shell_session.{hpp,cpp}`.
+- **Dialog parity fixes** (captured but previously dropped): `Snapshot` gained
+  `identity` / `icon_name` / `details` / `info`, and the listener now sends
+  them on their own bridge channels (`set_identity`, `set_prompt`, a 5-arg
+  `begin_prompt` with icon + serialized `PolkitDetails`) instead of everything
+  piling into one `input_prompt` field. The dialog renders the identity as
+  `user@host`, the polkit message, the action id, the request details, the
+  themed `icon_name` (icon cache, `lock` glyph fallback), and labels the
+  password field with the session's own `request` ("Password:"); card grew to
+  `kCardW=460`/`kCardH=320` for the extra rows.
+
+### Default Apps — file manager choice now owns FileManager1 too
+>>>>>>> Stashed changes
 
 Browser "Open containing folder" and in-shell reveal actions use the `org.freedesktop.FileManager1.ShowItems` D-Bus call, which ignores the `inode/directory` MIME handler. Whichever app owned that bus name won, no matter what Default Apps said, so choosing Horizon Files as the file manager still opened Otter Files from browsers.
 

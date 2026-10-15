@@ -75,12 +75,49 @@ static gchar *identity_to_human_readable_string(PolkitIdentity *identity) {
   return ret;
 }
 
-static PolkitIdentity *choose_first_unix_user(GList *identities) {
+static PolkitIdentity *choose_identity(GList *identities) {
+  // Who to authenticate as: GNOME Shell prefers the current user, then root,
+  // then the first unix user. polkitd usually sends a single identity, but
+  // admin actions can carry several (root + wheel members, ...).
+  PolkitIdentity *first_unix = NULL;
+  PolkitIdentity *root = NULL;
+  const uid_t self = getuid();
   for (GList *l = identities; l != NULL; l = l->next) {
     PolkitIdentity *id = POLKIT_IDENTITY(l->data);
-    if (POLKIT_IS_UNIX_USER(id)) return id;
+    if (!POLKIT_IS_UNIX_USER(id)) continue;
+    if (first_unix == NULL) first_unix = id;
+    const uid_t uid = polkit_unix_user_get_uid(POLKIT_UNIX_USER(id));
+    if (uid == self) return id;
+    if (uid == 0) root = id;
   }
+  if (root != NULL) return root;
+  if (first_unix != NULL) return first_unix;
   return identities ? POLKIT_IDENTITY(identities->data) : NULL;
+}
+
+// Flatten PolkitDetails into "key=value, key=value" for the dialog. The value
+// side carries argv/path blobs that can be arbitrarily long (and may embed
+// newlines), so the run is sanitized and capped before it crosses the bridge.
+static gchar *details_to_string(PolkitDetails *details) {
+  if (details == NULL) return g_strdup("");
+  gchar **keys = polkit_details_get_keys(details);
+  GString *out = g_string_new(NULL);
+  for (gchar **k = keys; k != NULL && *k != NULL; ++k) {
+    const gchar *v = polkit_details_lookup(details, *k);
+    if (out->len > 0) g_string_append(out, ", ");
+    g_string_append(out, *k);
+    g_string_append(out, "=");
+    g_string_append(out, v != NULL ? v : "");
+    if (out->len >= 512) {
+      g_string_append(out, "...");
+      break;
+    }
+  }
+  g_strfreev(keys);
+  for (gsize i = 0; i < out->len; ++i) {
+    if ((guchar)out->str[i] < 0x20 || out->str[i] == 0x7f) out->str[i] = ' ';
+  }
+  return g_string_free(out, FALSE);
 }
 
 static void on_completed(PolkitAgentSession *session, gboolean gained_authorization, gpointer user_data) {
@@ -119,7 +156,9 @@ static void on_request(PolkitAgentSession *session, gchar *request, gboolean ech
   (void)listener;
   eh_polkit_log_c("on_request (password prompt incoming)");
   eh_polkit_bridge_store_session(session, echo_on != FALSE);
-  eh_polkit_bridge_show_info_line(request ? request : "");
+  // The request ("Password:") is the field label, not an identity line — it
+  // gets its own channel so it can't overwrite the chosen identity.
+  eh_polkit_bridge_set_prompt(request ? request : "");
 }
 
 static void on_show_error(PolkitAgentSession *session, gchar *text, gpointer user_data) {
@@ -147,14 +186,11 @@ static void eh_polkit_listener_initiate_authentication(PolkitAgentListener *_lis
                                                         GCancellable *cancellable, GAsyncReadyCallback callback,
                                                         gpointer user_data) {
   EhPolkitListener *listener = EH_PL(_listener);
-  (void)action_id;
-  (void)icon_name;
-  (void)details;
 
   {
     char msg[256];
-    snprintf(msg, sizeof msg, "initiate_authentication enter action='%s' cookie='%s'",
-             action_id ? action_id : "", cookie ? cookie : "");
+    snprintf(msg, sizeof msg, "initiate_authentication enter action='%s' icon='%s' cookie='%s'",
+             action_id ? action_id : "", icon_name ? icon_name : "", cookie ? cookie : "");
     eh_polkit_log_c(msg);
   }
 
@@ -177,7 +213,7 @@ static void eh_polkit_listener_initiate_authentication(PolkitAgentListener *_lis
     return;
   }
 
-  PolkitIdentity *identity = choose_first_unix_user(identities);
+  PolkitIdentity *identity = choose_identity(identities);
   if (identity == NULL) {
     GTask *task = g_task_new(G_OBJECT(listener), cancellable, callback, user_data);
     g_task_set_source_tag(task, EH_AUTH_SOURCE_TAG);
@@ -187,11 +223,14 @@ static void eh_polkit_listener_initiate_authentication(PolkitAgentListener *_lis
     return;
   }
 
-  eh_polkit_bridge_begin_prompt(action_id ? action_id : "", message ? message : "", cookie ? cookie : "");
+  gchar *details_str = details_to_string(details);
+  eh_polkit_bridge_begin_prompt(action_id ? action_id : "", message ? message : "",
+                                cookie ? cookie : "", icon_name ? icon_name : "", details_str);
+  g_free(details_str);
 
   gchar *who = identity_to_human_readable_string(identity);
   if (who) {
-    eh_polkit_bridge_show_info_line(who);
+    eh_polkit_bridge_set_identity(who);
     g_free(who);
   }
 

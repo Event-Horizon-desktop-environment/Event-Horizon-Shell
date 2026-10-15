@@ -57,7 +57,9 @@
 #include "desktop_shell/common/log/debug_log.hpp"
 
 #if defined(EH_HAVE_POLKIT_AGENT)
-#include "services/polkit/service/polkit_auth_service.hpp"
+// The agent itself (registration, dialog, GLib pump) lives in the split-out
+// horizon-polkit-agent child; this process only spawns/kills/respawns it.
+#include "services/polkit/spawn/polkit_agent_spawn.hpp"
 #endif
 
 #include <cerrno>
@@ -249,8 +251,9 @@ std::vector<FdHandler> UnifiedShellSession::build_handlers() {
 
   if (sigchld_fd_ >= 0) {
     // Reap the split-out children (wallpaper / notifications / desktop / dock /
-    // taskbar) and respawn them if they die unexpectedly. They spawn with
-    // POSIX_SPAWN_SETSID, so a crash in one can't take the session down.
+    // taskbar / stage / polkit agent) and respawn them if they die unexpectedly.
+    // They spawn with POSIX_SPAWN_SETSID, so a crash in one can't take the
+    // session down.
     handlers.emplace_back(sigchld_fd_, POLLIN, [this](short) {
       struct signalfd_siginfo si {};
       while (read(sigchld_fd_, &si, sizeof(si)) == static_cast<ssize_t>(sizeof(si))) {
@@ -359,6 +362,32 @@ std::vector<FdHandler> UnifiedShellSession::build_handlers() {
             if (pid > 1) stage_child_pid_ = pid;
           }
         }
+#if defined(EH_HAVE_POLKIT_AGENT)
+        if (polkit_child_pid_ > 1) {
+          if (waitpid(polkit_child_pid_, &status, WNOHANG) == polkit_child_pid_) {
+            std::cerr << "[polkit] agent child exited (status=" << status << ")\n";
+            polkit_child_pid_ = -1;
+            if (!running_) continue;
+            const uint64_t now = eh::shell::now_mono_ms();
+            if (now - polkitLastRestartMs_ < kChildRespawnCooldownMs) {
+              polkitRespawnAtMs_ = polkitLastRestartMs_ + kChildRespawnCooldownMs;
+              debug_log("polkit", "agent child died; respawn deferred to cooldown");
+              continue;
+            }
+            polkitRespawnAtMs_ = 0;
+            polkitLastRestartMs_ = now;
+            const int pid = eh::polkit::polkit_agent_spawn_native_child();
+            if (pid > 1) {
+              polkit_child_pid_ = pid;
+            } else {
+              // posix_spawn itself failed: without this the agent stays dead
+              // until the DE restarts. Retry after the cooldown like a crash.
+              polkitRespawnAtMs_ = now + kChildRespawnCooldownMs;
+              debug_log("polkit", "spawn failed; respawn deferred to cooldown");
+            }
+          }
+        }
+#endif
       }
     });
   }
@@ -485,6 +514,25 @@ void UnifiedShellSession::retry_deferred_child_respawns() {
       debug_log("stage", "deferred respawn after cooldown pid=%d", pid);
     }
   }
+#if defined(EH_HAVE_POLKIT_AGENT)
+  if (polkitRespawnAtMs_ && now >= polkitRespawnAtMs_) {
+    polkitRespawnAtMs_ = 0;
+    // A child may already be running here (raced respawn / duplicate
+    // supervisor). Spawning another loses the registration race ("already
+    // exists") and leaves an unregistered zombie behind — keep the live one.
+    if (polkit_child_pid_ <= 1) {
+      polkitLastRestartMs_ = now;
+      const int pid = eh::polkit::polkit_agent_spawn_native_child();
+      if (pid > 1) {
+        polkit_child_pid_ = pid;
+        debug_log("polkit", "deferred respawn after cooldown pid=%d", pid);
+      } else {
+        polkitRespawnAtMs_ = now + kChildRespawnCooldownMs;
+        debug_log("polkit", "deferred spawn failed; respawn deferred to cooldown");
+      }
+    }
+  }
+#endif
 }
 
 void UnifiedShellSession::sync_dock_child_with_enabled_setting() {
@@ -752,8 +800,9 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   // The desktop icon layer + widgets, the dock bar, and the taskbar bar all run
   // as split-out children (horizon-desktop / horizon-dock / horizon-taskbar),
   // spawned once the IPC service is up below. This process keeps the toplevel
-  // tracker (broadcast by ToplevelBridge) plus gamma/lockscreen/idle/polkit on
-  // their own connections.
+  // tracker (broadcast by ToplevelBridge) plus gamma/lockscreen/idle on
+  // their own connections; the polkit session agent runs in
+  // horizon-polkit-agent.
   eh::shell::keyboard::apply_settings(sc0_.keyboard);
 
 #if defined(__GLIBC__)
@@ -1180,47 +1229,16 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   bench_log("before_main_loop_poll_mux (embed deferred to first idle)");
 
 #if defined(EH_HAVE_POLKIT_AGENT)
+  // The polkit session agent runs in the split-out `horizon-polkit-agent`
+  // child: it registers at /org/eventhorizon/polkit1/AuthenticationAgent with
+  // its own session subject, pumps its own GLib context, and owns the auth
+  // dialog + seat input on its own Wayland connection. The SIGCHLD handler
+  // respawns it with the shared cooldown; teardown kills it below.
   {
-    auto& polkit = eh::polkit::PolkitAuthService::instance();
-    polkit.start();
-    polkit_conn_ = std::make_unique<eh::wayland::WaylandConnection>();
-    if (polkit_conn_->connect(false)) {
-      polkit_dialog_ = std::make_unique<eh::polkit::PolkitAuthDialog>(
-          polkit_conn_->display(), polkit_conn_->compositor(), polkit_conn_->shm(),
-          polkit_conn_->layer_shell(), polkit_conn_->viewporter(),
-          polkit_conn_->fractional_scale_manager());
-      // The dialog surface lives on its own connection, so seat input has to be
-      // routed through that connection's seat (keys only arrive here while the
-      // EXCLUSIVE layer surface holds keyboard focus).
-      polkit_seat_.bind(polkit_conn_->seat());
-      polkit_seat_.set_pointer_motion_cb([this](wl_surface* surface, double x, double y) {
-        if (polkit_dialog_ && surface == polkit_dialog_->surface())
-          polkit_dialog_->pointer_motion(x, y);
-      });
-      polkit_seat_.set_pointer_button_cb([this](uint32_t button, uint32_t state) {
-        if (polkit_dialog_ && polkit_seat_.pointer_focus_surface() == polkit_dialog_->surface())
-          polkit_dialog_->pointer_button(button, state);
-      });
-      polkit_seat_.set_keyboard_key_cb([this](const eh::wayland::WaylandSeat::KeyboardEvent& ev) {
-        if (polkit_dialog_)
-          polkit_dialog_->consume_keyboard_key(ev.state, ev.sym, ev.utf8.data(), ev.utf8_len);
-      });
-      EH_ST_TRACE(std::cerr << "polkit dialog: initialized on own connection\n");
-    } else {
-      std::cerr << "[polkit] own Wayland connection unavailable — auth dialog disabled\n";
-    }
-    polkit.set_change_callback([this]() {
-      auto snap = eh::polkit::PolkitAuthService::instance().snapshot();
-      if (snap.has_request && snap.state != eh::polkit::AuthState::Idle) {
-        if (!polkit_dialog_) return;
-        wl_output* out = nullptr;
-        if (polkit_conn_ && !polkit_conn_->outputs().empty()) out = polkit_conn_->outputs().front();
-        polkit_dialog_->show(out);
-      } else {
-        if (polkit_dialog_) polkit_dialog_->hide();
-      }
-    });
+    const int polkitPid = eh::polkit::polkit_agent_spawn_native_child();
+    if (polkitPid > 1) polkit_child_pid_ = polkitPid;
   }
+  boot_mark("polkit_agent_spawned");
 #endif
 
   eh::bench::bench_write("spawn", "main_loop_start");
@@ -1232,7 +1250,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   mux.on_idle_flush = [this](bool did) { on_idle_flush(did); };
   mux.get_handlers = [this]() { return build_handlers(); };
 
-  // Poll the gamma/idle/lockscreen/polkit connections in isolation. A protocol
+  // Poll the gamma/idle/lockscreen connections in isolation. A protocol
   // error on any of them disables just that connection instead of killing the
   // main event loop.
   {
@@ -1260,21 +1278,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
       if (lock_screen_ && lock_conn_) lock_screen_->sync_outputs(lock_conn_->outputs());
       return true;
     });
-#if defined(EH_HAVE_POLKIT_AGENT)
-    registerOwnDisplay(polkit_conn_ ? polkit_conn_->display() : nullptr, "polkit", []() { return true; });
-#endif
   }
-#if defined(EH_HAVE_POLKIT_AGENT)
-  mux.on_gather_fds = [](std::vector<pollfd>& fds) {
-    eh::polkit::PolkitAuthService::instance().gather_fds(fds);
-  };
-  mux.on_poll_timeout = []() -> int {
-    return eh::polkit::PolkitAuthService::instance().poll_timeout();
-  };
-  mux.on_post_poll = [](const pollfd* fds, int nfds) {
-    eh::polkit::PolkitAuthService::instance().dispatch_glib(fds, nfds);
-  };
-#endif
   MANGOWM_INFO("entering main event loop (PollMuxLoop)");
   (void)mux.run(&running_);
   MANGOWM_INFO("main event loop exited");
@@ -1283,13 +1287,6 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   eh::config::shell_config_clear_drag_preview_paint_tick();
   drag_preview_user_.reset();
   eh::config::shell_config_clear_settings_drag_preview();
-
-#if defined(EH_HAVE_POLKIT_AGENT)
-  polkit_dialog_.reset();
-  polkit_seat_.unbind();
-  polkit_conn_.reset();
-  eh::polkit::PolkitAuthService::instance().stop();
-#endif
 
   eh::net::NetworkManagerService::instance().stop();
 
@@ -1339,6 +1336,15 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
     eh::shell::stage::stage_kill_native_child(stage_child_pid_);
     stage_child_pid_ = -1;
   }
+#if defined(EH_HAVE_POLKIT_AGENT)
+  // Kill the agent before this process exits: it also dies via PDEATHSIG, but
+  // the graceful path lets it unregister the authentication agent cleanly.
+  polkitRespawnAtMs_ = 0;
+  if (polkit_child_pid_ > 1) {
+    eh::polkit::polkit_agent_kill_native_child(polkit_child_pid_);
+    polkit_child_pid_ = -1;
+  }
+#endif
   if (settings_inotify_fd_ >= 0) {
     close(settings_inotify_fd_);
     settings_inotify_fd_ = -1;

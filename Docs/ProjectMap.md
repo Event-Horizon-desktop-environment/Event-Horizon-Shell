@@ -35,6 +35,7 @@ The build and config files at the root set up the project:
 | `horizon-desktop` | `src/desktop_shell/desktop/standalone_main.cpp` | Standalone desktop shell |
 | `horizon-dock` | `src/desktop_shell/dock/standalone_main.cpp` | Standalone dock panel |
 | `horizon-taskbar` | `src/desktop_shell/taskbar/standalone_main.cpp` | Standalone taskbar panel |
+| `horizon-polkit-agent` | `src/services/polkit/standalone_main.cpp` | PolicyKit session agent (auth dialog) |
 
 Plus test executables: `test_horizon_colors`, `test_contract_ipc`, `test_vram_boost`, `test_vram_boost_live`, `test_icon_cache`, `test_damage_region`.
 
@@ -159,7 +160,7 @@ Each subdirectory wraps a system or session D-Bus service.
 
 **`tray/`** -- Organized into subdirectories: `manager/tray.cpp` / `.hpp` implements the StatusNotifierWatcher host; `manager/tray_manager.cpp` / `.hpp` handles high-level tray lifecycle; `dbus/tray_context_menu.cpp` / `.hpp` implements the D-Bus menu interface; `dbus/tray_sni_icons.cpp` / `.hpp` resolves themed icons; `filter/tray_env_filter.cpp` / `.hpp` sanitizes environment for XWayland tray apps; `icon/tray_stream_icon.cpp` / `.hpp` handles animated tray icons; `icon/tray_item.hpp` defines the `TrayItem` struct.
 
-**`polkit/`** -- Organized into `listener/`, `service/`, `dialog/`. `listener/eh_polkit_listener.cpp` / `.h` implements polkit agent authentication; `listener/polkit_bridge_capi.h` is the C ABI bridge; `service/polkit_auth_service.cpp` handles authentication service logic; `dialog/polkit_auth_dialog.cpp` manages the auth dialog UI on its own Wayland connection (seat input via `WaylandSeat`). (The old `dispatch/polkit_seat_dispatch` forwarding layer was removed when the dialog moved off the main connection.)
+**`polkit/`** -- Organized into `listener/`, `service/`, `dialog/`, `standalone/`, `spawn/`. `listener/eh_polkit_listener.c` / `.h` implements polkit agent authentication (identity choice, session, prompt/identity/icon/details forwarding); `listener/polkit_bridge_capi.h` is the C ABI bridge; `service/polkit_auth_service.cpp` handles authentication service logic and the `Snapshot` handed to the dialog; `dialog/polkit_auth_dialog.cpp` manages the auth dialog UI on its own Wayland connection (seat input via `WaylandSeat`); `standalone/polkit_agent_standalone.cpp` + `standalone_main.cpp` are the split-out `horizon-polkit-agent` child (own process, own connection, own GLib pump); `spawn/polkit_agent_spawn.cpp` is the supervisor-side spawn/kill helper. (The old `dispatch/polkit_seat_dispatch` forwarding layer was removed when the dialog moved off the main connection.)
 
 **`udisks2/`** -- `udisks2_drive_service.cpp` / `.hpp` connects to `org.freedesktop.UDisks2`, monitors drive add/remove and mounting state. Methods: mount, unmount, eject. Used by the desktop for removable drive icons.
 
