@@ -4,6 +4,153 @@ All notable changes to Event Horizon, newest first.
 
 ## [Unreleased]
 
+### Overview: App grid with folders, search and drag reorder
+
+The overview gained a full app grid mode next to the workspace cards. It replaces the separate Launchpad surface, so search, folders and launching live in one place.
+
+- Grid mode is toggled by the bottom pill or by typing (`src/desktop_shell/Overview/overview_host.cpp`, `overview_painter.cpp`, `overview_input.cpp`). Layout caps at 1060px wide with 64px icons, paged dots and per row clipping, and icons resolve on a background thread with an accent initial fallback.
+- Search filters through the app drawer query and flattens folders while active. Arrow keys, Tab, PageUp and PageDown move selection, Enter launches and Escape clears the query or exits.
+- Folders group apps automatically by category with manual overrides persisted to `overview_folders.toml`. Folder tiles show 2 by 2 mini icons, open in a glass modal with rename (F2) and persist across sessions.
+- Drag and drop starts after 8px, shows a lifted ghost with an insertion bar, drops app on app to create a folder and app on folder to move in, and drags out of an open folder to remove. Right click pins to dock or taskbar.
+
+### Panel: New optional bar process (horizon-panel)
+
+There is a new thin edge bar for setups that want indicators without a full dock or taskbar. It is off by default and enabled from Settings.
+
+- New `horizon-panel` binary (`src/desktop_shell/panel/`, `standalone_main.cpp`, `standalone/panel_standalone.cpp`). It owns its own Wayland connection, foreign toplevel tracking, icon cache, MPRIS, tray and popups, with the parent death guard and pidfile handling shared by the other children.
+- The supervisor spawns it only when `panel.enabled` is true (`src/desktop_shell/panel/spawn/panel_spawn.cpp`, `src/bootstrap/session/detail/unified_shell_session.cpp`) and reaps and respawns it on crash with the same cooldown as dock and taskbar.
+- Layout is a three zone strip (left, centered clock, right indicators) with floating, edge to edge and fill width modes, auto hide, overlay layer and scroll to change volume. Popups cover tray, calendar, weather, volume mixer, control center, VPN, battery, media, Bluetooth and layout.
+- New Panel settings tab (`src/ux/settings/settings_tab_panel/`) mirrors the taskbar tab with Settings, Widgets and Appearance child tabs, a shared output picker and resettable widget defaults.
+
+### Stage: Overview, Dashboard and OSD move out of the dock
+
+Overview and Dashboard no longer die with the dock. A new always on `horizon-stage` process owns all on demand fullscreen surfaces.
+
+- New `horizon-stage` binary (`src/desktop_shell/stage/core/stage_app.cpp`, `standalone/stage_standalone.cpp`, `spawn/stage_spawn.cpp`). It hosts the overview, the dashboard and the OSD on its own connections, owns the Super key toggle, and subscribes to `config.applied` and `command.request` for `overview.toggle`, `dashboard.toggle` and related commands.
+- The old in process overview and launchpad hooks were removed from the supervisor and dock. Killing or turning off `horizon-dock` no longer takes the overview down with it.
+- Middle click on panel workspaces toggles the overview through IPC, and the stage handles open, close and toggle commands plus hover reveal and Escape close for the dashboard.
+
+### Taskflip: New window switcher with gallery and rail
+
+Alt Tab now opens a dedicated switcher instead of cycling silently. It keeps most recently used order and activates through the foreign toplevel protocol.
+
+- New switcher (`src/desktop_shell/switcher/taskflip_model.cpp`, `taskflip_host.cpp`, `taskflip_gallery.cpp`, `taskflip_rail.cpp`, `taskflip_ipc.cpp`). The model rebuilds from toplevels, preserves selection by handle and promotes the activated window to the front.
+- Gallery shows a cover flow of up to 9 windows with accent halo and count, rail shows a horizontal strip with icons and ellipsized titles. Both are centered overlays with no exclusive zone.
+- Commands are `taskflip.toggle`, `open`, `close`, `next`, `prev`, `confirm` and `cancel` over IPC. Confirm activates via `zwlr_foreign_toplevel_handle_v1`.
+- New Taskflip settings (`src/ux/settings/settings_tab_taskflip/`) with gallery style, recent order, captions, counts and icons toggles.
+
+### Dashboard: Prototype top edge widget grid
+
+A new top edge dashboard hosts control center style cards in a modular grid. It is revealed by hovering a thin trigger strip, so it stays out of the way until needed.
+
+- New dashboard (`src/desktop_shell/dashboard/dashboard_types.hpp`, `dashboard_layout.cpp`, `dashboard_paint.cpp`, `dashboard_hit.cpp`, `dashboard_dispatch.cpp`, `dashboard_surface.cpp`). Cards cover clock, calendar, weather, media, volume, mic, network, Bluetooth, mixer and system, with expandable network and Bluetooth rows, slider drags throttled to 16ms and MPRIS transport actions.
+- Layout is config driven (`src/configuration/shell_config.cpp`): columns, gap, margins and max width plus an ordered card list where entries are widget ids with optional column spans. Defaults pack time, media, connectivity, control and monitor rows into 4 columns.
+- The trigger strip is a permanent transparent input surface while hover reveal is on, the panel surface is created per open and destroyed on close with 220ms open and 180ms close easing.
+- The old `launchpad.toggle` IPC path was removed. App browsing lives in the overview grid and the Tahoe app drawer, the dashboard covers controls.
+
+### Control Center: Pear compact layout
+
+The control center gained a compact Pear variant for the panel, taskbar pill and small popups. It uses one layout as the source of truth for paint and hit testing.
+
+- New Pear layout (`src/desktop_shell/controlcenter/layout/control_center_pear_layout.cpp`, `state/control_center_pear_config.hpp`). Base width is 360px scaled by UI and pear scale, with 64px pills, 64px toggles and a 90px Section B for volume, input, brightness and media.
+- New Pear paint and hit testing (`src/desktop_shell/controlcenter/paint/control_center_pear_paint.cpp`, `input/control_center_pear_hit.cpp`) mirror the layout exactly, including network, Bluetooth, settings, do not disturb, slider tracks, device rows and media buttons.
+- Pear is configured per widget from `[widget.<id>] pear_*` keys (scale, transparency, themes, toggle visibility, device link and command strings). Taskbar control center height is measured from the Pear layout and clamped to the output with an 800ms settle resize.
+
+### Settings: Panel, Updates and global search plus Monitor and Bluetooth rework
+
+Settings grew two wired tabs and a global index, and two hardware tabs were reworked. Taskflip settings exist on disk with a paint function but have no sidebar dispatch yet, and Dashboard settings are a header only stub.
+
+- New Updates tab (tab 51, `src/ux/settings/settings_tab_updater/`): device card with version, package kind and auto check toggle on a 6 hour poll, software update card with Check now, Download, Install and armed Restart shell actions, and a release notes card showing the first 8 lines.
+- New Panel tab (tab 1, `src/ux/settings/settings_tab_panel/`): Settings, Widgets and Appearance child tabs with width mode, auto hide, tooltips, three column drag widgets and slider cards, matching the taskbar tab.
+- New global search (`src/ux/settings/utils/search/settings_search.hpp`): an index over every tab with AND token matching, compositor filtering and a 120 result cap, with a fixed search bar shifting tab content down.
+- Shared widget defaults (`src/ux/settings/utils/widget_defaults/settings_widget_defaults.hpp`) give Reset to defaults one source of truth for dock, taskbar and panel. A shared output picker (`src/ux/settings/utils/display/settings_display_dropdown.hpp`) covers Auto, All and per output names with hot plug refresh.
+- Monitors tab (tab 7) gained a drag canvas with zoom and pan, Display, Scale, Color, HDR and Luminance sections and compositor gated VRR. Bluetooth tab (tab 47) groups Connected, Remembered and Nearby with per row Pair, Connect, Disconnect and Forget plus battery and signal lines. Sound tab (tab 8) added engine quantum controls and Bluetooth profile combos.
+
+### Updater: Self update from GitHub releases
+
+The shell can now check, download and install its own packages. It detects the distro package kind and restarts the session after install.
+
+- New service (`src/services/updater/updater_service.cpp`, `updater_service.hpp`). It polls `releases/latest` on libcurl, compares versions with stable above beta, picks assets by suffix for rpm, deb and pacman from `/etc/os-release` plus binary probes, and installs through `pkexec` with detached threads and an eventfd wake.
+- Preferences live in `updater.toml` under `$XDG_STATE_HOME` with auto check and 6 hour due logic. Restart uses a double fork through `systemctl --user restart event-horizon` with pgrep and nohup fallbacks.
+- Fixed in follow ups: version compare and asset matching plus a notification service null check on the update path.
+
+### Widgets: Layout switcher, Fetch and media plus calendar and weather refresh
+
+A new layout widget switches compositors layouts from the bar, and several desktop widgets were split into shared paint headers or rebuilt.
+
+- New layout widget (`src/desktop_shell/widgets/layout/layout_paint.cpp`, `widgets/popup/layout/layout_popup.cpp`): per compositor Hyprland and Mango layout switching from dock, taskbar and panel slots with a popup picker.
+- New Fetch desktop widget (`src/desktop_shell/desktop/widgets/fetch/desktop_widget_fetch.cpp`): a fastfetch style card with logo, user at host and key value rows polled every 5 seconds on a background thread.
+- Calendar and fancy weather paint moved into shared headers (`calendar_card_paint.hpp`, `fancy_weather_card_paint.hpp`) so desktop and popup cards share one painter. Media player and media compact were rebuilt as liquid glass cards on `DockMpris` with art, marquee titles, CAVA strip, seek and transport controls.
+- System monitor now parses swap totals and per package RAPL energy alongside `/proc` CPU, memory, net and NVML GPU with 40 sample sparklines. World clock, clock and weather widgets picked up per second ticks and output selection fixes.
+
+### Bluetooth: Auto reconnect, pairing agent and radio block
+
+Bluetooth moved to a dedicated discovery bus with host side auto reconnect and a proper pairing agent. Airplane and rfkill handling now goes through one module.
+
+- `BluezService` (`src/services/bluetooth/bluez_service.cpp`) runs discovery on its own bus, pairs, trusts and connects asynchronously, persists ever connected devices and nudges them back when they return in range with cooldown and manual disconnect respect, and never blocks D-Bus on the event thread.
+- `BluetoothAgent` handles NoInputNoOutput JustWorks with PIN, passkey, confirm and authorize requests. Settings and widgets map friendly errors for powered off, rfkill and scan failures.
+- New `radio_block` module (`src/platform/radio_block.cpp`) aggregates `/sys/class/rfkill` and writes `/dev/rfkill` for Bluetooth and Wi-Fi with hard block reporting, replacing the old rfkill helper.
+- Dock off crash fix: turning the dock off no longer crashes Settings (`f260e52`). Tooltip and pick paths handle missing layers.
+
+### Disks: Utility overhaul with benchmark, SMART, imaging and job tracking
+
+Horizon Disks was rebuilt around one layout module shared by paint and hit testing, with background jobs and eight modal dialogs.
+
+- Single layout source of truth (`src/ux/disks/ui/layout.cpp`, `ui/theme.hpp`): header, sidebar, drive card, proportional volume bar with free space synthesis, GParted style partition table, details grid and job bar all share geometry with hit testing.
+- New shared widgets and icons (`src/ux/disks/ui/widgets.cpp`, `ui/icons.cpp`): pill, icon and action buttons, checkboxes, filesystem pills with GParted colors, usage bars, hatch rects, spinners and bundled Eva and Lucide SVGs.
+- New `JobTracker` (`src/ux/disks/jobs.cpp`): per block active and recent jobs with determinate and indeterminate progress, header pill, per row spinner and footer job bar.
+- Dialogs (`src/ux/disks/dialogs/`): benchmark with 100 sample read graph, SMART with assessment banner and self tests, create and restore image with progress and overwrite warning plus image attach, drive settings for standby and write cache, mount options, resize with minimum size guard, LUKS unlock with keyring option, disk format with erase mode and GPT or MBR, volume format with encryption, and GParted style create partition defaulting to the largest free gap.
+
+### Spotlight: Prefixed seekers for power, math, windows and emoji
+
+Spotlight gained a small provider registry for prefixed queries. Each provider declares a prefix, global flag and scoring.
+
+- New registry (`src/desktop_shell/spotlight/providers/seeker_registry.cpp`): `/prefix query` parsing with a staged window list for the windows provider.
+- Power (`seeker_power.cpp`, prefix `power`): lock, logout, reboot and shutdown rows. Math (`seeker_math.cpp`, prefix `calc`, global): hand rolled parser for arithmetic with power, parens and unary plus. Windows (`seeker_windows.cpp`, prefix `win`): substring match on title and app id up to 8 rows. Glyphs (`seeker_glyphs.cpp`, prefix `emo`): about 50 keyword to emoji rows copied via `wl-copy`.
+- Keyboard handling now moves through results consistently and query parsing is shared with the overview grid.
+
+### Backends: Triad removal and Niri, Hyprland and Sway hardening
+
+The unmaintained Triad backend was removed and the remaining workspace managers got JSON and id parsing hardening.
+
+- Deleted `src/backends/triad/` (6 files, about 1052 lines) and all Triad arms in compositor IPC, power actions, session, config, docs and meson. No `triad` references remain in `src`.
+- Niri (`src/backends/niri/niri_workspace_manager.cpp`): hardened JSON helpers with object, type and range checks and a whitespace collapsing title rewrite plus runtime query dispatch fixes.
+- Hyprland (`src/backends/hyprland/hyprland_workspace_manager.cpp`): workspace id resolve moved from `strtol` to `sscanf`, focus split between Lua and dispatch paths with unanswered command logging. Sway got the same id hardening.
+- Docs and ProjectMap updated to list only Hyprland, Sway, Niri and Mango paths.
+
+### Notifications and OSD: Output choice, rules, pipeline stats and rework
+
+Notifications can target an output and filter by rules, with pipeline stats for diagnosis. OSD audio and brightness widgets share a slimmer host.
+
+- Notifications settings gained an output name (empty Auto, `all` for primary, else a Wayland output name with fallback) and a `NotificationRule` list with toast, history, sound, do not disturb bypass and urgency filters (`src/configuration/shell_config.hpp`).
+- New pipeline stats (`src/desktop_shell/notifications/diag/notification_pipeline_stats.hpp`) plus toast host deduplication by summary and body, overlay opacity, stall watchdog over 250ms frame gaps and MPRIS now playing dedup (`src/desktop_shell/notifications/host/notification_toast_host.cpp`, `core/notifications.cpp`).
+- IPC types (`src/desktop_shell/notifications/types/notifications_ipc.hpp`) carry the updated kinds and art blobs. OSD host, audio and brightness (`src/desktop_shell/osd/host/osd_host.cpp`, `osd/audio/osd_audio.cpp`, `osd/brightness/osd_brightness.cpp`) were reworked for the stage split.
+
+### Services: Redeye inhibit, MPRIS track dedup and tray timeouts
+
+Small services were added or tightened so background polling stays off the frame path.
+
+- New `RedeyeService` (`src/services/redeye/redeye_service.cpp`): a singleton that creates and destroys a `zwp_idle_inhibitor_v1` per surface with mutex guarding, wired to `power.redeyeEnabled`.
+- New `track_changed` helper (`src/services/mpris/mpris_track_change.hpp`): prefers `mpris:trackid` then title to avoid bogus notifications on partial browser metadata merges, covered by `test_mpris_track_change.cpp`.
+- Tray and disks D-Bus calls are bounded to 2 seconds. New tests cover widget defaults and the settings singleton (`test_widget_defaults.cpp`, `test_settings_singleton.cpp`, `test_hit_registry.cpp`).
+- Ptyxis palette and matugen template fix (`349e147`): color engine and theme sync corrected for Ptyxis.
+
+### Polkit: Session agent split into its own process
+
+The password dialog used to run inside the supervisor with its own Wayland connection wired into the main poll loop. A protocol error or a wedged cancel could land inside the shell process, the same class of bug every other service was already split out to avoid.
+
+- New `horizon-polkit-agent` binary (`src/services/polkit/standalone/`, `standalone_main.cpp`). It registers as the session `org.freedesktop.PolicyKit1.AuthenticationAgent`, pumps its own GLib context through the poll loop hooks and owns the dialog and seat input on its own connection. The agent code stays in `eh_shell_core` and re registers on polkitd restarts.
+- The supervisor only spawns it (`src/services/polkit/spawn/polkit_agent_spawn.cpp`) with log redirect, SIGCHLD reap, cooldown respawn, deferred retry and graceful shutdown. All in process polkit members and teardown were removed from the session.
+- Dialog fixes: snapshot carries identity, icon name, details and info on separate bridge channels instead of one prompt field. The dialog renders user at host, message, action id, details and themed icon with the session request as the password label.
+
+### Polkit: Compact dialog redesign with reference parity
+
+The dialog was audited against mate-polkit and GNOME Shell 51 for lifecycle, cancel, retry, info and error lines, action id, details, themed icon and Escape and Enter handling. Two missing behaviors were added: identity prefers current user then root then first user, and a bare Password prompt for another user renders as Password for user.
+
+- Compact card (`src/services/polkit/dialog/polkit_auth_dialog.cpp`): 480px wide sized to content every paint with no scrim, so the surface floats over the untouched desktop. Rows use Inter through Pango with title, accent user at host and action id meta, wrapped message, dimmed details and themed error line, plus masked field with accent caret and outlined Cancel and filled Confirm buttons.
+- Colors come from the wallpaper derived chrome and reload on `config.applied` over IPC like the other children.
+- Robustness from live logs: show no longer wipes a typed password on mid dialog notifications except for a new cookie or failed attempt, empty hidden prompt submits are swallowed instead of burning an attempt, registration retries 6 times then exits for respawn, and the supervisor will not stack a duplicate over a live child. Follow up fixes cover listener channels, logging (`src/services/polkit/polkit_log.hpp`) and auth service threading.
+
 ### Default Apps: File manager choice now covers FileManager1
 
 Browser "Open containing folder" and in-shell reveal actions use the `org.freedesktop.FileManager1.ShowItems` D-Bus call, which ignores the `inode/directory` MIME handler. Whichever app owned that bus name won, no matter what Default Apps said, so choosing Horizon Files as the file manager still opened Otter Files from browsers.
