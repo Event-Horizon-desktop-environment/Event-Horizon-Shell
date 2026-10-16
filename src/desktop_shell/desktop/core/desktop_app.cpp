@@ -165,7 +165,7 @@ static void desktop_app_free_xkb(DesktopApp& app) {
 
 bool desktop_init_on_display(DesktopApp& app) {
    
-  app.wl = std::make_unique<eh::wayland::WaylandConnection>();
+  app.wl = std::make_unique<eh::wayland::WaylandLink>();
   if (!app.wl->connect(false)) {
     std::cerr << "[desktop] Failed to connect own wl_display\n";
     app.wl.reset();

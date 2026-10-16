@@ -43,7 +43,7 @@ struct Stream {
   std::string description{};
 };
 
-struct Snapshot {
+struct AudioSummary {
   bool available = false;
   std::uint32_t default_sink = 0;
   std::uint32_t default_source = 0;
@@ -125,15 +125,15 @@ struct AudioCardProfiles {
 
 class PipeWireService {
 public:
-  using ChangeCallback = std::function<void()>;
+  using StateChangeHook = std::function<void()>;
 
   static PipeWireService& instance();
 
   void start();
   [[nodiscard]] bool started() const;
-  void set_change_callback(ChangeCallback cb);
+  void set_change_callback(StateChangeHook cb);
 
-  [[nodiscard]] Snapshot snapshot() const;
+  [[nodiscard]] AudioSummary snapshot() const;
 
   [[nodiscard]] EngineSettings query_engine_settings() const;
 
@@ -213,7 +213,7 @@ private:
 
   mutable std::recursive_mutex mtx_{};
   bool started_ = false;
-  ChangeCallback on_change_{};
+  StateChangeHook on_change_{};
 
   pw_thread_loop* loop_ = nullptr;
   pw_context* ctx_ = nullptr;
@@ -262,7 +262,7 @@ private:
   std::uint32_t default_sink_ = 0;
   std::uint32_t default_source_ = 0;
 
-  Snapshot snap_{};
+  AudioSummary snap_{};
 };
 
 }

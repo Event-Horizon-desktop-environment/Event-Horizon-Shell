@@ -41,14 +41,14 @@ struct LogicalOutputBounds {
   int height = 0;
 };
 
-class WaylandConnection {
+class WaylandLink {
 public:
-  WaylandConnection();
-  WaylandConnection(const WaylandConnection&) = delete;
-  WaylandConnection& operator=(const WaylandConnection&) = delete;
-  WaylandConnection(WaylandConnection&&) = delete;
-  WaylandConnection& operator=(WaylandConnection&&) = delete;
-  ~WaylandConnection();
+  WaylandLink();
+  WaylandLink(const WaylandLink&) = delete;
+  WaylandLink& operator=(const WaylandLink&) = delete;
+  WaylandLink(WaylandLink&&) = delete;
+  WaylandLink& operator=(WaylandLink&&) = delete;
+  ~WaylandLink();
 
   [[nodiscard]] bool connect(bool init_workspaces = true);
 
@@ -84,8 +84,8 @@ public:
   [[nodiscard]] zwp_virtual_keyboard_manager_v1* virtual_keyboard_manager() const { return virtualKeyboardMgr_; }
   [[nodiscard]] ext_workspace_manager_v1* workspace_manager() const { return workspaceMgr_; }
   [[nodiscard]] zdwl_ipc_manager_v2* dwl_ipc_manager() const { return dwlIpcMgr_; }
-  [[nodiscard]] WaylandWorkspaces& wayland_workspaces() { return *waylandWorkspaces_; }
-  [[nodiscard]] CompositorRuntimeRegistry& runtime_registry() { return runtimeRegistry_; }
+  [[nodiscard]] CompositorWorkspaces& wayland_workspaces() { return *waylandWorkspaces_; }
+  [[nodiscard]] CompositorSessionRegistry& runtime_registry() { return runtimeRegistry_; }
   [[nodiscard]] ext_data_control_manager_v1* ext_data_control_manager() const { return extDataControlMgr_; }
   [[nodiscard]] zwlr_data_control_manager_v1* wlr_data_control_manager() const { return wlrDataControlMgr_; }
   [[nodiscard]] zwlr_screencopy_manager_v1* screencopy_manager() const { return screencopyMgr_; }
@@ -131,7 +131,7 @@ public:
   void sync_logical_outputs_from_cache();
 
   struct OutputSlot {
-    WaylandConnection* owner = nullptr;
+    WaylandLink* owner = nullptr;
     wl_output* output = nullptr;
     zxdg_output_v1* xdg = nullptr;
     std::string name;
@@ -196,8 +196,8 @@ private:
   ext_output_image_capture_source_manager_v1* extOutputImageCaptureSourceMgr_ = nullptr;
   ext_foreign_toplevel_image_capture_source_manager_v1* extForeignToplevelImageCaptureSourceMgr_ = nullptr;
   wp_color_manager_v1* colorMgr_ = nullptr;
-  CompositorRuntimeRegistry runtimeRegistry_;
-  std::unique_ptr<WaylandWorkspaces> waylandWorkspaces_;
+  CompositorSessionRegistry runtimeRegistry_;
+  std::unique_ptr<CompositorWorkspaces> waylandWorkspaces_;
 
   std::vector<std::unique_ptr<OutputSlot>> tracked_outputs_;
   std::vector<LogicalOutputInfo> logical_outputs_;

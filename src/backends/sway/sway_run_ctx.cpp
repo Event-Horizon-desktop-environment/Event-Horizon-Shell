@@ -10,30 +10,43 @@
 
 namespace wspace::sway {
 
-bool SwayRuntime::canConnect() const {
+namespace {
+
+// First non-empty of the two socket variables sway is found under.
+char* envSocket(char const* primary, char const* fallback) {
+  char* picked = std::getenv(primary);
+  if (picked != nullptr && picked[0] != '\0') { return picked; }
+  picked = std::getenv(fallback);
+  if (picked != nullptr && picked[0] != '\0') { return picked; }
+  return nullptr;
+}
+
+} // namespace
+
+bool SwaySession::canConnect() const {
   resolveIfPending();
   return !m_endpoint.empty();
 }
 
-const std::string& SwayRuntime::queryEndpoint() const {
+const std::string& SwaySession::queryEndpoint() const {
   resolveIfPending();
   return m_endpoint;
 }
 
-std::optional<nlohmann::json> SwayRuntime::sendCommand(std::uint32_t type, std::string_view payload) const {
+std::optional<nlohmann::json> SwaySession::sendCommand(std::uint32_t type, std::string_view payload) const {
   auto reply = transmit(type, payload);
   if (reply.payload.empty()) { return std::nullopt; }
   try { return nlohmann::json::parse(reply.payload); }
   catch (nlohmann::json::exception const&) { return std::nullopt; }
 }
 
-void SwayRuntime::rescan() {
+void SwaySession::rescan() {
   m_endpoint.clear();
   m_resolved = false;
   locateEndpoint();
 }
 
-SwayRuntime::Frame SwayRuntime::transmit(std::uint32_t type, std::string_view payload) const {
+SwaySession::Frame SwaySession::transmit(std::uint32_t type, std::string_view payload) const {
   resolveIfPending();
   if (m_endpoint.empty()) { return {}; }
 
@@ -113,14 +126,15 @@ SwayRuntime::Frame SwayRuntime::transmit(std::uint32_t type, std::string_view pa
   return {rtype, std::move(rpay)};
 }
 
-void SwayRuntime::resolveIfPending() const {
+void SwaySession::resolveIfPending() const {
   if (!m_resolved) { locateEndpoint(); }
 }
 
-void SwayRuntime::locateEndpoint() const {
+void SwaySession::locateEndpoint() const {
   m_resolved = true;
-  if (auto* s = std::getenv("SWAYSOCK"); s != nullptr && s[0] != '\0') { m_endpoint = s; return; }
-  if (auto* s = std::getenv("I3SOCK"); s != nullptr && s[0] != '\0') { m_endpoint = s; }
+  if (auto* sock = envSocket("SWAYSOCK", "I3SOCK"); sock != nullptr) {
+    m_endpoint = sock;
+  }
 }
 
 }

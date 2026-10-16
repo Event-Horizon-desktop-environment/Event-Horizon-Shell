@@ -17,7 +17,7 @@ constexpr wp_fractional_scale_v1_listener kFractionalListener = {
 
 }
 
-void attach_surface_extensions(WaylandConnection& wl, wl_surface* surface, SurfaceExtensions& ext) {
+void attach_surface_extensions(WaylandLink& wl, wl_surface* surface, SurfaceExtensions& ext) {
    
   if (!surface) return;
 
@@ -42,7 +42,7 @@ void attach_surface_extensions(WaylandConnection& wl, wl_surface* surface, Surfa
   }
 }
 
-void SurfaceExtensions::ensure_tearing_control(WaylandConnection& wl, wl_surface* surface) {
+void SurfaceExtensions::ensure_tearing_control(WaylandLink& wl, wl_surface* surface) {
    
   if (!tearingControl && wl.tearing_control_manager()) {
     tearingControl = wp_tearing_control_manager_v1_get_tearing_control(

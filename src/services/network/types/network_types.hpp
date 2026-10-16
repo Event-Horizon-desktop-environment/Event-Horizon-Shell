@@ -111,7 +111,7 @@ struct AccessPoint {
   bool secured = false;
 };
 
-struct Snapshot {
+struct NetState {
   ConnectivityKind kind = ConnectivityKind::Unknown;
   bool connected = false;
   bool wireless_enabled = false;

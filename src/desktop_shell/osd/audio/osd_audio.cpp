@@ -30,7 +30,7 @@ const char* sink_glyph(int pct, bool mute) {
   return "volume_up";
 }
 
-const eh::audio::Device* find_node(const eh::audio::Snapshot& s, uint32_t id) {
+const eh::audio::Device* find_node(const eh::audio::AudioSummary& s, uint32_t id) {
    
   {
     auto it = std::find_if(s.sinks.begin(), s.sinks.end(),
@@ -47,7 +47,7 @@ const eh::audio::Device* find_node(const eh::audio::Snapshot& s, uint32_t id) {
 
 void prime_from_snapshot() {
    
-  const eh::audio::Snapshot s = eh::audio::PipeWireService::instance().snapshot();
+  const eh::audio::AudioSummary s = eh::audio::PipeWireService::instance().snapshot();
   if (!s.available) return;
   if (const eh::audio::Device* sink = find_node(s, s.default_sink)) {
     g_sink_id = sink->node_id;
@@ -127,7 +127,7 @@ void try_boot_audio_defaults() {
     return;
   }
 
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
   const bool hasSink = !needSink || device_present_by_name(s.sinks, d.default_sink_name);
   const bool hasSource = !needSource || device_present_by_name(s.sources, d.default_source_name);
   if ((hasSink && hasSource) || g_boot.attempts >= kBootApplyMaxAttempts) {
@@ -143,7 +143,7 @@ void try_boot_audio_defaults() {
 void apply_pending_audio_osd(eh::shell::stage::StageApp& app) {
    
   if (!app.osd) return;
-  const eh::audio::Snapshot s = eh::audio::PipeWireService::instance().snapshot();
+  const eh::audio::AudioSummary s = eh::audio::PipeWireService::instance().snapshot();
   if (!s.available) return;
 
   const uint32_t sink_id = s.default_sink;

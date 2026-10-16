@@ -91,7 +91,6 @@ An abstraction layer so the shell works across Hyprland, Niri, Sway, Mango, and 
 The base interfaces live in `interfaces/`:
 
 - **`interfaces/compositor_ipc.cpp` / `.h`** -- Abstract `CompositorRuntime` base class with virtual methods for init, poll_fd, dispatch, shutdown, and event callbacks.
-- **`interfaces/power_actions.cpp` / `.h`** -- Platform power operations via logind D-Bus: lock, logout, reboot, shutdown.
 - **`interfaces/keyboard_backend.h`** -- `KeyboardBackend` base: `apply_keymap()` and `query_keyboard_info()`.
 - **`interfaces/workspace_backend.h`** -- `WorkspaceBackend` base: `workspaces()`, `activate_workspace()`, `on_change()`.
 - **`interfaces/ext_workspace_backend.cpp` / `.h`** -- Generic workspace backend using the `ext-workspace-v1` protocol, works with any compositor that supports it.

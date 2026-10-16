@@ -650,7 +650,7 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
   if (app.pointerLeftDown && app.activeTab == 8 && app.soundVolDragCode >= 0) {
     eh::audio::PipeWireService::instance().start();
     app.soundPaintSnapPending.emplace(eh::audio::PipeWireService::instance().snapshot());
-    const eh::audio::Snapshot& snap = *app.soundPaintSnapPending;
+    const eh::audio::AudioSummary& snap = *app.soundPaintSnapPending;
     auto& pw = eh::audio::PipeWireService::instance();
     int tcx = 0;
     int tcw = 0;
@@ -1267,7 +1267,7 @@ void on_pointer_motion(App& app, wl_surface* ptrSurf, double x, double y) {
     if (app.activeTab == 8 && app.soundActiveDd >= 0) {
       const double pyL = app.pointerY + settings_scroll_px(app);
       eh::audio::PipeWireService::instance().start();
-      const eh::audio::Snapshot snap = eh::audio::PipeWireService::instance().snapshot();
+      const eh::audio::AudioSummary snap = eh::audio::PipeWireService::instance().snapshot();
       // Single model: hover reads the same rows/box paint and click use.
       const SoundDropdown dd = build_sound_dropdown(app, snap);
       if (dd.open && !dd.rows.empty()) {
@@ -1711,7 +1711,7 @@ void on_pointer_button(App& app, wl_surface* ptrSurf, uint32_t button, uint32_t 
     if (app.soundVolDragCode >= 0) {
       settings_sound_vol_pw_drag_commit_final(app);
       eh::audio::PipeWireService::instance().start();
-      const eh::audio::Snapshot snap = eh::audio::PipeWireService::instance().snapshot();
+      const eh::audio::AudioSummary snap = eh::audio::PipeWireService::instance().snapshot();
       for (const auto& d : snap.sinks) {
         if (d.node_id == snap.default_sink) {
           app.settings.audioDefaultSinkVolumePct = d.volume_pct;

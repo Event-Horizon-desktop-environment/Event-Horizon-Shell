@@ -267,7 +267,7 @@ void settings_apply_wheel_scroll_delta(App& app, double delta_px) {
     const int step = static_cast<int>(std::lround(delta_px));
     if (step == 0) return;
     eh::audio::PipeWireService::instance().start();
-    const eh::audio::Snapshot ss = eh::audio::PipeWireService::instance().snapshot();
+    const eh::audio::AudioSummary ss = eh::audio::PipeWireService::instance().snapshot();
     app.settingsSoundScrollPx -= step;
     settings_clamp_sound_scroll_px(app, static_cast<int>(ss.output_streams.size()),
                                    static_cast<int>(ss.input_streams.size()), sound_tab_card_count_clamped(app));

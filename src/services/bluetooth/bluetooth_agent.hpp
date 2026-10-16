@@ -11,30 +11,33 @@ class IConnection;
 
 namespace eh::bt {
 
-enum class BluetoothPairingKind : std::uint8_t {
-  None,
-  PinCode,
-  Passkey,
-  DisplayPinCode,
-  DisplayPasskey,
-  Confirm,
-  Authorize,
-  AuthorizeService,
+// BlueZ org.bluez.Agent1 request flavors the agent knows how to answer.
+enum class PairingMode : std::uint8_t {
+  Authorization,
+  ServiceAuthorization,
+  Confirmation,
+  ShownPasskey,
+  ShownPin,
+  PasskeyEntry,
+  PinEntry,
 };
 
-struct BluetoothPairingRequest {
-  BluetoothPairingKind kind = BluetoothPairingKind::None;
-  std::string devicePath;
-  std::string deviceAlias;
-  std::uint32_t passkey = 0;
-  std::uint16_t entered = 0;
-  std::string pin;
+// One in-flight pairing interaction, as reported by BlueZ.
+struct PairingPrompt {
   std::string uuid;
+  std::string pin;
+  std::uint16_t entered = 0;
+  std::uint32_t passkey = 0;
+  std::string deviceAlias;
+  std::string devicePath;
+  PairingMode mode = PairingMode::Authorization;
 };
 
+// Registers an org.bluez.Agent1 on the system bus and forwards pairing
+// interactions to the UI through a single-slot callback.
 class BluetoothAgent {
 public:
-  using RequestCallback = std::function<void(const BluetoothPairingRequest&)>;
+  using PairingHandler = std::function<void(const PairingPrompt&)>;
 
   explicit BluetoothAgent(sdbus::IConnection& bus);
   ~BluetoothAgent();
@@ -44,16 +47,16 @@ public:
   BluetoothAgent(BluetoothAgent&&) = delete;
   BluetoothAgent& operator=(BluetoothAgent&&) = delete;
 
-  void setRequestCallback(RequestCallback callback);
+  [[nodiscard]] PairingPrompt pendingRequest() const;
 
-  void acceptConfirm();
-  void rejectConfirm();
-  void submitPin(const std::string& pin);
-  void submitPasskey(std::uint32_t passkey);
-  void cancelPending();
+  void abortPending();
+  void sendPasskey(std::uint32_t passkey);
+  void sendPin(const std::string& pin);
+  void rejectPairing();
+  void acceptPairing();
+  void setPairingHandler(PairingHandler handler);
 
-  [[nodiscard]] bool hasPendingRequest() const noexcept;
-  [[nodiscard]] BluetoothPairingRequest pendingRequest() const;
+  [[nodiscard]] bool hasPendingPairing() const noexcept;
 
 private:
   struct Impl;

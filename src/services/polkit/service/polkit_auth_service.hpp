@@ -16,7 +16,7 @@ namespace eh::polkit {
 
 enum class AuthState : std::uint8_t { Idle, Pending, Active, Success, Failed };
 
-struct Snapshot {
+struct PolkitState {
   AuthState state = AuthState::Idle;
   std::string action_id;   // polkit action, e.g. org.freedesktop.policykit.exec
   std::string message;     // polkit's "Authentication is required to ..." line
@@ -33,16 +33,16 @@ struct Snapshot {
 
 class PolkitAuthService {
 public:
-  using ChangeCallback = std::function<void()>;
+  using StateChangeHook = std::function<void()>;
 
   static PolkitAuthService& instance();
 
   void start();
   void stop();
 
-  void set_change_callback(ChangeCallback cb);
+  void set_change_callback(StateChangeHook cb);
 
-  [[nodiscard]] Snapshot snapshot() const;
+  [[nodiscard]] PolkitState snapshot() const;
 
   // Registration runs on its own thread; the standalone main waits for it
   // and exits non-zero on failure so the supervisor respawns the child.

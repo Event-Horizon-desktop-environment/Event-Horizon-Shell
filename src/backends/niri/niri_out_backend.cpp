@@ -37,15 +37,15 @@ std::optional<std::string> parseFocused(nlohmann::json const& json) {
 
 } // namespace
 
-NiriOutputBackend::NiriOutputBackend(NiriRuntime& rt) : m_state(rt) {}
+NiriOutputSource::NiriOutputSource(NiriSession& rt) : m_state(rt) {}
 
-std::optional<std::string> NiriOutputBackend::focusedOutputName() const {
+std::optional<std::string> NiriOutputSource::focusedOutputName() const {
   auto resp = m_state.sendQuery(kFocusedReq);
   if (resp.has_value()) { return parseFocused(*resp); }
   return std::nullopt;
 }
 
-bool niriSetOutputPower(NiriRuntime& rt, bool on) {
+bool niriSetOutputPower(NiriSession& rt, bool on) {
   return rt.dispatchAction(nlohmann::json{
     {on ? "PowerOnMonitors" : "PowerOffMonitors", nlohmann::json::object()},
   });

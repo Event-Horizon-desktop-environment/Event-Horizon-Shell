@@ -43,7 +43,7 @@ class Host {
   friend void overview_host_page_frame_done(void* data, wl_callback* cb, uint32_t compositor_time_ms);
 
 public:
-  explicit Host(ShellCtx& ctx, std::unique_ptr<eh::wayland::WaylandConnection> wl);
+  explicit Host(ShellCtx& ctx, std::unique_ptr<eh::wayland::WaylandLink> wl);
   ~Host();
 
   Host(const Host&) = delete;
@@ -196,10 +196,10 @@ public:
   void rename_type_text(const char* text);
   void rename_backspace();
   [[nodiscard]] ShellCtx& ctx() noexcept { return ctx_; }
-  [[nodiscard]] const std::unique_ptr<eh::wayland::WaylandConnection>& wl() const noexcept { return wl_; }
+  [[nodiscard]] const std::unique_ptr<eh::wayland::WaylandLink>& wl() const noexcept { return wl_; }
   [[nodiscard]] bool open() const noexcept { return open_; }
   [[nodiscard]] bool has_frame_cb() const noexcept { return frame_cb_ != nullptr; }
-  [[nodiscard]] AnimationManager& anim() noexcept { return anim_; }
+  [[nodiscard]] MotionTimeline& anim() noexcept { return anim_; }
   [[nodiscard]] Input& input() noexcept { return *input_; }
   [[nodiscard]] Capture& capture() noexcept { return *capture_; }
   [[nodiscard]] Actions& actions() noexcept { return *actions_; }
@@ -293,7 +293,7 @@ private:
   int count_painted_windows() const;
 
   ShellCtx& ctx_;
-  std::unique_ptr<eh::wayland::WaylandConnection> wl_;
+  std::unique_ptr<eh::wayland::WaylandLink> wl_;
 
   std::unique_ptr<Input> input_;
   std::unique_ptr<Capture> capture_;
@@ -334,7 +334,7 @@ private:
   // reopened overview is now using.
   bool closing_ = false;
 
-  AnimationManager anim_{};
+  MotionTimeline anim_{};
   float progress_ = 0.f;
   wl_callback* frame_cb_ = nullptr;
 

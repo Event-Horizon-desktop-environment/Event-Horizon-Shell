@@ -9,8 +9,24 @@
 
 #include <string>
 
-WaylandWorkspaces::WaylandWorkspaces(CompositorRuntimeRegistry& runtimeRegistry) {
-  MANGOWM_DEBUG("WaylandWorkspaces ctor this=%p", (void*)this);
+namespace {
+
+CompositorWorkspaces* g_singleton = nullptr;
+
+// True when the backend reports a live link; used by the selection ladder
+// below so each rung reads as one condition instead of nested ifs.
+bool linkUp(IDeskSource* backend) {
+  return backend != nullptr && backend->ready();
+}
+
+} // namespace
+
+void set_global_wayland_workspaces(CompositorWorkspaces* ww) { g_singleton = ww; }
+CompositorWorkspaces* global_wayland_workspaces() { return g_singleton; }
+
+CompositorWorkspaces::CompositorWorkspaces(CompositorSessionRegistry& runtimeRegistry) {
+  MANGOWM_DEBUG("CompositorWorkspaces ctor this=%p", (void*)this);
+
   auto extBackend = std::make_unique<ExtWorkspaceManager>();
   m_extWorkspaceBinder = extBackend.get();
   m_extBackend = extBackend.get();
@@ -32,74 +48,70 @@ WaylandWorkspaces::WaylandWorkspaces(CompositorRuntimeRegistry& runtimeRegistry)
   m_swayBackend = swayBackend.get();
   m_outputNameResolvers.push_back(swayBackend.get());
   m_backends.push_back(std::move(swayBackend));
-
 }
 
-WaylandWorkspaces::~WaylandWorkspaces() {
-  MANGOWM_DEBUG("WaylandWorkspaces dtor this=%p", (void*)this);
+CompositorWorkspaces::~CompositorWorkspaces() {
+  MANGOWM_DEBUG("CompositorWorkspaces dtor this=%p", (void*)this);
 }
 
-void WaylandWorkspaces::bindExtProtocol(ext_workspace_manager_v1* manager) {
-   
-  if (m_extWorkspaceBinder != nullptr) {
-    m_extWorkspaceBinder->bindExtProtocol(manager);
+// --- private helpers ------------------------------------------------------
+
+void CompositorWorkspaces::setActiveBackend(IDeskSource* backend) {
+  m_activeBackend = backend;
+}
+
+void CompositorWorkspaces::notifyChanged() const {
+  if (m_changeCallback) {
+    m_changeCallback();
   }
 }
 
-void WaylandWorkspaces::setOutputResolver(std::function<std::string(wl_output*)> resolver) {
-   
-  for (auto* backend : m_outputNameResolvers) {
-    if (backend != nullptr) {
-      backend->setOutputResolver(resolver);
-    }
-  }
-}
+// --- construction / destruction ------------------------------------------
 
-void WaylandWorkspaces::initialize() {
-   
+void CompositorWorkspaces::initialize() {
+
   const auto kind = detect_compositor_kind();
 
+  // Selection ladder: kind-matched backends first (each opened on demand),
+  // then whatever else is live. A rung only fires when the compositor kind
+  // matches; the trailing fallbacks repeat the open-then-check dance for
+  // environments where kind detection came back generic.
   if (kind == CompositorKind::Hyprland && m_hyprlandBackend != nullptr) {
     auto* hyprland = static_cast<HyprlandWorkspaceManager*>(m_hyprlandBackend);
-    if (!hyprland->ready()) {
-      hyprland->openConnection();
-    }
+    if (!hyprland->ready()) { hyprland->openConnection(); }
     if (hyprland->ready()) {
       setActiveBackend(m_hyprlandBackend);
       return;
     }
   }
 
-  if (kind == CompositorKind::Sway && m_swayBackend != nullptr && m_swayBackend->ready()) {
+  if (kind == CompositorKind::Sway && linkUp(m_swayBackend)) {
     setActiveBackend(m_swayBackend);
     return;
   }
 
   if (kind == CompositorKind::Mango && m_mangoIpcConnector != nullptr) {
-    if (m_mangoIpcConnector->openConnection() && m_mangoIpcBackend != nullptr &&
-        m_mangoIpcBackend->ready()) {
+    if (m_mangoIpcConnector->openConnection() && linkUp(m_mangoIpcBackend)) {
       setActiveBackend(m_mangoIpcBackend);
       return;
     }
   }
 
-  if (m_extBackend != nullptr && m_extBackend->ready()) {
+  if (linkUp(m_extBackend)) {
     setActiveBackend(m_extBackend);
     return;
   }
 
   if (m_hyprlandBackend != nullptr) {
     auto* hyprland = static_cast<HyprlandWorkspaceManager*>(m_hyprlandBackend);
-    if (!hyprland->ready()) {
-      hyprland->openConnection();
-    }
+    if (!hyprland->ready()) { hyprland->openConnection(); }
     if (hyprland->ready()) {
       setActiveBackend(m_hyprlandBackend);
       return;
     }
   }
 
-  if (m_swayBackend != nullptr && m_swayBackend->ready()) {
+  if (linkUp(m_swayBackend)) {
     setActiveBackend(m_swayBackend);
     return;
   }
@@ -107,168 +119,169 @@ void WaylandWorkspaces::initialize() {
   setActiveBackend(nullptr);
 }
 
-void WaylandWorkspaces::outputAttached(wl_output* output) {
-   
-  for (auto* backend : m_outputObservers) {
-    if (backend != nullptr) {
-      backend->outputAttached(output);
-    }
-  }
-  if (m_activeBackend == m_hyprlandBackend && m_hyprlandBackend != nullptr) {
-    static_cast<HyprlandWorkspaceManager*>(m_hyprlandBackend)->refreshSnapshot();
-  }
+void CompositorWorkspaces::bindExtProtocol(ext_workspace_manager_v1* manager) {
+  auto* binder = m_extWorkspaceBinder;
+  if (binder != nullptr) { binder->bindExtProtocol(manager); }
 }
 
-void WaylandWorkspaces::outputDetached(wl_output* output) {
-   
-  for (auto* backend : m_outputObservers) {
-    if (backend != nullptr) {
-      backend->outputDetached(output);
-    }
-  }
+void CompositorWorkspaces::setOutputResolver(std::function<std::string(wl_output*)> resolver) {
+
+  callEach(m_outputNameResolvers, [&](auto& backend) { backend.setOutputResolver(resolver); });
 }
 
-void WaylandWorkspaces::onStateChange(ChangeCallback callback) {
+void CompositorWorkspaces::onStateChange(DeskChangeCallback callback) {
   m_changeCallback = std::move(callback);
   auto wrapper = [this]() { notifyChanged(); };
-  for (const auto& backend : m_backends) {
-    if (backend != nullptr) {
-      backend->onStateChange(wrapper);
-    }
-  }
+  callEach(m_backends, [&](auto& backend) { backend.onStateChange(wrapper); });
 }
 
-void WaylandWorkspaces::jumpTo(const std::string& id) {
-  if (m_activeBackend != nullptr) {
-    m_activeBackend->jumpTo(id);
-  }
-}
-
-void WaylandWorkspaces::jumpToOnOutput(wl_output* output, const std::string& id) {
-  if (m_activeBackend != nullptr) {
-    m_activeBackend->jumpToOnOutput(output, id);
-  }
-}
-
-void WaylandWorkspaces::jumpToOnOutput(wl_output* output, const DeskRegion& workspace) {
-  if (m_activeBackend != nullptr) {
-    m_activeBackend->jumpToOnOutput(output, workspace);
-  }
-}
-
-void WaylandWorkspaces::teardown() {
-  for (const auto& backend : m_backends) {
-    if (backend != nullptr) {
-      backend->teardown();
-    }
-  }
+void CompositorWorkspaces::teardown() {
+  callEach(m_backends, [](auto& backend) { backend.teardown(); });
   m_activeBackend = nullptr;
 }
 
-int WaylandWorkspaces::eventFd() const noexcept {
-  return m_activeBackend != nullptr ? m_activeBackend->eventFd() : -1;
+// --- output life cycle ----------------------------------------------------
+
+void CompositorWorkspaces::outputDetached(wl_output* output) {
+  callEach(m_outputObservers, [&](auto& backend) { backend.outputDetached(output); });
 }
 
-short WaylandWorkspaces::eventFlags() const noexcept {
-  return m_activeBackend != nullptr ? m_activeBackend->eventFlags() : static_cast<short>(POLLIN);
-}
-
-int WaylandWorkspaces::eventTimeout() const noexcept {
-  return m_activeBackend != nullptr ? m_activeBackend->eventTimeout() : -1;
-}
-
-void WaylandWorkspaces::onEvent(short revents) {
-  if (m_activeBackend != nullptr) {
-    m_activeBackend->onEvent(revents);
+void CompositorWorkspaces::outputAttached(wl_output* output) {
+  callEach(m_outputObservers, [&](auto& backend) { backend.outputAttached(output); });
+  auto* hyprland = m_hyprlandBackend;
+  if (hyprland != nullptr && m_activeBackend == hyprland) {
+    static_cast<HyprlandWorkspaceManager*>(hyprland)->reloadSnapshot();
   }
 }
 
-const char* WaylandWorkspaces::name() const noexcept {
-  return m_activeBackend != nullptr ? m_activeBackend->name() : "none";
+// --- navigation -----------------------------------------------------------
+
+void CompositorWorkspaces::jumpToOnOutput(wl_output* output, const DeskSlot& workspace) {
+  auto* backend = m_activeBackend;
+  if (backend != nullptr) { backend->jumpToOnOutput(output, workspace); }
 }
 
-std::unordered_map<std::string, std::vector<std::string>>
-WaylandWorkspaces::appsByDesk(wl_output* output) const {
-  return m_activeBackend != nullptr
-             ? m_activeBackend->appsByDesk(output)
-             : std::unordered_map<std::string, std::vector<std::string>>{};
+void CompositorWorkspaces::jumpToOnOutput(wl_output* output, const std::string& id) {
+  auto* backend = m_activeBackend;
+  if (backend != nullptr) { backend->jumpToOnOutput(output, id); }
 }
 
-TaskbarMode WaylandWorkspaces::taskbarMode() const noexcept {
-  return m_activeBackend != nullptr ? m_activeBackend->taskbarMode() : TaskbarMode::Generic;
+void CompositorWorkspaces::jumpTo(const std::string& id) {
+  auto* backend = m_activeBackend;
+  if (backend != nullptr) { backend->jumpTo(id); }
 }
 
-std::unordered_map<std::uintptr_t, DeskWindow>
-WaylandWorkspaces::matchEntries(const std::vector<TaskbarEntry>& windows, wl_output* output) const {
-  return m_activeBackend != nullptr
-             ? m_activeBackend->matchEntries(windows, output)
-             : std::unordered_map<std::uintptr_t, DeskWindow>{};
+// --- desk queries ---------------------------------------------------------
+
+std::vector<DeskSlot> CompositorWorkspaces::regionsOnOutput(wl_output* output) const {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return {}; }
+  return backend->regionsOnOutput(output);
 }
 
-std::vector<DeskWindow> WaylandWorkspaces::windowsOnDesk(wl_output* output) const {
-  return m_activeBackend != nullptr ? m_activeBackend->windowsOnDesk(output) : std::vector<DeskWindow>{};
+std::vector<DeskSlot> CompositorWorkspaces::allRegions() const {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return {}; }
+  return backend->allRegions();
 }
 
-void WaylandWorkspaces::bringToFront(const std::string& windowId) const {
-  if (m_activeBackend != nullptr) {
-    m_activeBackend->bringToFront(windowId);
-  }
+CompositorWorkspaces::DeskAppIndex
+CompositorWorkspaces::appsByDesk(wl_output* output) const {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return {}; }
+  return backend->appsByDesk(output);
 }
 
-std::optional<std::string> WaylandWorkspaces::focusedWindowId() const {
-  if (m_hyprlandBackend != nullptr && m_activeBackend == m_hyprlandBackend) {
-    return static_cast<const HyprlandWorkspaceManager*>(m_hyprlandBackend)->focusedWindowId();
-  }
-  return std::nullopt;
+// --- bar / window integration ---------------------------------------------
+
+std::vector<ToplevelRef> CompositorWorkspaces::windowsOnDesk(wl_output* output) const {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return {}; }
+  return backend->windowsOnDesk(output);
 }
 
-std::vector<DeskRegion> WaylandWorkspaces::allRegions() const {
-  return m_activeBackend != nullptr ? m_activeBackend->allRegions() : std::vector<DeskRegion>{};
+CompositorWorkspaces::RowWindowIndex
+CompositorWorkspaces::matchEntries(const std::vector<BarItem>& windows, wl_output* output) const {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return {}; }
+  return backend->matchEntries(windows, output);
 }
 
-std::vector<DeskRegion> WaylandWorkspaces::regionsOnOutput(wl_output* output) const {
-  return m_activeBackend != nullptr ? m_activeBackend->regionsOnOutput(output) : std::vector<DeskRegion>{};
+BarMatchPolicy CompositorWorkspaces::taskbarMode() const noexcept {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return BarMatchPolicy::Uniform; }
+  return backend->taskbarMode();
 }
 
-wl_output* WaylandWorkspaces::mangoIpcSelectedOutput() const {
-  if (m_mangoIpcBackend == nullptr || !m_mangoIpcBackend->ready()) {
-    return nullptr;
-  }
-  return static_cast<MangoWorkspaceManager*>(m_mangoIpcBackend)->ipcSelectedOutput();
+void CompositorWorkspaces::bringToFront(const std::string& windowId) const {
+  auto* backend = m_activeBackend;
+  if (backend != nullptr) { backend->bringToFront(windowId); }
 }
 
-std::optional<std::pair<std::string, std::string>>
-WaylandWorkspaces::mangoIpcFocusedClientOnOutput(wl_output* output) const {
-  if (m_mangoIpcBackend == nullptr || !m_mangoIpcBackend->ready()) {
-    return std::nullopt;
-  }
-  return static_cast<const MangoWorkspaceManager*>(m_mangoIpcBackend)->ipcFocusedClientForOutput(output);
+// --- polling --------------------------------------------------------------
+
+void CompositorWorkspaces::onEvent(short revents) {
+  auto* backend = m_activeBackend;
+  if (backend != nullptr) { backend->onEvent(revents); }
 }
 
-ISocketConnector* WaylandWorkspaces::mangoIpcConnector() const noexcept {
+int CompositorWorkspaces::eventTimeout() const noexcept {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return -1; }
+  return backend->eventTimeout();
+}
+
+short CompositorWorkspaces::eventFlags() const noexcept {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return static_cast<short>(POLLIN); }
+  return backend->eventFlags();
+}
+
+int CompositorWorkspaces::eventFd() const noexcept {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return -1; }
+  return backend->eventFd();
+}
+
+// --- focus reporting ------------------------------------------------------
+
+IDeskSource const* CompositorWorkspaces::readyMango() const {
+  auto const* backend = m_mangoIpcBackend;
+  return backend != nullptr && backend->ready() ? backend : nullptr;
+}
+
+CompositorWorkspaces::FocusedTitles
+CompositorWorkspaces::mangoFocusedToplevel(wl_output* output) const {
+  auto const* mango = static_cast<MangoWorkspaceManager const*>(readyMango());
+  if (mango == nullptr) { return std::nullopt; }
+  return mango->focusedToplevel(output);
+}
+
+wl_output* CompositorWorkspaces::mangoChosenOutput() const {
+  auto const* mango = static_cast<MangoWorkspaceManager const*>(readyMango());
+  return mango != nullptr ? mango->chosenOutput() : nullptr;
+}
+
+std::optional<std::string> CompositorWorkspaces::focusedWindowTitle() const {
+  auto const* manager = static_cast<HyprlandWorkspaceManager const*>(m_hyprlandBackend);
+  if (manager == nullptr || m_activeBackend != manager) { return std::nullopt; }
+  return manager->focusedWindowTitle();
+}
+
+// --- owner accessors ------------------------------------------------------
+
+HyprlandWorkspaceManager* CompositorWorkspaces::hyprlandBackend() const noexcept {
+  auto* hyprland = m_hyprlandBackend;
+  if (hyprland == nullptr) { return nullptr; }
+  return static_cast<HyprlandWorkspaceManager*>(hyprland);
+}
+
+ILinkOpener* CompositorWorkspaces::mangoIpcConnector() const noexcept {
   return m_mangoIpcConnector;
 }
 
-void WaylandWorkspaces::setActiveBackend(IWorkspaceManager* backend) {
-  m_activeBackend = backend;
+const char* CompositorWorkspaces::name() const noexcept {
+  auto* backend = m_activeBackend;
+  if (backend == nullptr) { return "none"; }
+  return backend->name();
 }
-
-void WaylandWorkspaces::notifyChanged() const {
-  if (m_changeCallback) {
-    m_changeCallback();
-  }
-}
-
-HyprlandWorkspaceManager* WaylandWorkspaces::hyprlandBackend() const noexcept {
-  if (m_hyprlandBackend != nullptr) {
-    return static_cast<HyprlandWorkspaceManager*>(m_hyprlandBackend);
-  }
-  return nullptr;
-}
-
-namespace {
-WaylandWorkspaces* g_wayland_workspaces = nullptr;
-}
-
-void set_global_wayland_workspaces(WaylandWorkspaces* ww) { g_wayland_workspaces = ww; }
-WaylandWorkspaces* global_wayland_workspaces() { return g_wayland_workspaces; }

@@ -312,7 +312,7 @@ int run_screenshot_mode(int argc, char** argv) {
     return 2;
   }
 
-  eh::wayland::WaylandConnection wl;
+  eh::wayland::WaylandLink wl;
   if (!wl.connect()) {
     std::cerr << "Wayland connection failed (WAYLAND_DISPLAY?)\n";
     return 1;

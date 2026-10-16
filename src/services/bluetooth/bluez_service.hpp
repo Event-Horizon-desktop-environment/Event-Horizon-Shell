@@ -23,7 +23,7 @@ class Message;
 namespace eh::bt {
 class BluetoothAgent;
 
-enum class BluetoothDeviceKind {
+enum class BluetoothPeerKind {
   Unknown,
   Headset,
   Headphones,
@@ -43,7 +43,7 @@ struct DeviceInfo {
   std::string path;
   std::string address;
   std::string alias;
-  BluetoothDeviceKind kind = BluetoothDeviceKind::Unknown;
+  BluetoothPeerKind kind = BluetoothPeerKind::Unknown;
   bool paired = false;
   bool trusted = false;
   bool connected = false;
@@ -54,7 +54,7 @@ struct DeviceInfo {
   uint8_t battery_percent = 0;
 };
 
-struct Snapshot {
+struct BluetoothSummary {
   bool available = false;
   bool powered = false;
   bool rfkillSoftBlocked = false;
@@ -67,13 +67,13 @@ struct Snapshot {
 };
 
 struct FullState {
-  Snapshot snap;
+  BluetoothSummary snap;
   std::vector<DeviceInfo> devices;
 };
 
 class BluezService {
 public:
-  using ChangeCallback = std::function<void()>;
+  using StateChangeHook = std::function<void()>;
 
   static BluezService& instance();
 
@@ -82,9 +82,9 @@ public:
   void stop_discovery();
   void set_powered(bool on);
   void refresh();
-  void set_change_callback(ChangeCallback cb);
+  void set_change_callback(StateChangeHook cb);
 
-  [[nodiscard]] Snapshot snapshot() const;
+  [[nodiscard]] BluetoothSummary snapshot() const;
   [[nodiscard]] std::vector<DeviceInfo> devices() const;
   [[nodiscard]] FullState full_state() const;
 
@@ -152,7 +152,7 @@ private:
 
   mutable std::recursive_mutex mtx_{};
   bool started_ = false;
-  ChangeCallback on_change_{};
+  StateChangeHook on_change_{};
 
   // Auto-reconnect state. `everConnected_` and `reconnectCooldown_` are
   // guarded by mtx_; `autoReconnect_` is atomic so the worker thread can read
@@ -203,11 +203,11 @@ private:
   // headphone JustWorks pairing prompt-free in every process.
   std::unique_ptr<BluetoothAgent> agent_;
 
-  Snapshot snap_{};
+  BluetoothSummary snap_{};
   std::vector<DeviceInfo> devices_{};
 };
 
-const char* bluetooth_device_kind_name(BluetoothDeviceKind kind);
-const char* bluetooth_device_kind_glyph(BluetoothDeviceKind kind);
+const char* bluetooth_device_kind_name(BluetoothPeerKind kind);
+const char* bluetooth_device_kind_glyph(BluetoothPeerKind kind);
 
 }

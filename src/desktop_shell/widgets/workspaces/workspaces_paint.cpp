@@ -1,7 +1,8 @@
 #include "desktop_shell/widgets/workspaces/workspaces_paint.hpp"
 #include "desktop_shell/widgets/shared/slot_pill_style.hpp"
 #include "wl/toplevel/workspaces.h"
-#include "backends/interfaces/workspace_manager.h"
+#include "backends/contract/desk_types.h"
+#include "backends/contract/desk_source.h"
 
 #include "desktop_shell/widgets/shared/widget_settings.hpp"
 #include "desktop_shell/widgets/shared/measure_scratch.hpp"
@@ -359,12 +360,12 @@ void workspace_strip_poll(std::vector<WorkspaceEntry>& out, timespec& last_poll_
     out.reserve(workspaces.size());
     for (const auto& ws : workspaces) {
       WorkspaceEntry e;
-      e.id = static_cast<int>(ws.index);
-      e.label = ws.name.empty() ? ws.id : ws.name;
-      e.active = ws.active;
-      e.occupied = ws.occupied;
-      e.urgent = ws.urgent;
-      auto it = appMap.find(ws.id);
+      e.id = static_cast<int>(ws.ordinal);
+      e.label = ws.label.empty() ? ws.key : ws.label;
+      e.active = ws.state.selected;
+      e.occupied = ws.state.occupied;
+      e.urgent = ws.state.urgent;
+      auto it = appMap.find(ws.key);
       if (it != appMap.end()) {
         e.app_keys = it->second;
       }

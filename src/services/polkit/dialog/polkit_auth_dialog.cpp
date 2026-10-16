@@ -595,7 +595,7 @@ void PolkitAuthDialog::show(wl_output* primary_output) {
   // A new request (new cookie) or a failed attempt clears the field. Any
   // other notification (identity/prompt/info arriving mid-dialog) must NOT:
   // the user may already be typing.
-  const Snapshot snap = PolkitAuthService::instance().snapshot();
+  const PolkitState snap = PolkitAuthService::instance().snapshot();
   if (snap.cookie != impl_->shown_cookie || snap.state == AuthState::Failed) {
     impl_->shown_cookie = snap.cookie;
     wipe_password(impl_->password_field);

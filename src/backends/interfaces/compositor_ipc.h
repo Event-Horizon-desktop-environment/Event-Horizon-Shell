@@ -2,43 +2,43 @@
 
 #include <memory>
 
-class NiriRuntime;
+class NiriSession;
 
 namespace wspace::hyprland {
-class HyprlandRuntime;
+class HyprlandSession;
 }
 
 namespace wspace::mango {
-class MangoRuntime;
+class MangoSession;
 }
 
 namespace wspace::sway {
-class SwayRuntime;
+class SwaySession;
 }
 
-class CompositorRuntimeRegistry {
+class CompositorSessionRegistry {
 public:
-  CompositorRuntimeRegistry();
-  ~CompositorRuntimeRegistry();
+  CompositorSessionRegistry();
+  ~CompositorSessionRegistry();
 
-  CompositorRuntimeRegistry(const CompositorRuntimeRegistry&) = delete;
-  CompositorRuntimeRegistry& operator=(const CompositorRuntimeRegistry&) = delete;
+  CompositorSessionRegistry(const CompositorSessionRegistry&) = delete;
+  CompositorSessionRegistry& operator=(const CompositorSessionRegistry&) = delete;
 
-  [[nodiscard]] NiriRuntime& niri() noexcept;
-  [[nodiscard]] const NiriRuntime& niri() const noexcept;
+  [[nodiscard]] NiriSession& niri() noexcept;
+  [[nodiscard]] const NiriSession& niri() const noexcept;
 
-  [[nodiscard]] wspace::hyprland::HyprlandRuntime& hyprland() noexcept;
-  [[nodiscard]] const wspace::hyprland::HyprlandRuntime& hyprland() const noexcept;
+  [[nodiscard]] wspace::hyprland::HyprlandSession& hyprland() noexcept;
+  [[nodiscard]] const wspace::hyprland::HyprlandSession& hyprland() const noexcept;
 
-  [[nodiscard]] wspace::mango::MangoRuntime& mango() noexcept;
-  [[nodiscard]] const wspace::mango::MangoRuntime& mango() const noexcept;
+  [[nodiscard]] wspace::mango::MangoSession& mango() noexcept;
+  [[nodiscard]] const wspace::mango::MangoSession& mango() const noexcept;
 
-  [[nodiscard]] wspace::sway::SwayRuntime& sway() noexcept;
-  [[nodiscard]] const wspace::sway::SwayRuntime& sway() const noexcept;
+  [[nodiscard]] wspace::sway::SwaySession& sway() noexcept;
+  [[nodiscard]] const wspace::sway::SwaySession& sway() const noexcept;
 
 private:
-  std::unique_ptr<NiriRuntime> m_niri;
-  std::unique_ptr<wspace::hyprland::HyprlandRuntime> m_hyprland;
-  std::unique_ptr<wspace::mango::MangoRuntime> m_mango;
-  std::unique_ptr<wspace::sway::SwayRuntime> m_sway;
+  std::unique_ptr<NiriSession> m_niri;
+  std::unique_ptr<wspace::hyprland::HyprlandSession> m_hyprland;
+  std::unique_ptr<wspace::mango::MangoSession> m_mango;
+  std::unique_ptr<wspace::sway::SwaySession> m_sway;
 };

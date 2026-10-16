@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <iterator>
+#include <ranges>
 
 namespace eh::shell::notifications {
 
@@ -14,12 +15,26 @@ namespace {
 
 constexpr auto kImplicitDuplicateWindow = std::chrono::seconds(1);
 
-std::optional<TimePoint> schedule_expiry(TimePoint now, std::int32_t timeout_ms) noexcept {
+std::optional<TimeMark> schedule_expiry(TimeMark now, std::int32_t timeout_ms) noexcept {
    
   if (timeout_ms > 0) {
     return now + std::chrono::milliseconds(timeout_ms);
   }
   return std::nullopt;
+}
+
+// Drops the history slot registered for `id`, if one exists.
+template <typename Store, typename SlotMap>
+void forget_slot(Store& store, SlotMap& slots, std::uint32_t id) {
+  const auto found = slots.find(id);
+  if (found == slots.end()) { return; }
+  store.erase(store.begin() + static_cast<std::ptrdiff_t>(found->second));
+}
+
+std::optional<int> ms_until(std::optional<TimeMark> const& deadline, TimeMark now) {
+  if (!deadline.has_value()) { return std::nullopt; }
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - now).count();
+  return static_cast<int>(std::max<long long>(0, ms));
 }
 
 bool has_same_content(const Notification& notification, const std::string& appName, const std::string& summary,
@@ -30,27 +45,25 @@ bool has_same_content(const Notification& notification, const std::string& appNa
 
 }
 
-void NotificationManager::rebuildHistoryIndex() {
+void NotificationHub::reindexHistory() {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   history_index_.clear();
-  for (std::size_t i = 0; i < history_.size(); ++i) {
-    history_index_[history_[i].notification.id] = i;
+  for (std::size_t position = 0; auto const& entry : history_) {
+    history_index_.insert_or_assign(entry.notification.id, position++);
   }
 }
 
-void NotificationManager::upsertHistory(const Notification& notification, bool active,
-                                        std::optional<CloseReason> close_reason) {
+void NotificationHub::recordHistory(const Notification& notification, bool active,
+                                        std::optional<DismissReason> close_reason) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  if (const auto it = history_index_.find(notification.id); it != history_index_.end()) {
-    history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(it->second));
-  }
+  forget_slot(history_, history_index_, notification.id);
 
   Notification stripped = notification;
-  stripped.imageData.reset();
+  stripped.picture.reset();
 
-  history_.push_back(NotificationHistoryEntry{
+  history_.push_back(HistoryRecord{
       .notification = std::move(stripped),
       .active = active,
       .closeReason = close_reason,
@@ -62,28 +75,29 @@ void NotificationManager::upsertHistory(const Notification& notification, bool a
     history_.pop_front();
   }
 
-  rebuildHistoryIndex();
+  reindexHistory();
 }
 
-int NotificationManager::addEventCallback(EventCallback callback) {
+int NotificationHub::subscribeEvents(EventHook callback) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  const int token = next_callback_token_++;
-  event_callbacks_.emplace_back(token, std::move(callback));
-  return token;
+  event_callbacks_.emplace_back(next_callback_token_++, std::move(callback));
+  return next_callback_token_ - 1;
 }
 
-void NotificationManager::removeEventCallback(int token) {
+void NotificationHub::removeEventCallback(int token) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  std::erase_if(event_callbacks_, [token](const auto& pair) { return pair.first == token; });
+  const auto retired = [token](const auto& registered) { return registered.first == token; };
+  const auto firstDead = std::remove_if(event_callbacks_.begin(), event_callbacks_.end(), retired);
+  event_callbacks_.erase(firstDead, event_callbacks_.end());
 }
 
-std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::string app_name, std::string summary,
-                                                std::string body, Urgency urgency, std::int32_t timeout,
-                                                NotificationOrigin origin, std::vector<std::string> actions,
+std::uint32_t NotificationHub::addOrReplace(std::uint32_t replaces_id, std::string app_name, std::string summary,
+                                                std::string body, AlertLevel urgency, std::int32_t timeout,
+                                                NoticeSource origin, std::vector<std::string> actions,
                                                 std::optional<std::string> icon,
-                                                std::optional<NotificationImageData> image_data,
+                                                std::optional<NotificationPicture> image_data,
                                                 std::optional<std::string> category,
                                                 std::optional<std::string> desktop_entry, bool silent,
                                                 bool transient) {
@@ -97,7 +111,7 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
       const bool changed =
           (n.appName != app_name || n.summary != summary || n.body != body || n.timeout != timeout ||
            n.urgency != urgency || n.origin != origin || n.actions != actions || n.icon != icon ||
-           n.imageData != image_data || n.category != category || n.desktopEntry != desktop_entry);
+           n.picture != image_data || n.category != category || n.desktopEntry != desktop_entry);
 
       n.origin = origin;
       n.appName = std::move(app_name);
@@ -107,7 +121,7 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
       n.urgency = urgency;
       n.actions = std::move(actions);
       n.icon = std::move(icon);
-      n.imageData = std::move(image_data);
+      n.picture = std::move(image_data);
       n.category = std::move(category);
       n.desktopEntry = std::move(desktop_entry);
       n.silent = silent;
@@ -120,7 +134,7 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
         n.expiryTime = schedule_expiry(now, timeout);
       }
 
-      upsertHistory(n, true, std::nullopt);
+      recordHistory(n, true, std::nullopt);
 
       if (changed) {
         eh::shell_log::notif_verbose("addOrReplace: updated id=", replaces_id, " app=\"", n.appName, "\"");
@@ -165,13 +179,13 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
       existing.urgency = urgency;
       existing.actions = std::move(actions);
       existing.icon = std::move(icon);
-      existing.imageData = std::move(image_data);
+      existing.picture = std::move(image_data);
       existing.category = std::move(category);
       existing.desktopEntry = std::move(desktop_entry);
       existing.receivedTime = now;
       existing.expiryTime = schedule_expiry(now, timeout);
 
-      upsertHistory(existing, true, std::nullopt);
+      recordHistory(existing, true, std::nullopt);
 
       eh::shell_log::notif_verbose("addOrReplace: same-app merge id=", existing.id, " app=\"", existing.appName, "\"");
       for (auto& [token, cb] : event_callbacks_) {
@@ -193,7 +207,7 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
       .urgency = urgency,
       .actions = std::move(actions),
       .icon = std::move(icon),
-      .imageData = std::move(image_data),
+      .picture = std::move(image_data),
       .category = std::move(category),
       .desktopEntry = std::move(desktop_entry),
       .receivedTime = now,
@@ -212,9 +226,9 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
   }
 
   const auto& n = notifications_.back();
-  upsertHistory(n, true, std::nullopt);
+  recordHistory(n, true, std::nullopt);
 
-  eh::shell_log::notifications("added id=", n.id, " app=\"", n.appName, "\" summary=\"", n.summary, "\" has_image=", n.imageData.has_value(), " timeout=", n.timeout, " urgency=", static_cast<int>(n.urgency));
+  eh::shell_log::notifications("added id=", n.id, " app=\"", n.appName, "\" summary=\"", n.summary, "\" has_image=", n.picture.has_value(), " timeout=", n.timeout, " urgency=", static_cast<int>(n.urgency));
 
   for (auto& [token, cb] : event_callbacks_) {
     (void)token;
@@ -224,25 +238,25 @@ std::uint32_t NotificationManager::addOrReplace(std::uint32_t replaces_id, std::
   return n.id;
 }
 
-std::uint32_t NotificationManager::addInternal(std::string app_name, std::string summary, std::string body,
-                                                 Urgency urgency, std::int32_t timeout,
+std::uint32_t NotificationHub::postInternal(std::string app_name, std::string summary, std::string body,
+                                                 AlertLevel urgency, std::int32_t timeout,
                                                  std::optional<std::string> icon,
-                                                 std::optional<NotificationImageData> image_data,
+                                                 std::optional<NotificationPicture> image_data,
                                                  std::optional<std::string> category,
                                                  std::optional<std::string> desktop_entry) {
    
   return addOrReplace(0, std::move(app_name), std::move(summary), std::move(body), urgency, timeout,
-                      NotificationOrigin::Internal, {}, std::move(icon), std::move(image_data), std::move(category),
+                      NoticeSource::Internal, {}, std::move(icon), std::move(image_data), std::move(category),
                       std::move(desktop_entry));
 }
 
-void NotificationManager::setActionInvokeCallback(ActionInvokeCallback callback) {
+void NotificationHub::setActionHook(ActionHook callback) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  action_invoke_callback_ = std::move(callback);
+  action_invoke_callback_.swap(callback);
 }
 
-bool NotificationManager::invokeAction(std::uint32_t id, const std::string& actionKey, bool close_after_invoke) {
+bool NotificationHub::triggerAction(std::uint32_t id, const std::string& actionKey, bool close_after_invoke) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   const auto it = id_to_index_.find(id);
@@ -267,12 +281,12 @@ bool NotificationManager::invokeAction(std::uint32_t id, const std::string& acti
   }
 
   if (close_after_invoke) {
-    (void)close(id, CloseReason::Dismissed);
+    (void)close(id, DismissReason::Dismissed);
   }
   return true;
 }
 
-bool NotificationManager::close(std::uint32_t id, CloseReason reason) {
+bool NotificationHub::close(std::uint32_t id, DismissReason reason) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   const auto it = id_to_index_.find(id);
@@ -283,12 +297,12 @@ bool NotificationManager::close(std::uint32_t id, CloseReason reason) {
 
   const std::size_t index = it->second;
   Notification& in_slot = notifications_[index];
-  in_slot.imageData.reset();
+  in_slot.picture.reset();
   const Notification closed = std::move(in_slot);
 
   eh::shell_log::notifications("closed id=", id, " app=\"", closed.appName, "\" reason=", static_cast<int>(reason));
 
-  upsertHistory(closed, false, reason);
+  recordHistory(closed, false, reason);
 
   notifications_.erase(notifications_.begin() + static_cast<std::ptrdiff_t>(index));
   id_to_index_.erase(it);
@@ -305,22 +319,22 @@ bool NotificationManager::close(std::uint32_t id, CloseReason reason) {
   return true;
 }
 
-std::deque<Notification> NotificationManager::all() const {
+std::deque<Notification> NotificationHub::all() const {
   std::lock_guard<std::recursive_mutex> lock(mu_);
   return notifications_;
 }
 
-std::deque<NotificationHistoryEntry> NotificationManager::history() const {
+std::deque<HistoryRecord> NotificationHub::history() const {
   std::lock_guard<std::recursive_mutex> lock(mu_);
   return history_;
 }
 
-std::uint64_t NotificationManager::changeSerial() const noexcept {
+std::uint64_t NotificationHub::changeSerial() const noexcept {
   std::lock_guard<std::recursive_mutex> lock(mu_);
   return change_serial_;
 }
 
-void NotificationManager::removeHistoryEntry(std::uint32_t id) {
+void NotificationHub::dropHistoryEntry(std::uint32_t id) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   const auto it = history_index_.find(id);
@@ -330,10 +344,10 @@ void NotificationManager::removeHistoryEntry(std::uint32_t id) {
 
   history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(it->second));
   ++change_serial_;
-  rebuildHistoryIndex();
+  reindexHistory();
 }
 
-void NotificationManager::clearHistory() {
+void NotificationHub::wipeHistory() {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   if (history_.empty()) {
@@ -345,49 +359,43 @@ void NotificationManager::clearHistory() {
   ++change_serial_;
 }
 
-std::vector<std::uint32_t> NotificationManager::expiredIds() const {
+std::vector<std::uint32_t> NotificationHub::expiredList() const {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   const auto now = Clock::now();
-  std::vector<std::uint32_t> ids;
-  for (const auto& n : notifications_) {
-    if (n.expiryTime && now >= *n.expiryTime) {
-      ids.push_back(n.id);
-    }
-  }
-  return ids;
+  auto due = notifications_ |
+                   std::views::filter([&](const auto& n) { return n.expiryTime && now >= *n.expiryTime; }) |
+                   std::views::transform([](const auto& n) { return n.id; });
+  return std::vector<std::uint32_t>(due.begin(), due.end());
 }
 
-int NotificationManager::nextExpiryTimeoutMs() const {
+int NotificationHub::nextExpiryDelayMs() const {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  int expiry_ms = -1;
+  int soonest = -1;
   const auto now = Clock::now();
   for (const auto& n : notifications_) {
-    if (n.expiryTime) {
-      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(*n.expiryTime - now).count();
-      const int clamped = static_cast<int>(std::max<long long>(0, ms));
-      if (expiry_ms < 0 || clamped < expiry_ms) {
-        expiry_ms = clamped;
-      }
+    const auto candidate = ms_until(n.expiryTime, now);
+    if (candidate && (soonest < 0 || *candidate < soonest)) {
+      soonest = *candidate;
     }
   }
-  return expiry_ms;
+  return soonest;
 }
 
-void NotificationManager::processExpired() {
+void NotificationHub::sweepExpired() {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  const auto ids = expiredIds();
+  const auto ids = expiredList();
   if (!ids.empty()) {
-    eh::shell_log::notif_verbose("processExpired: ", ids.size(), " expired");
+    eh::shell_log::notif_verbose("sweepExpired: ", ids.size(), " expired");
   }
   for (const std::uint32_t id : ids) {
-    (void)close(id, CloseReason::Expired);
+    (void)close(id, DismissReason::Expired);
   }
 }
 
-void NotificationManager::pauseExpiry(std::uint32_t id) {
+void NotificationHub::freezeExpiry(std::uint32_t id) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   const auto it = id_to_index_.find(id);
@@ -397,7 +405,7 @@ void NotificationManager::pauseExpiry(std::uint32_t id) {
   notifications_[it->second].expiryTime.reset();
 }
 
-void NotificationManager::resumeExpiry(std::uint32_t id, std::int32_t remaining_ms) {
+void NotificationHub::thawExpiry(std::uint32_t id, std::int32_t remaining_ms) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   const auto it = id_to_index_.find(id);
@@ -411,36 +419,34 @@ void NotificationManager::resumeExpiry(std::uint32_t id, std::int32_t remaining_
   notifications_[it->second].expiryTime = Clock::now() + std::chrono::milliseconds(remaining_ms);
 }
 
-void NotificationManager::setDoNotDisturb(bool enabled) {
+void NotificationHub::setQuietMode(bool enabled) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  if (do_not_disturb_ == enabled) {
-    return;
-  }
+  const bool flipped = do_not_disturb_ != enabled;
   do_not_disturb_ = enabled;
-  if (state_callback_) {
+  if (flipped && state_callback_) {
     state_callback_();
   }
 }
 
-bool NotificationManager::doNotDisturb() const noexcept {
+bool NotificationHub::doNotDisturb() const noexcept {
   std::lock_guard<std::recursive_mutex> lock(mu_);
   return do_not_disturb_;
 }
 
-bool NotificationManager::toggleDoNotDisturb() {
+bool NotificationHub::flipQuietMode() {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
-  setDoNotDisturb(!do_not_disturb_);
+  setQuietMode(!do_not_disturb_);
   return doNotDisturb();
 }
 
-void NotificationManager::setStateCallback(StateCallback callback) {
+void NotificationHub::setStateHandler(StateHandler callback) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
-  state_callback_ = std::move(callback);
+  state_callback_.swap(callback);
 }
 
-void NotificationManager::setServerDefaultTimeoutMs(std::int32_t ms) {
+void NotificationHub::setServerDefaultTimeoutMs(std::int32_t ms) {
   std::lock_guard<std::recursive_mutex> lock(mu_);
    
   if (ms < 1000) {
@@ -449,7 +455,7 @@ void NotificationManager::setServerDefaultTimeoutMs(std::int32_t ms) {
   server_default_timeout_ms_ = std::clamp(ms, static_cast<std::int32_t>(1000), static_cast<std::int32_t>(600000));
 }
 
-std::int32_t NotificationManager::serverDefaultTimeoutMs() const noexcept {
+std::int32_t NotificationHub::serverDefaultTimeoutMs() const noexcept {
   std::lock_guard<std::recursive_mutex> lock(mu_);
   return server_default_timeout_ms_;
 }

@@ -115,7 +115,7 @@ struct AppState {
   AppState();
   ~AppState();
 
-  eh::wayland::WaylandConnection wl{};
+  eh::wayland::WaylandLink wl{};
   eh::wayland::WaylandSeat seat{};
 
   wl_surface* surface = nullptr;

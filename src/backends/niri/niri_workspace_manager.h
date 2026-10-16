@@ -1,6 +1,9 @@
 #pragma once
 
-#include "backends/interfaces/workspace_manager.h"
+#include "backends/contract/desk_types.h"
+#include "backends/contract/desk_source.h"
+#include "backends/contract/desk_catalog.h"
+#include "backends/contract/output_link.h"
 
 #include <chrono>
 #include <cstdint>
@@ -12,18 +15,18 @@
 #include <unordered_map>
 #include <vector>
 
-class NiriRuntime;
+class NiriSession;
 
-class NiriWorkspaceManager final : public wspace::IWorkspaceDataBackend {
+class NiriWorkspaceManager final : public wspace::IDeskCatalog {
 public:
-  explicit NiriWorkspaceManager(NiriRuntime& rt);
+  explicit NiriWorkspaceManager(NiriSession& rt);
   ~NiriWorkspaceManager() override;
 
   NiriWorkspaceManager(NiriWorkspaceManager const&) = delete;
   NiriWorkspaceManager& operator=(NiriWorkspaceManager const&) = delete;
 
-  void onStateChange(wspace::IWorkspaceDataBackend::Notify cb) override;
-  void onOverviewChange(wspace::IWorkspaceDataBackend::Notify cb) override;
+  void onStateChange(wspace::IDeskCatalog::Notify cb) override;
+  void onOverviewChange(wspace::IDeskCatalog::Notify cb) override;
   [[nodiscard]] bool supportsOverview() const noexcept override;
   [[nodiscard]] bool hasOverview() const noexcept override { return m_knownOverview; }
   [[nodiscard]] bool overviewActive() const noexcept override { return m_overviewOpen; }
@@ -31,11 +34,11 @@ public:
   [[nodiscard]] short eventFlags() const noexcept override { return POLLIN | POLLHUP | POLLERR; }
   [[nodiscard]] int eventTimeout() const noexcept override;
   void onEvent(short revents) override;
-  void sync(std::vector<DeskRegion>& workspaces, const std::string& outputName = {}) const override;
+  void sync(std::vector<DeskSlot>& workspaces, const std::string& outputName = {}) const override;
   [[nodiscard]] std::vector<std::string> deskKeys(const std::string& outputName = {}) const override;
   [[nodiscard]] std::unordered_map<std::string, std::vector<std::string>>
   appsByDesk(const std::string& outputName = {}) const override;
-  [[nodiscard]] std::vector<DeskWindow> windowsOnDesk(const std::string& outputName = {}) const override;
+  [[nodiscard]] std::vector<ToplevelRef> windowsOnDesk(const std::string& outputName = {}) const override;
   void teardown() override;
 
 private:
@@ -59,34 +62,38 @@ private:
   void readFd();
   void parseLines();
   bool dispatchMsg(std::string_view line);
-  bool handleWorkspacesChanged(nlohmann::json const& payload);
-  bool handleWindowsChanged(nlohmann::json const& payload);
-  bool handleOverviewChanged(nlohmann::json const& payload);
+  bool noteWorkspacesChanged(nlohmann::json const& payload);
+  bool noteWindowsChanged(nlohmann::json const& payload);
+  bool noteOverviewChanged(nlohmann::json const& payload);
   bool handleWindowOpened(nlohmann::json const& payload);
   bool handleWindowLayout(nlohmann::json const& payload);
   bool applyLayoutItem(nlohmann::json const& item);
   static WsState const* claimMatching(std::vector<WsState const*> const& cand,
                                       std::unordered_map<std::uint64_t, bool>& used,
-                                      DeskRegion const& row,
+                                      DeskSlot const& row,
                                       std::optional<std::uint64_t> const& byId,
                                       std::optional<std::size_t> const& byIdx);
-  bool handleWindowClosed(nlohmann::json const& payload);
-  static std::optional<WsState> parseWorkspace(nlohmann::json const& json);
-  static std::optional<std::pair<std::uint64_t, WinState>> parseWindow(nlohmann::json const& json);
-  static bool applyWindowFields(nlohmann::json const& json, WinState& st);
+  bool noteWindowClosed(nlohmann::json const& payload);
+  static std::optional<std::pair<std::uint64_t, WsState>> decodeWorkspace(nlohmann::json const& json);
+  static std::optional<std::pair<std::uint64_t, WinState>> decodeWindow(nlohmann::json const& json);
+  static bool mergeWindowFields(nlohmann::json const& json, WinState& st);
   static bool sameWindowMembership(WinState const& a, WinState const& b) noexcept;
   static bool sameWindowMembership(
       std::unordered_map<std::uint64_t, WinState> const& a,
       std::unordered_map<std::uint64_t, WinState> const& b) noexcept;
-  static std::optional<std::uint64_t> parseUnsigned(std::string const& s);
-  static std::optional<std::size_t> parseLeadingNumber(std::string const& s);
-  static std::string workspaceKey(WsState const& ws);
+  static std::optional<std::uint64_t> parseUint(std::string const& s);
+  static std::optional<std::size_t> parseLeadingDigits(std::string const& s);
+  static std::string deskFileKey(WsState const& ws);
+  static ToplevelRef windowRef(std::uint64_t wid, WinState const& win, std::string const& deskKey);
+  [[nodiscard]] std::unordered_map<std::uint64_t, std::string>
+  deskKeysByWorkspaceId(std::string const& outputName) const;
   std::vector<WsState const*> sortedWorkspaceCandidates(std::string const& outputName) const;
-  void recomputeOccupancy();
+  void refreshOccupancy();
+  void resetState();
   void emitChange() const;
   void emitOverviewChange() const;
 
-  NiriRuntime& m_backend;
+  NiriSession& m_backend;
   int m_fd = -1;
   std::vector<char> m_buf;
   std::unordered_map<std::uint64_t, WinState> m_windows;
@@ -95,6 +102,6 @@ private:
   bool m_knownOverview = false, m_overviewOpen = false;
   std::chrono::steady_clock::time_point m_retryAt{};
   std::chrono::seconds m_backoff{2};
-  wspace::IWorkspaceDataBackend::Notify m_notify;
-  wspace::IWorkspaceDataBackend::Notify m_viewNotify;
+  wspace::IDeskCatalog::Notify m_notify;
+  wspace::IDeskCatalog::Notify m_viewNotify;
 };

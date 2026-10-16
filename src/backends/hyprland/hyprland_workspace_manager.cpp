@@ -3,6 +3,7 @@
 #include "desktop_shell/common/log/debug_log.hpp"
 
 #include <algorithm>
+#include <ranges>
 #include <charconv>
 #include <cstdio>
 #include <cstring>
@@ -15,8 +16,8 @@
 #include <unistd.h>
 #include <unordered_set>
 
-HyprlandWorkspaceManager::HyprlandWorkspaceManager(wspace::hyprland::HyprlandRuntime& runtime)
-    : wspace::hyprland::HyprlandEventHandler(runtime)
+HyprlandWorkspaceManager::HyprlandWorkspaceManager(wspace::hyprland::HyprlandSession& runtime)
+    : wspace::hyprland::HyprlandEventSink(runtime)
     , m_backend(runtime) {
   openConnection();
 }
@@ -26,18 +27,18 @@ bool HyprlandWorkspaceManager::ready() const noexcept {
 }
 
 bool HyprlandWorkspaceManager::openConnection() {
-  if (m_backend.startSession()) {
-    refreshSnapshot();
-    return true;
-  }
-  return false;
+  const bool linked = m_backend.startSession();
+  if (!linked) { return false; }
+
+  reloadSnapshot();
+  return true;
 }
 
-void HyprlandWorkspaceManager::onStateChange(IWorkspaceManager::Notify cb) {
+void HyprlandWorkspaceManager::onStateChange(IDeskSource::Notify cb) {
   m_notify = std::move(cb);
 }
 
-void HyprlandWorkspaceManager::setOutputResolver(IOutputNameLookup::Resolver r) {
+void HyprlandWorkspaceManager::setOutputResolver(IOutputResolver::Resolver r) {
   m_resolver = std::move(r);
 }
 
@@ -68,49 +69,49 @@ void HyprlandWorkspaceManager::jumpToOnOutput(wl_output* output, const std::stri
   jumpTo(id);
 }
 
-void HyprlandWorkspaceManager::jumpToOnOutput(wl_output* output, const DeskRegion& ws) {
+void HyprlandWorkspaceManager::jumpToOnOutput(wl_output* output, const DeskSlot& ws) {
   (void)output;
-  jumpTo(ws.id);
+  jumpTo(ws.key);
 }
 
-static DeskRegion toDeskRegion(const HyprlandWorkspaceManager::WorkspaceState& ws) {
-  DeskRegion r;
-  r.id = std::to_string(ws.id);
-  r.name = ws.name.empty() ? std::to_string(ws.id) : ws.name;
-  r.index = static_cast<std::uint32_t>(ws.id);
-  r.active = ws.active;
-  r.urgent = ws.urgent;
-  r.occupied = ws.occupied;
+static DeskSlot toDeskSlot(const HyprlandWorkspaceManager::WorkspaceRecord& ws) {
+  DeskSlot r;
+  r.key = std::to_string(ws.id);
+  r.label = ws.name.empty() ? std::to_string(ws.id) : ws.name;
+  r.ordinal = static_cast<std::uint32_t>(ws.id);
+  r.state.selected = ws.active;
+  r.state.urgent = ws.urgent;
+  r.state.occupied = ws.occupied;
   return r;
 }
 
-std::vector<DeskRegion> HyprlandWorkspaceManager::allRegions() const {
-  std::vector<const WorkspaceState*> ordered;
+std::vector<DeskSlot> HyprlandWorkspaceManager::allRegions() const {
+  std::vector<const WorkspaceRecord*> ordered;
   for (auto& ws : m_spaces) {
     if (ws.id >= 0) { ordered.push_back(&ws); }
   }
   std::sort(ordered.begin(), ordered.end(),
     [](auto* a, auto* b) { return a->id < b->id; });
 
-  std::vector<DeskRegion> result;
-  for (auto* ws : ordered) { result.push_back(toDeskRegion(*ws)); }
+  std::vector<DeskSlot> result;
+  for (auto* ws : ordered) { result.push_back(toDeskSlot(*ws)); }
   return result;
 }
 
-std::vector<DeskRegion> HyprlandWorkspaceManager::regionsOnOutput(wl_output* output) const {
+std::vector<DeskSlot> HyprlandWorkspaceManager::regionsOnOutput(wl_output* output) const {
   if (output == nullptr || !m_resolver) { return allRegions(); }
   auto name = m_resolver(output);
   if (name.empty()) { return allRegions(); }
 
-  std::vector<const WorkspaceState*> ordered;
+  std::vector<const WorkspaceRecord*> ordered;
   for (auto& ws : m_spaces) {
     if (ws.id >= 0 && ws.monitor == name) { ordered.push_back(&ws); }
   }
   std::sort(ordered.begin(), ordered.end(),
     [](auto* a, auto* b) { return a->id < b->id; });
 
-  std::vector<DeskRegion> result;
-  for (auto* ws : ordered) { result.push_back(toDeskRegion(*ws)); }
+  std::vector<DeskSlot> result;
+  for (auto* ws : ordered) { result.push_back(toDeskSlot(*ws)); }
   return result;
 }
 
@@ -128,7 +129,7 @@ HyprlandWorkspaceManager::appsByDesk(wl_output* output) const {
   return result;
 }
 
-std::optional<std::string> HyprlandWorkspaceManager::focusedWindowId() const {
+std::optional<std::string> HyprlandWorkspaceManager::focusedWindowTitle() const {
   for (auto& [_, t] : m_windows) {
     (void)_;
     return t.title;
@@ -150,10 +151,8 @@ void HyprlandWorkspaceManager::onStateChange() {
   if (m_notify) { m_notify(); }
 }
 
-void HyprlandWorkspaceManager::refreshSnapshot() {
-  loadWorkspaces();
-  loadMonitors();
-  loadClients();
+void HyprlandWorkspaceManager::reloadSnapshot() {
+  pullSnapshot();
   refreshFlags();
   onStateChange();
 }
@@ -162,10 +161,10 @@ void HyprlandWorkspaceManager::loadWorkspaces() {
   auto json = m_backend.sendQuery("j/workspaces");
   if (!json || !json->is_array()) { return; }
 
-  std::vector<WorkspaceState> next;
+  std::vector<WorkspaceRecord> next;
   for (auto& item : *json) {
     if (!item.is_object()) { continue; }
-    WorkspaceState ws;
+    WorkspaceRecord ws;
     ws.id = item.value("id", -1);
     ws.name = item.value("name", "");
     ws.monitor = item.value("monitor", "");
@@ -198,7 +197,7 @@ void HyprlandWorkspaceManager::loadClients() {
   auto json = m_backend.sendQuery("j/clients");
   if (!json || !json->is_array()) { return; }
 
-  std::unordered_map<std::uint64_t, ToplevelState> next;
+  std::unordered_map<std::uint64_t, ToplevelRecord> next;
   for (auto& item : *json) {
     if (!item.is_object()) { continue; }
 
@@ -209,7 +208,7 @@ void HyprlandWorkspaceManager::loadClients() {
     auto addr = decodeHex(addrStr);
     if (!addr.has_value()) { continue; }
 
-    ToplevelState st;
+    ToplevelRecord st;
     auto wsIt = item.find("workspace");
     st.workspaceId = (wsIt != item.end() && wsIt->is_object()) ? wsIt->value("id", -1) : -1;
     st.appId = item.value("class", "");
@@ -229,30 +228,42 @@ void HyprlandWorkspaceManager::loadClients() {
   m_windows = std::move(next);
 }
 
+void HyprlandWorkspaceManager::pullSnapshot() {
+  loadClients();
+  loadMonitors();
+  loadWorkspaces();
+}
+
+void HyprlandWorkspaceManager::afterFocusChange(int wsId) {
+  dismissUrgent(wsId);
+  refreshFlags();
+  onStateChange();
+}
+
 void HyprlandWorkspaceManager::refreshFlags() {
   std::unordered_map<int, std::size_t> occupied;
   std::unordered_set<int> urgentWs;
 
-  for (auto& [_, t] : m_windows) {
+  for (auto const& entry : m_windows) {
+    auto const& t = entry.second;
     ++occupied[t.workspaceId];
     if (t.urgent) { urgentWs.insert(t.workspaceId); }
   }
 
   for (auto& ws : m_spaces) {
-    auto occ = occupied.find(ws.id);
-    ws.occupied = occ != occupied.end() && occ->second > 0;
+    ws.occupied = occupied[ws.id] > 0;
     ws.urgent = urgentWs.contains(ws.id);
-    if (!ws.monitor.empty()) {
-      auto act = m_activeMap.find(ws.monitor);
-      ws.active = act != m_activeMap.end() && act->second == ws.id;
-    } else {
+    if (ws.monitor.empty()) {
       ws.active = false;
+      continue;
     }
+    auto act = m_activeMap.find(ws.monitor);
+    ws.active = act != m_activeMap.end() && act->second == ws.id;
   }
 }
 
 void HyprlandWorkspaceManager::onEvent(std::string_view event, std::string_view data) {
-  if (event == "configreloaded") { refreshSnapshot(); return; }
+  if (event == "configreloaded") { reloadSnapshot(); return; }
 
   if (event == "focusedmonv2") {
     auto args = splitByN(data, 2);
@@ -280,7 +291,7 @@ void HyprlandWorkspaceManager::onEvent(std::string_view event, std::string_view 
     if (!id.has_value() || name.empty()) { return; }
     auto* ws = findWorkspace(*id);
     if (ws == nullptr) {
-      m_spaces.push_back(WorkspaceState{.id = *id, .name = name, .monitor = {}});
+      m_spaces.push_back(WorkspaceRecord{.id = *id, .name = name, .monitor = {}});
     } else {
       ws->name = name;
     }
@@ -377,7 +388,7 @@ void HyprlandWorkspaceManager::onEvent(std::string_view event, std::string_view 
     if (!addr.has_value()) { return; }
     auto it = m_windows.find(*addr);
     if (it == m_windows.end()) {
-      m_windows.emplace(*addr, ToplevelState{.workspaceId = -1, .appId = {}, .title = {}, .urgent = true});
+      m_windows.emplace(*addr, ToplevelRecord{.workspaceId = -1, .appId = {}, .title = {}, .urgent = true});
     } else {
       it->second.urgent = true;
     }
@@ -388,27 +399,23 @@ void HyprlandWorkspaceManager::onEvent(std::string_view event, std::string_view 
 
 void HyprlandWorkspaceManager::handleFocusChange(std::string_view mon, int wsId) {
   if (mon.empty()) { return; }
-  m_activeMap[std::string(mon)] = wsId;
-  dismissUrgent(wsId);
-  refreshFlags();
-  onStateChange();
+  m_activeMap.insert_or_assign(std::string(mon), wsId);
+  afterFocusChange(wsId);
 }
 
 void HyprlandWorkspaceManager::dismissUrgent(int wsId) {
-  for (auto& [_, t] : m_windows) {
-    if (t.workspaceId == wsId) { t.urgent = false; }
-  }
+  auto affected = m_windows | std::views::values
+                | std::views::filter([wsId](ToplevelRecord const& t) { return t.workspaceId == wsId; });
+  for (auto& t : affected) { t.urgent = false; }
 }
 
 void HyprlandWorkspaceManager::relocateWindow(std::uint64_t addr, int wsId) {
   m_windows[addr].workspaceId = wsId;
 }
 
-HyprlandWorkspaceManager::WorkspaceState* HyprlandWorkspaceManager::findWorkspace(int id) {
-  for (auto& ws : m_spaces) {
-    if (ws.id == id) { return &ws; }
-  }
-  return nullptr;
+HyprlandWorkspaceManager::WorkspaceRecord* HyprlandWorkspaceManager::findWorkspace(int id) {
+  auto it = std::ranges::find_if(m_spaces, [id](WorkspaceRecord const& ws) { return ws.id == id; });
+  return it != m_spaces.end() ? &*it : nullptr;
 }
 
 std::optional<std::uint64_t> HyprlandWorkspaceManager::decodeHex(std::string_view val) {
@@ -431,14 +438,14 @@ std::optional<int> HyprlandWorkspaceManager::decodeInt(std::string_view val) {
 std::vector<std::string_view> HyprlandWorkspaceManager::splitByN(std::string_view data, std::size_t count) {
   std::vector<std::string_view> args;
   args.reserve(count);
-  std::size_t start = 0;
-  for (std::size_t i = 0; i + 1 < count; ++i) {
-    auto pos = data.find(',', start);
+  std::string_view rest = data;
+  while (args.size() + 1 < count) {
+    const auto pos = rest.find(',');
     if (pos == std::string_view::npos) { break; }
-    args.push_back(data.substr(start, pos - start));
-    start = pos + 1;
+    args.push_back(rest.substr(0, pos));
+    rest.remove_prefix(pos + 1);
   }
-  if (start <= data.size()) { args.push_back(data.substr(start)); }
-  while (args.size() < count) { args.push_back({}); }
+  args.push_back(rest);
+  args.resize(count);
   return args;
 }

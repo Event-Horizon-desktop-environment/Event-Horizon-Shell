@@ -9,10 +9,11 @@
 #include <cstring>
 #include <fcntl.h>
 #include <limits>
+#include <ranges>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <tuple>
 #include <unistd.h>
-#include <unordered_set>
 
 namespace {
 
@@ -89,22 +90,44 @@ nlohmann::json const* asObject(nlohmann::json const& p, const char* k) {
   return nullptr;
 }
 
+// niri spells the overview state either as a boolean or as one of these words.
+std::optional<bool> wordState(std::string_view v) {
+  static constexpr std::pair<std::string_view, bool> kStates[] = {
+    {"false", false}, {"closed", false},
+    {"true", true}, {"opened", true}, {"open", true},
+  };
+  for (auto [word, state] : kStates) {
+    if (v == word) { return state; }
+  }
+  return std::nullopt;
+}
+
 std::optional<bool> optBool(nlohmann::json const& p, const char* k) {
   if (!p.is_object()) { return std::nullopt; }
   const auto it = p.find(k);
   if (it == p.end()) { return std::nullopt; }
   if (it->is_boolean()) { return it->get<bool>(); }
   if (!it->is_string()) { return std::nullopt; }
-  static constexpr std::string_view kTrueWords[] = {"open", "opened", "true"};
-  static constexpr std::string_view kFalseWords[] = {"closed", "false"};
-  const std::string v = it->get<std::string>();
-  for (std::string_view word : kTrueWords) {
-    if (v == word) { return true; }
+  return wordState(it->get<std::string>());
+}
+
+// Decodes every element of the array under `key` into an id -> state map.
+// Returns false when the payload carries no such array.
+template <typename State, typename Decoder>
+bool decodeIdMap(nlohmann::json const& payload, const char* key,
+                 std::unordered_map<std::uint64_t, State>& out, Decoder&& decode) {
+  auto* arr = asArray(payload, key);
+  if (arr == nullptr) { return false; }
+
+  std::unordered_map<std::uint64_t, State> fresh;
+  fresh.reserve(arr->size());
+  for (auto const& item : *arr) {
+    if (auto decoded = decode(item); decoded.has_value()) {
+      fresh.try_emplace(decoded->first, std::move(decoded->second));
+    }
   }
-  for (std::string_view word : kFalseWords) {
-    if (v == word) { return false; }
-  }
-  return std::nullopt;
+  out = std::move(fresh);
+  return true;
 }
 
 std::string titleOneLine(std::string_view text) {
@@ -136,19 +159,27 @@ std::string titleOneLine(std::string_view text) {
   return out;
 }
 
+// A usable workspace entry carries both its numeric id and its index.
+std::optional<std::pair<std::uint64_t, std::uint64_t>> workspaceOrdinals(nlohmann::json const& j) {
+  const auto id = optU64(j, "id");
+  const auto idx = optU64(j, "idx");
+  if (!id.has_value() || !idx.has_value()) { return std::nullopt; }
+  return std::pair{*id, *idx};
+}
+
 } // namespace
 
-NiriWorkspaceManager::NiriWorkspaceManager(NiriRuntime& rt) : m_backend(rt) {
+NiriWorkspaceManager::NiriWorkspaceManager(NiriSession& rt) : m_backend(rt) {
   if (m_backend.canConnect()) { tryConnect(); }
 }
 
 NiriWorkspaceManager::~NiriWorkspaceManager() { teardown(); }
 
-void NiriWorkspaceManager::onStateChange(wspace::IWorkspaceDataBackend::Notify cb) {
+void NiriWorkspaceManager::onStateChange(wspace::IDeskCatalog::Notify cb) {
   m_notify = std::move(cb);
 }
 
-void NiriWorkspaceManager::onOverviewChange(wspace::IWorkspaceDataBackend::Notify cb) {
+void NiriWorkspaceManager::onOverviewChange(wspace::IDeskCatalog::Notify cb) {
   m_viewNotify = std::move(cb);
 }
 
@@ -172,7 +203,7 @@ void NiriWorkspaceManager::onEvent(short revents) {
 NiriWorkspaceManager::WsState const*
 NiriWorkspaceManager::claimMatching(std::vector<WsState const*> const& cand,
                                     std::unordered_map<std::uint64_t, bool>& used,
-                                    DeskRegion const& row, std::optional<std::uint64_t> const& byId,
+                                    DeskSlot const& row, std::optional<std::uint64_t> const& byId,
                                     std::optional<std::size_t> const& byIdx) {
   auto takeIf = [&](WsState const* c, bool want) -> WsState const* {
     if (!want || used.contains(c->id)) { return nullptr; }
@@ -184,9 +215,9 @@ NiriWorkspaceManager::claimMatching(std::vector<WsState const*> const& cand,
       if (WsState const* hit = takeIf(c, c->id == *byId)) { return hit; }
     }
   }
-  if (!row.name.empty()) {
+  if (!row.label.empty()) {
     for (WsState const* c : cand) {
-      if (WsState const* hit = takeIf(c, c->name == row.name)) { return hit; }
+      if (WsState const* hit = takeIf(c, c->name == row.label)) { return hit; }
     }
   }
   if (byIdx.has_value()) {
@@ -197,7 +228,7 @@ NiriWorkspaceManager::claimMatching(std::vector<WsState const*> const& cand,
   return nullptr;
 }
 
-void NiriWorkspaceManager::sync(std::vector<DeskRegion>& ws, const std::string& outName) const {
+void NiriWorkspaceManager::sync(std::vector<DeskSlot>& ws, const std::string& outName) const {
   if (!m_backend.canConnect() || ws.empty() || m_workspaces.empty()) { return; }
 
   const auto cand = sortedWorkspaceCandidates(outName);
@@ -205,9 +236,9 @@ void NiriWorkspaceManager::sync(std::vector<DeskRegion>& ws, const std::string& 
   std::unordered_map<std::uint64_t, bool> used;
 
   for (std::size_t i = 0; i < ws.size(); ++i) {
-    const auto idNum = parseUnsigned(ws[i].id);
-    auto idxNum = parseLeadingNumber(ws[i].id);
-    if (!idxNum.has_value()) { idxNum = parseLeadingNumber(ws[i].name); }
+    const auto idNum = parseUint(ws[i].key);
+    auto idxNum = parseLeadingDigits(ws[i].key);
+    if (!idxNum.has_value()) { idxNum = parseLeadingDigits(ws[i].label); }
     matches[i] = claimMatching(cand, used, ws[i], idNum, idxNum);
   }
 
@@ -225,95 +256,106 @@ void NiriWorkspaceManager::sync(std::vector<DeskRegion>& ws, const std::string& 
 
   for (std::size_t i = 0; i < ws.size(); ++i) {
     if (matches[i] == nullptr) {
-      ws[i].index = 0;
-      ws[i].occupied = false;
+      ws[i].ordinal = 0;
+      ws[i].state.occupied = false;
       continue;
     }
-    if (matches[i]->idx > 0) { ws[i].index = matches[i]->idx; }
+    if (matches[i]->idx > 0) { ws[i].ordinal = matches[i]->idx; }
     const bool live =
         m_occupancy.contains(matches[i]->id) && m_occupancy.at(matches[i]->id) > 0;
-    ws[i].occupied = live;
+    ws[i].state.occupied = live;
   }
 }
 
 std::vector<NiriWorkspaceManager::WsState const*>
 NiriWorkspaceManager::sortedWorkspaceCandidates(const std::string& outName) const {
+  auto onOutput = [&outName](WsState const& ws) {
+    return outName.empty() || ws.output == outName;
+  };
+
   std::vector<WsState const*> cand;
   cand.reserve(m_workspaces.size());
   for (auto const& [id, ws] : m_workspaces) {
     (void)id;
-    if (!outName.empty() && ws.output != outName) { continue; }
-    cand.push_back(&ws);
+    if (onOutput(ws)) { cand.push_back(&ws); }
   }
-  std::sort(cand.begin(), cand.end(), [](WsState const* a, WsState const* b) {
-    if (a->idx != b->idx) { return a->idx < b->idx; }
-    return a->id < b->id;
+  std::ranges::sort(cand, [](WsState const* a, WsState const* b) {
+    return std::tie(a->idx, a->id) < std::tie(b->idx, b->id);
   });
   return cand;
 }
 
 std::vector<std::string> NiriWorkspaceManager::deskKeys(const std::string& outName) const {
-  auto cand = sortedWorkspaceCandidates(outName);
-  std::vector<std::string> result;
-  result.reserve(cand.size());
-  for (auto* ws : cand) { result.push_back(workspaceKey(*ws)); }
-  return result;
+  const auto cand = sortedWorkspaceCandidates(outName);
+  std::vector<std::string> keys(cand.size());
+  std::ranges::transform(cand, keys.begin(),
+    [](WsState const* ws) { return deskFileKey(*ws); });
+  return keys;
+}
+
+std::unordered_map<std::uint64_t, std::string>
+NiriWorkspaceManager::deskKeysByWorkspaceId(const std::string& outName) const {
+  std::unordered_map<std::uint64_t, std::string> index;
+  index.reserve(m_workspaces.size());
+  for (auto const& [id, ws] : m_workspaces) {
+    if (!outName.empty() && ws.output != outName) { continue; }
+    index.emplace(id, deskFileKey(ws));
+  }
+  return index;
 }
 
 std::unordered_map<std::string, std::vector<std::string>>
 NiriWorkspaceManager::appsByDesk(const std::string& outName) const {
-  std::unordered_map<std::uint64_t, WsState const*> byId;
-  for (auto const& [id, ws] : m_workspaces) {
-    if (!outName.empty() && ws.output != outName) { continue; }
-    byId.emplace(id, &ws);
-  }
+  const auto keys = deskKeysByWorkspaceId(outName);
 
   std::unordered_map<std::string, std::vector<std::string>> result;
-  std::unordered_map<std::string, std::unordered_set<std::string>> seen;
   for (auto const& [wid, win] : m_windows) {
-    (void)wid;
-    if (!win.wsId.has_value() || win.appId.empty()) { continue; }
-    auto it = byId.find(*win.wsId);
-    if (it == byId.end()) { continue; }
-    auto key = workspaceKey(*it->second);
-    if (seen[key].insert(win.appId).second) { result[key].push_back(win.appId); }
+    if (win.appId.empty() || !win.wsId.has_value()) { continue; }
+    auto key = keys.find(*win.wsId);
+    if (key == keys.end()) { continue; }
+    auto& apps = result[key->second];
+    if (std::ranges::find(apps, win.appId) == apps.end()) { apps.push_back(win.appId); }
   }
   return result;
 }
 
-std::vector<DeskWindow> NiriWorkspaceManager::windowsOnDesk(const std::string& outName) const {
-  std::unordered_map<std::uint64_t, WsState const*> byId;
-  for (auto const& [id, ws] : m_workspaces) {
-    if (!outName.empty() && ws.output != outName) { continue; }
-    byId.emplace(id, &ws);
-  }
+std::vector<ToplevelRef> NiriWorkspaceManager::windowsOnDesk(const std::string& outName) const {
+  const auto keys = deskKeysByWorkspaceId(outName);
 
-  std::vector<DeskWindow> result;
-  result.reserve(m_windows.size());
+  std::vector<ToplevelRef> windows;
+  windows.reserve(m_windows.size());
   for (auto const& [wid, win] : m_windows) {
-    (void)wid;
-    if (!win.wsId.has_value() || win.appId.empty()) { continue; }
-    auto it = byId.find(*win.wsId);
-    if (it == byId.end()) { continue; }
-    result.push_back(DeskWindow{
-      .windowId = std::to_string(wid), .deskKey = workspaceKey(*it->second),
-      .appId = win.appId, .title = win.title,
-      .x = win.x, .y = win.y,
-    });
+    if (win.appId.empty() || !win.wsId.has_value()) { continue; }
+    auto key = keys.find(*win.wsId);
+    if (key == keys.end()) { continue; }
+    windows.push_back(windowRef(wid, win, key->second));
   }
-  return result;
+  return windows;
+}
+
+ToplevelRef NiriWorkspaceManager::windowRef(std::uint64_t wid, WinState const& win,
+                                            std::string const& deskKey) {
+  return ToplevelRef{
+    .handle = std::to_string(wid), .deskKey = deskKey,
+    .app = win.appId, .title = win.title,
+    .x = win.x, .y = win.y,
+  };
 }
 
 void NiriWorkspaceManager::teardown() {
+  const bool viewWasOpen = m_knownOverview && m_overviewOpen;
   closeFd(false);
-  bool viewWasOpen = m_knownOverview && m_overviewOpen;
-  m_windows.clear();
-  m_workspaces.clear();
+  resetState();
+  if (viewWasOpen) { emitOverviewChange(); }
+}
+
+void NiriWorkspaceManager::resetState() {
+  decltype(m_windows){}.swap(m_windows);
+  decltype(m_workspaces){}.swap(m_workspaces);
+  decltype(m_buf){}.swap(m_buf);
+  m_backoff = C_RetryInit;
   m_knownOverview = false;
   m_overviewOpen = false;
-  m_buf.clear();
-  m_backoff = C_RetryInit;
-  if (viewWasOpen) { emitOverviewChange(); }
 }
 
 void NiriWorkspaceManager::tryConnect() {
@@ -402,79 +444,68 @@ bool NiriWorkspaceManager::dispatchMsg(std::string_view line) {
   auto const& k = it.key();
   auto const& v = it.value();
 
-  if (k == "WorkspacesChanged") { changed = handleWorkspacesChanged(v); }
-  else if (k == "WindowsChanged") { changed = handleWindowsChanged(v); }
+  if (k == "WorkspacesChanged") { changed = noteWorkspacesChanged(v); }
+  else if (k == "WindowsChanged") { changed = noteWindowsChanged(v); }
   else if (k == "OverviewOpenedOrClosed") {
-    if (handleOverviewChanged(v)) { emitOverviewChange(); }
+    if (noteOverviewChanged(v)) { emitOverviewChange(); }
     return true;
   }
   else if (k == "OverviewOpened") {
-    if (handleOverviewChanged(nlohmann::json{{"is_open", true}})) { emitOverviewChange(); }
+    if (noteOverviewChanged(nlohmann::json{{"is_open", true}})) { emitOverviewChange(); }
     return true;
   }
   else if (k == "OverviewClosed") {
-    if (handleOverviewChanged(nlohmann::json{{"is_open", false}})) { emitOverviewChange(); }
+    if (noteOverviewChanged(nlohmann::json{{"is_open", false}})) { emitOverviewChange(); }
     return true;
   }
   else if (k == "WindowOpenedOrChanged") { changed = handleWindowOpened(v); }
   else if (k == "WindowLayoutsChanged") { changed = handleWindowLayout(v); }
-  else if (k == "WindowClosed") { changed = handleWindowClosed(v); }
+  else if (k == "WindowClosed") { changed = noteWindowClosed(v); }
 
   if (changed) { emitChange(); }
   return true;
 }
 
-bool NiriWorkspaceManager::handleWorkspacesChanged(nlohmann::json const& p) {
-  auto* arr = asArray(p, "workspaces");
-  if (arr == nullptr) { return false; }
+bool NiriWorkspaceManager::noteWorkspacesChanged(nlohmann::json const& p) {
+  std::unordered_map<std::uint64_t, WsState> fresh;
+  auto decode = [](nlohmann::json const& item) { return decodeWorkspace(item); };
+  if (!decodeIdMap(p, "workspaces", fresh, decode)) { return false; }
 
-  std::unordered_map<std::uint64_t, WsState> next;
-  for (auto const& item : *arr) {
-    auto parsed = parseWorkspace(item);
-    if (parsed.has_value()) { next.emplace(parsed->id, *parsed); }
-  }
-
-  if (next == m_workspaces) { return false; }
-  m_workspaces = std::move(next);
+  if (fresh == m_workspaces) { return false; }
+  m_workspaces = std::move(fresh);
   return true;
 }
 
-bool NiriWorkspaceManager::handleWindowsChanged(nlohmann::json const& p) {
-  auto* arr = asArray(p, "windows");
-  if (arr == nullptr) { return false; }
+bool NiriWorkspaceManager::noteWindowsChanged(nlohmann::json const& p) {
+  std::unordered_map<std::uint64_t, WinState> fresh;
+  auto decode = [](nlohmann::json const& item) { return decodeWindow(item); };
+  if (!decodeIdMap(p, "windows", fresh, decode)) { return false; }
 
-  std::unordered_map<std::uint64_t, WinState> next;
-  for (auto const& item : *arr) {
-    auto parsed = parseWindow(item);
-    if (parsed.has_value()) { next.emplace(parsed->first, parsed->second); }
-  }
-
-  if (next == m_windows) { return false; }
-  bool membersChanged = !sameWindowMembership(next, m_windows);
-  m_windows = std::move(next);
-  if (membersChanged) { recomputeOccupancy(); }
-  return membersChanged;
+  if (fresh == m_windows) { return false; }
+  const bool desksShifted = !sameWindowMembership(fresh, m_windows);
+  m_windows = std::move(fresh);
+  if (desksShifted) { refreshOccupancy(); }
+  return desksShifted;
 }
 
-bool NiriWorkspaceManager::handleOverviewChanged(nlohmann::json const& p) {
+bool NiriWorkspaceManager::noteOverviewChanged(nlohmann::json const& p) {
   std::optional<bool> open;
-  if (p.is_boolean()) { open = p.get<bool>(); }
-  else if (p.is_string()) {
-    auto v = p.get<std::string>();
-    if (v == "open" || v == "opened" || v == "true") { open = true; }
-    else if (v == "closed" || v == "false") { open = false; }
+  if (p.is_object()) {
+    for (const char* alias : {"is_open", "isOpen", "open"}) {
+      open = optBool(p, alias);
+      if (open.has_value()) { break; }
+    }
   }
-  else if (p.is_object()) {
-    open = optBool(p, "is_open");
-    if (!open.has_value()) { open = optBool(p, "isOpen"); }
-    if (!open.has_value()) { open = optBool(p, "open"); }
-  }
+  else if (p.is_string()) { open = wordState(p.get<std::string>()); }
+  else if (p.is_boolean()) { open = p.get<bool>(); }
 
   if (!open.has_value()) { return false; }
-  bool changed = !m_knownOverview || m_overviewOpen != *open;
+
+  const bool fresh = !m_knownOverview;
+  const bool flipped = m_overviewOpen != *open;
   m_knownOverview = true;
   m_overviewOpen = *open;
-  return changed;
+  return fresh || flipped;
 }
 
 bool NiriWorkspaceManager::handleWindowOpened(nlohmann::json const& p) {
@@ -486,14 +517,14 @@ bool NiriWorkspaceManager::handleWindowOpened(nlohmann::json const& p) {
 
   auto it = m_windows.find(*id);
   WinState st = it != m_windows.end() ? it->second : WinState{};
-  if (!applyWindowFields(*obj, st)) { return false; }
+  if (!mergeWindowFields(*obj, st)) { return false; }
   if (it != m_windows.end() && it->second == st) { return false; }
 
   bool membersChanged = it == m_windows.end()
     ? (st.wsId.has_value() || !st.appId.empty())
     : !sameWindowMembership(it->second, st);
   m_windows[*id] = st;
-  if (membersChanged) { recomputeOccupancy(); }
+  if (membersChanged) { refreshOccupancy(); }
   return membersChanged;
 }
 
@@ -527,61 +558,48 @@ bool NiriWorkspaceManager::handleWindowLayout(nlohmann::json const& p) {
   return changed;
 }
 
-bool NiriWorkspaceManager::handleWindowClosed(nlohmann::json const& p) {
+bool NiriWorkspaceManager::noteWindowClosed(nlohmann::json const& p) {
   std::optional<std::uint64_t> wid = jsonU64(p);
   if (!wid.has_value() && p.is_object()) {
     wid = optU64(p, "id");
     if (!wid.has_value()) { wid = optU64(p, "window_id"); }
   }
-  if (!wid.has_value()) { return false; }
-
-  if (m_windows.erase(*wid) == 0) { return false; }
-  recomputeOccupancy();
+  auto gone = wid.has_value() ? m_windows.find(*wid) : m_windows.end();
+  if (gone == m_windows.end()) { return false; }
+  m_windows.erase(gone);
+  refreshOccupancy();
   return true;
 }
 
-std::optional<NiriWorkspaceManager::WsState> NiriWorkspaceManager::parseWorkspace(nlohmann::json const& j) {
+std::optional<std::pair<std::uint64_t, NiriWorkspaceManager::WsState>>
+NiriWorkspaceManager::decodeWorkspace(nlohmann::json const& j) {
   if (!j.is_object()) { return std::nullopt; }
-  auto id = optU64(j, "id");
-  auto idx = optU64(j, "idx");
-  if (!id.has_value() || !idx.has_value()) { return std::nullopt; }
-  return WsState{
-    .id = *id, .idx = static_cast<std::uint8_t>(*idx),
-    .name = optStr(j, "name"), .output = optStr(j, "output"),
-  };
+  const auto ord = workspaceOrdinals(j);
+  if (!ord.has_value()) { return std::nullopt; }
+
+  WsState st;
+  st.output = optStr(j, "output");
+  st.name = optStr(j, "name");
+  st.idx = static_cast<std::uint8_t>(ord->second);
+  st.id = ord->first;
+  return std::pair{ord->first, std::move(st)};
 }
 
 std::optional<std::pair<std::uint64_t, NiriWorkspaceManager::WinState>>
-NiriWorkspaceManager::parseWindow(nlohmann::json const& j) {
+NiriWorkspaceManager::decodeWindow(nlohmann::json const& j) {
   if (!j.is_object()) { return std::nullopt; }
   auto id = optU64(j, "id");
   if (!id.has_value()) { return std::nullopt; }
-  WinState st;
-  (void)applyWindowFields(j, st);
-  return std::pair{*id, st};
+
+  auto entry = std::pair{*id, WinState{}};
+  (void)mergeWindowFields(j, entry.second);
+  return entry;
 }
 
-bool NiriWorkspaceManager::applyWindowFields(nlohmann::json const& j, WinState& st) {
+bool NiriWorkspaceManager::mergeWindowFields(nlohmann::json const& j, WinState& st) {
   if (!j.is_object()) { return false; }
 
   bool changed = false;
-  if (j.contains("workspace_id")) {
-    auto wsId = optU64(j, "workspace_id");
-    if (wsId.has_value()) { st.wsId = wsId; changed = true; }
-  }
-
-  if (j.contains("app_id") || j.contains("class")) {
-    auto appId = optStr(j, "app_id");
-    if (appId.empty()) { appId = optStr(j, "class"); }
-    st.appId = std::move(appId);
-    changed = true;
-  }
-
-  if (j.contains("title")) {
-    st.title = titleOneLine(optStr(j, "title"));
-    changed = true;
-  }
-
   if (j.contains("layout")) {
     auto const& layout = j["layout"];
     if (layout.contains("pos_in_scrolling_layout")) {
@@ -592,6 +610,23 @@ bool NiriWorkspaceManager::applyWindowFields(nlohmann::json const& j, WinState& 
         changed = true;
       }
     }
+  }
+
+  if (j.contains("title")) {
+    st.title = titleOneLine(optStr(j, "title"));
+    changed = true;
+  }
+
+  if (j.contains("app_id") || j.contains("class")) {
+    auto appId = optStr(j, "app_id");
+    if (appId.empty()) { appId = optStr(j, "class"); }
+    st.appId = std::move(appId);
+    changed = true;
+  }
+
+  if (j.contains("workspace_id")) {
+    auto wsId = optU64(j, "workspace_id");
+    if (wsId.has_value()) { st.wsId = wsId; changed = true; }
   }
 
   return changed;
@@ -612,37 +647,36 @@ bool NiriWorkspaceManager::sameWindowMembership(
   return true;
 }
 
-std::optional<std::uint64_t> NiriWorkspaceManager::parseUnsigned(const std::string& s) {
+std::optional<std::uint64_t> NiriWorkspaceManager::parseUint(const std::string& s) {
   if (s.empty()) { return std::nullopt; }
   std::uint64_t v = 0;
-  auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
-  if (ec != std::errc{} || ptr != s.data() + s.size()) { return std::nullopt; }
-  return v;
+  const char* first = s.data();
+  const auto res = std::from_chars(first, first + s.size(), v);
+  const bool full = res.ec == std::errc{} && res.ptr == first + s.size();
+  return full ? std::optional<std::uint64_t>(v) : std::nullopt;
 }
 
-std::optional<std::size_t> NiriWorkspaceManager::parseLeadingNumber(const std::string& s) {
-  if (s.empty() || !std::isdigit(static_cast<unsigned char>(s.front()))) { return std::nullopt; }
+std::optional<std::size_t> NiriWorkspaceManager::parseLeadingDigits(const std::string& s) {
+  auto isDigit = [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; };
+  if (s.empty() || !isDigit(s.front())) { return std::nullopt; }
   std::size_t v = 0;
-  std::size_t i = 0;
-  while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
-    v = (v * 10) + static_cast<std::size_t>(s[i] - '0');
-    ++i;
+  const auto runEnd = std::find_if_not(s.begin(), s.end(), isDigit);
+  for (char c : std::ranges::subrange(s.begin(), runEnd)) {
+    v = v * 10 + static_cast<std::size_t>(c - '0');
   }
   return v > 0 ? std::optional<std::size_t>(v) : std::nullopt;
 }
 
-std::string NiriWorkspaceManager::workspaceKey(WsState const& ws) {
-  if (ws.idx > 0) { return std::to_string(ws.idx); }
-  if (ws.id > 0) { return std::to_string(ws.id); }
-  return {};
+std::string NiriWorkspaceManager::deskFileKey(WsState const& ws) {
+  const std::uint64_t primary = ws.idx > 0 ? ws.idx : ws.id;
+  return primary > 0 ? std::to_string(primary) : std::string{};
 }
 
-void NiriWorkspaceManager::recomputeOccupancy() {
+void NiriWorkspaceManager::refreshOccupancy() {
   m_occupancy.clear();
-  for (auto const& [id, win] : m_windows) {
-    (void)id;
-    if (win.wsId.has_value()) { ++m_occupancy[*win.wsId]; }
-  }
+  auto parked = m_windows | std::views::values
+              | std::views::filter([](WinState const& w) { return w.wsId.has_value(); });
+  for (auto const& win : parked) { ++m_occupancy[*win.wsId]; }
 }
 
 void NiriWorkspaceManager::emitChange() const {

@@ -158,7 +158,7 @@ static constexpr wl_pointer_listener kPointerListener = {
 
 }
 
-NotificationToastHost::NotificationToastHost(NotificationManager& manager)
+NotificationToastHost::NotificationToastHost(NotificationHub& manager)
     : mgr_(manager), lastFrameDone_(Clock::now()) {
     
 }
@@ -361,7 +361,7 @@ void NotificationToastHost::on_notifications_changed() {
     if (dnd) continue;
     if (it->silent) continue;
     if (static_cast<int>(cards_.size()) >= kMaxCards) break;
-    if (it->imageData) img_count++;
+    if (it->picture) img_count++;
     if (!seen_apps.insert(it->appName).second) continue;
     std::string content = it->summary;
     content.push_back('\x1e');
@@ -494,7 +494,7 @@ void NotificationToastHost::compute_layout() {
   }
 }
 
-static cairo_surface_t* notification_image_to_cairo_surface(const NotificationImageData& img) {
+static cairo_surface_t* notification_image_to_cairo_surface(const NotificationPicture& img) {
    
   if (img.width <= 0 || img.height <= 0 || img.data.empty()) {
     eh::shell_log::notif_verbose("notification_image_to_cairo_surface: empty image");
@@ -524,7 +524,7 @@ static cairo_surface_t* notification_image_to_cairo_surface(const NotificationIm
   const int src_pb = img.channels;
   const int src_stride = img.rowStride > 0 ? img.rowStride : img.width * src_pb;
 
-  // NotificationImageData is [R, G, B, A] (RGBA) or [R, G, B] (RGB)
+  // NotificationPicture is [R, G, B, A] (RGBA) or [R, G, B] (RGB)
   // Cairo CAIRO_FORMAT_ARGB32 on LE is [B, G, R, A]
   // Convert: swap byte[0] and byte[2]
   for (int y = 0; y < img.height; y++) {
@@ -600,7 +600,7 @@ void NotificationToastHost::paint_impl() {
     const double cy = card.y;
     const double cw = card.w;
     const double ch = card.h;
-    const bool critical = (n->urgency == Urgency::Critical);
+    const bool critical = (n->urgency == AlertLevel::Critical);
 
     // Card background
     m3::Box cardBox;
@@ -637,8 +637,8 @@ void NotificationToastHost::paint_impl() {
     cairo_surface_t* img_surf = nullptr;
     int imgW = 0, imgH = 0;
     double imgScale = 1.0;
-    if (n->imageData && n->imageData->width > 0 && n->imageData->height > 0) {
-      img_surf = notification_image_to_cairo_surface(*n->imageData);
+    if (n->picture && n->picture->width > 0 && n->picture->height > 0) {
+      img_surf = notification_image_to_cairo_surface(*n->picture);
       if (img_surf) {
         imgW = cairo_image_surface_get_width(img_surf);
         imgH = cairo_image_surface_get_height(img_surf);
@@ -901,7 +901,7 @@ void NotificationToastHost::pointer_button_press(double sx, double sy) {
   if (hit >= 0 && static_cast<size_t>(hit) < cards_.size()) {
     const std::uint32_t id = cards_[static_cast<size_t>(hit)].id;
     eh::shell_log::notifications("dismiss notification id=", id, " at (", sx, ", ", sy, ") hit=", hit);
-    (void)mgr_.close(id, CloseReason::Dismissed);
+    (void)mgr_.close(id, DismissReason::Dismissed);
   } else {
     eh::shell_log::notif_verbose("pointer_button_press: no card hit at (", sx, ", ", sy, ")");
   }

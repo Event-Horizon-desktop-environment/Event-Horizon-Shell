@@ -17,14 +17,14 @@ namespace eh::disks {
 class Drive;
 class Block;
 
-using ChangeCallback = std::function<void()>;
+using StateChangeHook = std::function<void()>;
 
 class Manager {
 public:
   static Manager& instance();
 
   void start();
-  void set_change_callback(ChangeCallback cb);
+  void set_change_callback(StateChangeHook cb);
 
   std::vector<std::shared_ptr<Drive>> get_drives() const;
   std::shared_ptr<Drive> find_drive(const std::string& object_path) const;
@@ -49,7 +49,7 @@ private:
   void rebuild_object_tree();
 
   bool started_ = false;
-  ChangeCallback on_change_{};
+  StateChangeHook on_change_{};
 
   std::unique_ptr<sdbus::IConnection> bus_;
   std::unique_ptr<sdbus::IProxy> proxy_;

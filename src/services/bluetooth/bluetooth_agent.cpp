@@ -14,68 +14,37 @@
 namespace eh::bt {
 namespace {
 
-const sdbus::ServiceName kBluezBusName{"org.bluez"};
-const sdbus::ObjectPath kBluezRoot{"/org/bluez"};
-const sdbus::ObjectPath kAgentObjectPath{"/org/ehde/BluetoothAgent"};
+const sdbus::Error::Name kErrCanceled{"org.bluez.Error.Canceled"};
+const sdbus::Error::Name kErrRejected{"org.bluez.Error.Rejected"};
+
 constexpr auto kAgentInterface = "org.bluez.Agent1";
 constexpr auto kAgentManagerInterface = "org.bluez.AgentManager1";
 constexpr auto kCapability = "NoInputNoOutput";
 
-const sdbus::Error::Name kErrRejected{"org.bluez.Error.Rejected"};
-const sdbus::Error::Name kErrCanceled{"org.bluez.Error.Canceled"};
+const sdbus::ObjectPath kAgentObjectPath{"/org/ehde/BluetoothAgent"};
+const sdbus::ObjectPath kBluezRoot{"/org/bluez"};
+const sdbus::ServiceName kBluezBusName{"org.bluez"};
 
 }
 
 struct BluetoothAgent::Impl {
-  mutable std::recursive_mutex mu_;
-  sdbus::IConnection& bus;
-  std::unique_ptr<sdbus::IObject> object;
-  BluetoothAgent::RequestCallback requestCallback;
-
-  BluetoothPairingRequest pending;
+  PairingPrompt pending;
   std::optional<sdbus::Result<std::string>> pendingString;
   std::optional<sdbus::Result<std::uint32_t>> pendingUint;
   std::optional<sdbus::Result<>> pendingVoid;
 
+  BluetoothAgent::PairingHandler requestCallback;
+  sdbus::IConnection& bus;
+  std::unique_ptr<sdbus::IObject> object;
+  mutable std::recursive_mutex mu_;
+
   explicit Impl(sdbus::IConnection& b) : bus(b) {
-     
+
   }
 
-  [[nodiscard]] bool hasPending() const noexcept {
+  void abortPending() {
     std::lock_guard<std::recursive_mutex> lock(mu_);
-    return pendingString.has_value() || pendingUint.has_value() || pendingVoid.has_value();
-  }
 
-  void rejectIfBusy(auto& result, const char* what) {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    std::cerr << "[bluetooth] " << what << " while another request pending -> rejected" << std::endl;
-    result.returnError(sdbus::Error{kErrRejected, "another pairing request is already pending"});
-  }
-
-  void clearPending() {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    pending = BluetoothPairingRequest{};
-    pendingString.reset();
-    pendingUint.reset();
-    pendingVoid.reset();
-  }
-
-  void fireCallback() {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (requestCallback) {
-      requestCallback(pending);
-    } else {
-      std::cerr << "[bluetooth] pairing request with no UI handler -> rejecting" << std::endl;
-      cancelPending();
-    }
-  }
-
-  void cancelPending() {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
     if (pendingString) {
       pendingString->returnError(sdbus::Error{kErrCanceled, "user canceled"});
     }
@@ -85,121 +54,153 @@ struct BluetoothAgent::Impl {
     if (pendingVoid) {
       pendingVoid->returnError(sdbus::Error{kErrCanceled, "user canceled"});
     }
-    clearPending();
+    resetPending();
+  }
+
+  void resetPending() {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+
+    pending = PairingPrompt{};
+    pendingString.reset();
+    pendingUint.reset();
+    pendingVoid.reset();
+  }
+
+  [[nodiscard]] bool hasPending() const noexcept {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+    return pendingString.has_value() || pendingUint.has_value() || pendingVoid.has_value();
+  }
+
+  void rejectIfBusy(auto& result, const char* what) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+
+    std::cerr << "[bluetooth] " << what << " while another request pending -> rejected" << std::endl;
+    result.returnError(sdbus::Error{kErrRejected, "a pairing request is already in progress"});
+  }
+
+  void fireCallback() {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+
+    if (requestCallback) {
+      requestCallback(pending);
+    } else {
+      std::cerr << "[bluetooth] pairing request with no UI handler -> rejecting" << std::endl;
+      abortPending();
+    }
+  }
+
+  // Shared entry for the five BlueZ request flavors that behave the same:
+  // refuse when a request is already live, record the prompt, stash the
+  // reply slot via `store`, then hand the prompt to the UI via `decorate`.
+  template <typename Reply, typename Store, typename Decorate>
+  void openRequest(Reply&& result, const char* what, PairingMode mode, sdbus::ObjectPath device,
+                   Store&& store, Decorate&& decorate) {
+    std::lock_guard<std::recursive_mutex> lock(mu_);
+
+    if (hasPending()) { rejectIfBusy(result, what); return; }
+    pending.mode = mode;
+    pending.devicePath = std::move(device);
+    decorate(pending);
+    store(std::move(result));
+    fireCallback();
   }
 
   void onRequestPinCode(sdbus::Result<std::string>&& result, sdbus::ObjectPath device) {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (hasPending()) { rejectIfBusy(result, "RequestPinCode"); return; }
-    pending.kind = BluetoothPairingKind::PinCode;
-    pending.devicePath = device;
-    pendingString = std::move(result);
-    fireCallback();
+    openRequest(std::move(result), "RequestPinCode", PairingMode::PinEntry, std::move(device),
+                [this](auto&& r) { pendingString = std::move(r); },
+                [](PairingPrompt&) {});
   }
 
   void onDisplayPinCode(sdbus::Result<>&& result, sdbus::ObjectPath device, std::string pincode) {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (hasPending()) { rejectIfBusy(result, "DisplayPinCode"); return; }
-    pending.kind = BluetoothPairingKind::DisplayPinCode;
-    pending.devicePath = device;
-    pending.pin = std::move(pincode);
-    pendingVoid = std::move(result);
-    fireCallback();
+    openRequest(std::move(result), "DisplayPinCode", PairingMode::ShownPin, std::move(device),
+                [this](auto&& r) { pendingVoid = std::move(r); },
+                [&pincode](PairingPrompt& p) { p.pin = std::move(pincode); });
   }
 
   void onRequestPasskey(sdbus::Result<std::uint32_t>&& result, sdbus::ObjectPath device) {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (hasPending()) { rejectIfBusy(result, "RequestPasskey"); return; }
-    pending.kind = BluetoothPairingKind::Passkey;
-    pending.devicePath = device;
-    pendingUint = std::move(result);
-    fireCallback();
+    openRequest(std::move(result), "RequestPasskey", PairingMode::PasskeyEntry, std::move(device),
+                [this](auto&& r) { pendingUint = std::move(r); },
+                [](PairingPrompt&) {});
   }
 
+  void onRequestConfirmation(sdbus::Result<>&& result, sdbus::ObjectPath device, std::uint32_t passkey) {
+    openRequest(std::move(result), "RequestConfirmation", PairingMode::Confirmation, std::move(device),
+                [this](auto&& r) { pendingVoid = std::move(r); },
+                [passkey](PairingPrompt& p) { p.passkey = passkey; });
+  }
+
+  void onRequestAuthorization(sdbus::Result<>&& result, sdbus::ObjectPath device) {
+    openRequest(std::move(result), "RequestAuthorization", PairingMode::Authorization, std::move(device),
+                [this](auto&& r) { pendingVoid = std::move(r); },
+                [](PairingPrompt&) {});
+  }
+
+  void onAuthorizeService(sdbus::Result<>&& result, sdbus::ObjectPath device, std::string uuid) {
+    openRequest(std::move(result), "AuthorizeService", PairingMode::ServiceAuthorization, std::move(device),
+                [this](auto&& r) { pendingVoid = std::move(r); },
+                [&uuid](PairingPrompt& p) { p.uuid = std::move(uuid); });
+  }
+
+  // DisplayPasskey is fire-and-forget: repeats for the same device update
+  // the passkey in place instead of opening a new request.
   void onDisplayPasskey(sdbus::ObjectPath device, std::uint32_t passkey, std::uint16_t entered) {
     std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (pending.kind == BluetoothPairingKind::DisplayPasskey && pending.devicePath == std::string(device)) {
+
+    if (pending.mode == PairingMode::ShownPasskey && pending.devicePath == std::string(device)) {
       pending.passkey = passkey;
       pending.entered = entered;
       if (requestCallback) requestCallback(pending);
       return;
     }
     if (hasPending()) return;
-    pending.kind = BluetoothPairingKind::DisplayPasskey;
+    pending.mode = PairingMode::ShownPasskey;
     pending.devicePath = device;
     pending.passkey = passkey;
     pending.entered = entered;
     if (requestCallback) requestCallback(pending);
   }
 
-  void onRequestConfirmation(sdbus::Result<>&& result, sdbus::ObjectPath device, std::uint32_t passkey) {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (hasPending()) { rejectIfBusy(result, "RequestConfirmation"); return; }
-    pending.kind = BluetoothPairingKind::Confirm;
-    pending.devicePath = device;
-    pending.passkey = passkey;
-    pendingVoid = std::move(result);
-    fireCallback();
-  }
-
-  void onRequestAuthorization(sdbus::Result<>&& result, sdbus::ObjectPath device) {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (hasPending()) { rejectIfBusy(result, "RequestAuthorization"); return; }
-    pending.kind = BluetoothPairingKind::Authorize;
-    pending.devicePath = device;
-    pendingVoid = std::move(result);
-    fireCallback();
-  }
-
-  void onAuthorizeService(sdbus::Result<>&& result, sdbus::ObjectPath device, std::string uuid) {
-    std::lock_guard<std::recursive_mutex> lock(mu_);
-     
-    if (hasPending()) { rejectIfBusy(result, "AuthorizeService"); return; }
-    pending.kind = BluetoothPairingKind::AuthorizeService;
-    pending.devicePath = device;
-    pending.uuid = std::move(uuid);
-    pendingVoid = std::move(result);
-    fireCallback();
-  }
-
   void onCancel() {
     std::lock_guard<std::recursive_mutex> lock(mu_);
-     
+
     if (!hasPending()) {
-      if (pending.kind == BluetoothPairingKind::DisplayPasskey ||
-          pending.kind == BluetoothPairingKind::DisplayPinCode) {
-        clearPending();
+      if (pending.mode == PairingMode::ShownPasskey ||
+          pending.mode == PairingMode::ShownPin) {
+        resetPending();
       }
       return;
     }
     std::cerr << "[bluetooth] BlueZ canceled pending pairing" << std::endl;
-    cancelPending();
+    abortPending();
   }
 };
 
 BluetoothAgent::BluetoothAgent(sdbus::IConnection& bus) : m_impl(std::make_unique<Impl>(bus)) {
-   
+
   m_impl->object = sdbus::createObject(bus, kAgentObjectPath);
 
   m_impl->object
       ->addVTable(
-          sdbus::registerMethod("Release").implementedAs([]() {}),
-          sdbus::registerMethod("RequestPinCode")
-              .withInputParamNames("device")
-              .withOutputParamNames("pincode")
-              .implementedAs([this](sdbus::Result<std::string>&& result, sdbus::ObjectPath device) {
-                m_impl->onRequestPinCode(std::move(result), std::move(device));
+          sdbus::registerMethod("Cancel").implementedAs([this]() { m_impl->onCancel(); }),
+          sdbus::registerMethod("AuthorizeService")
+              .withInputParamNames("device", "uuid")
+              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device, std::string uuid) {
+                m_impl->onAuthorizeService(std::move(result), std::move(device), std::move(uuid));
               }),
-          sdbus::registerMethod("DisplayPinCode")
-              .withInputParamNames("device", "pincode")
-              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device, std::string pincode) {
-                m_impl->onDisplayPinCode(std::move(result), std::move(device), std::move(pincode));
+          sdbus::registerMethod("RequestAuthorization")
+              .withInputParamNames("device")
+              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device) {
+                m_impl->onRequestAuthorization(std::move(result), std::move(device));
+              }),
+          sdbus::registerMethod("RequestConfirmation")
+              .withInputParamNames("device", "passkey")
+              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device, std::uint32_t passkey) {
+                m_impl->onRequestConfirmation(std::move(result), std::move(device), passkey);
+              }),
+          sdbus::registerMethod("DisplayPasskey")
+              .withInputParamNames("device", "passkey", "entered")
+              .implementedAs([this](sdbus::ObjectPath device, std::uint32_t passkey, std::uint16_t entered) {
+                m_impl->onDisplayPasskey(std::move(device), passkey, entered);
               }),
           sdbus::registerMethod("RequestPasskey")
               .withInputParamNames("device")
@@ -207,27 +208,18 @@ BluetoothAgent::BluetoothAgent(sdbus::IConnection& bus) : m_impl(std::make_uniqu
               .implementedAs([this](sdbus::Result<std::uint32_t>&& result, sdbus::ObjectPath device) {
                 m_impl->onRequestPasskey(std::move(result), std::move(device));
               }),
-          sdbus::registerMethod("DisplayPasskey")
-              .withInputParamNames("device", "passkey", "entered")
-              .implementedAs([this](sdbus::ObjectPath device, std::uint32_t passkey, std::uint16_t entered) {
-                m_impl->onDisplayPasskey(std::move(device), passkey, entered);
+          sdbus::registerMethod("DisplayPinCode")
+              .withInputParamNames("device", "pincode")
+              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device, std::string pincode) {
+                m_impl->onDisplayPinCode(std::move(result), std::move(device), std::move(pincode));
               }),
-          sdbus::registerMethod("RequestConfirmation")
-              .withInputParamNames("device", "passkey")
-              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device, std::uint32_t passkey) {
-                m_impl->onRequestConfirmation(std::move(result), std::move(device), passkey);
-              }),
-          sdbus::registerMethod("RequestAuthorization")
+          sdbus::registerMethod("RequestPinCode")
               .withInputParamNames("device")
-              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device) {
-                m_impl->onRequestAuthorization(std::move(result), std::move(device));
+              .withOutputParamNames("pincode")
+              .implementedAs([this](sdbus::Result<std::string>&& result, sdbus::ObjectPath device) {
+                m_impl->onRequestPinCode(std::move(result), std::move(device));
               }),
-          sdbus::registerMethod("AuthorizeService")
-              .withInputParamNames("device", "uuid")
-              .implementedAs([this](sdbus::Result<>&& result, sdbus::ObjectPath device, std::string uuid) {
-                m_impl->onAuthorizeService(std::move(result), std::move(device), std::move(uuid));
-              }),
-          sdbus::registerMethod("Cancel").implementedAs([this]() { m_impl->onCancel(); })
+          sdbus::registerMethod("Release").implementedAs([]() {})
       )
       .forInterface(kAgentInterface);
 
@@ -244,10 +236,10 @@ BluetoothAgent::BluetoothAgent(sdbus::IConnection& bus) : m_impl(std::make_uniqu
 }
 
 BluetoothAgent::~BluetoothAgent() {
-   
+
   MANGOWM_INFO("{}", __func__);
   if (m_impl == nullptr) return;
-  m_impl->cancelPending();
+  m_impl->abortPending();
   try {
     auto agentManager = sdbus::createProxy(m_impl->bus, kBluezBusName, kBluezRoot);
     agentManager->callMethod("UnregisterAgent").onInterface(kAgentManagerInterface).withArguments(kAgentObjectPath);
@@ -256,52 +248,52 @@ BluetoothAgent::~BluetoothAgent() {
   }
 }
 
-void BluetoothAgent::setRequestCallback(RequestCallback callback) {
-  if (m_impl != nullptr) { std::lock_guard<std::recursive_mutex> lock(m_impl->mu_); m_impl->requestCallback = std::move(callback); }
+PairingPrompt BluetoothAgent::pendingRequest() const {
+  if (m_impl == nullptr) return PairingPrompt{};
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
+  return m_impl->pending;
 }
 
-void BluetoothAgent::acceptConfirm() {
+bool BluetoothAgent::hasPendingPairing() const noexcept { return m_impl != nullptr && m_impl->hasPending(); }
+
+void BluetoothAgent::abortPending() {
   if (m_impl == nullptr) return;
   std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
-  if (!m_impl->pendingVoid) { m_impl->clearPending(); return; }
-  m_impl->pendingVoid->returnResults();
-  m_impl->clearPending();
+  m_impl->abortPending();
 }
 
-void BluetoothAgent::rejectConfirm() {
-  if (m_impl == nullptr) return;
-  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
-  m_impl->cancelPending();
-}
-
-void BluetoothAgent::submitPin(const std::string& pin) {
-  if (m_impl == nullptr) return;
-  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
-  if (!m_impl->pendingString) return;
-  m_impl->pendingString->returnResults(pin);
-  m_impl->clearPending();
-}
-
-void BluetoothAgent::submitPasskey(std::uint32_t passkey) {
+void BluetoothAgent::sendPasskey(std::uint32_t passkey) {
   if (m_impl == nullptr) return;
   std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
   if (!m_impl->pendingUint) return;
   m_impl->pendingUint->returnResults(passkey);
-  m_impl->clearPending();
+  m_impl->resetPending();
 }
 
-void BluetoothAgent::cancelPending() {
+void BluetoothAgent::sendPin(const std::string& pin) {
   if (m_impl == nullptr) return;
   std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
-  m_impl->cancelPending();
+  if (!m_impl->pendingString) return;
+  m_impl->pendingString->returnResults(pin);
+  m_impl->resetPending();
 }
 
-bool BluetoothAgent::hasPendingRequest() const noexcept { return m_impl != nullptr && m_impl->hasPending(); }
-
-BluetoothPairingRequest BluetoothAgent::pendingRequest() const {
-  if (m_impl == nullptr) return BluetoothPairingRequest{};
+void BluetoothAgent::rejectPairing() {
+  if (m_impl == nullptr) return;
   std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
-  return m_impl->pending;
+  m_impl->abortPending();
+}
+
+void BluetoothAgent::acceptPairing() {
+  if (m_impl == nullptr) return;
+  std::lock_guard<std::recursive_mutex> lock(m_impl->mu_);
+  if (!m_impl->pendingVoid) { m_impl->resetPending(); return; }
+  m_impl->pendingVoid->returnResults();
+  m_impl->resetPending();
+}
+
+void BluetoothAgent::setPairingHandler(PairingHandler callback) {
+  if (m_impl != nullptr) { std::lock_guard<std::recursive_mutex> lock(m_impl->mu_); m_impl->requestCallback = std::move(callback); }
 }
 
 }

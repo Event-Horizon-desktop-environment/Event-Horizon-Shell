@@ -2,15 +2,15 @@
 
 #include <nlohmann/json.hpp>
 
-SwayOutputBackend::SwayOutputBackend(wspace::sway::SwayRuntime& runtime) : m_ctx(runtime) {   }
+SwayOutputSource::SwayOutputSource(wspace::sway::SwaySession& runtime) : m_ctx(runtime) {   }
 
-std::optional<std::string> SwayOutputBackend::focusedOutputName() const {
+std::optional<std::string> SwayOutputSource::focusedOutputName() const {
    
   if (!m_ctx.canConnect()) {
     return std::nullopt;
   }
 
-  const auto response = m_ctx.sendCommand(wspace::sway::SwayRuntime::kGetOutputs, {});
+  const auto response = m_ctx.sendCommand(wspace::sway::SwaySession::kGetOutputs, {});
   if (!response.has_value() || !response->is_array()) {
     return std::nullopt;
   }
@@ -35,9 +35,9 @@ std::optional<std::string> SwayOutputBackend::focusedOutputName() const {
 
 namespace wspace::sway {
 
-bool swaySetOutputPower(SwayRuntime& runtime, bool on) {
+bool swaySetOutputPower(SwaySession& runtime, bool on) {
    
-  return runtime.sendCommand(SwayRuntime::kRunCommand,
+  return runtime.sendCommand(SwaySession::kRunCommand,
                          on ? "output * dpms on" : "output * dpms off")
       .has_value();
 }

@@ -43,7 +43,7 @@ namespace eh::shell::stage {
 
 struct StageApp {
   // Own Wayland connection (outputs, seat, toplevel tracking).
-  std::unique_ptr<eh::wayland::WaylandConnection> wl;
+  std::unique_ptr<eh::wayland::WaylandLink> wl;
   bool wlError = false;
   wl_display* display = nullptr;
   wl_compositor* compositor = nullptr;
@@ -69,7 +69,7 @@ struct StageApp {
   // Dashboard state + services (extracted from the dock child).
   eh::shell::dashboard::DashboardState dash{};
   std::unique_ptr<eh::mpris::DockMpris> mpris{};
-  eh::shell::AnimationManager shellAnim{};
+  eh::shell::MotionTimeline shellAnim{};
   double pointerX = 0.0;
   double pointerY = 0.0;
   wl_surface* pointerSurface = nullptr;

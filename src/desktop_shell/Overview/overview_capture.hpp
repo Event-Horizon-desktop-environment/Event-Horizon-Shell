@@ -11,7 +11,7 @@
 
 
 namespace eh::wayland {
-class WaylandConnection;
+class WaylandLink;
 } // namespace eh::wayland
 
 namespace eh::shell::overview {

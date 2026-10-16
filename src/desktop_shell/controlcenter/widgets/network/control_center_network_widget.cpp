@@ -35,7 +35,7 @@ ControlCenterNetworkState control_center_network_state() {
   auto& nm = eh::net::NetworkManagerService::instance();
   nm.start();
 
-  const eh::net::Snapshot s = nm.snapshot();
+  const eh::net::NetState s = nm.snapshot();
   ControlCenterNetworkState out{};
   out.connected = s.connected;
   out.wifi = (s.kind == eh::net::ConnectivityKind::Wireless);
@@ -63,7 +63,7 @@ std::vector<ControlCenterWifiAp> control_center_wifi_scan(bool rescan) {
   nm.start();
   if (rescan) nm.request_scan();
 
-  const eh::net::Snapshot s = nm.snapshot();
+  const eh::net::NetState s = nm.snapshot();
   std::vector<ControlCenterWifiAp> out;
   out.reserve(s.aps.size());
 
@@ -103,7 +103,7 @@ bool control_center_wifi_connect(const std::string& ssid, const std::string& pas
 
   if (!trim_copy(password).empty()) nm.queue_secret_for_ssid(want, trim_copy(password));
 
-  const eh::net::Snapshot s = nm.snapshot();
+  const eh::net::NetState s = nm.snapshot();
   const auto it = std::find_if(s.aps.begin(), s.aps.end(), [&](const eh::net::AccessPoint& ap) { return ap.ssid == want; });
   if (it == s.aps.end()) {
     if (out_error) *out_error = "Network not found";

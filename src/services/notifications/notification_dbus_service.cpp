@@ -30,19 +30,16 @@ constexpr auto kInterface = "org.freedesktop.Notifications";
 constexpr std::size_t kMaxStringLen = 1024;
 
 std::string clamp_str(std::string_view s) {
-   
   const auto len = std::min(s.size(), kMaxStringLen);
   return std::string{s.substr(0, len)};
 }
 
 bool is_blank_text(std::string_view text) {
-   
   return text.empty() ||
          std::all_of(text.begin(), text.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
 }
 
 void ascii_lower_inplace(std::string& s) {
-   
   for (char& c : s) {
     if (c >= 'A' && c <= 'Z') {
       c = static_cast<char>(c - 'A' + 'a');
@@ -51,7 +48,6 @@ void ascii_lower_inplace(std::string& s) {
 }
 
 std::string sanitize_markup(std::string_view s) {
-   
   std::string out;
   out.reserve(s.size());
 
@@ -101,7 +97,6 @@ std::string sanitize_markup(std::string_view s) {
 }
 
 std::vector<std::string> sanitize_actions(const std::vector<std::string>& actions) {
-   
   std::vector<std::string> sanitized;
   sanitized.reserve(actions.size() - (actions.size() % 2));
 
@@ -124,14 +119,13 @@ std::vector<std::string> sanitize_actions(const std::vector<std::string>& action
   return sanitized;
 }
 
-using NotificationImageDataStruct = sdbus::Struct<std::int32_t, std::int32_t, std::int32_t, bool, std::int32_t,
+using PictureTuple = sdbus::Struct<std::int32_t, std::int32_t, std::int32_t, bool, std::int32_t,
                                                   std::int32_t, std::vector<std::uint8_t>>;
 
-std::optional<NotificationImageData> decode_image_data_variant(const sdbus::Variant& value) {
-   
+std::optional<NotificationPicture> decode_image_data_variant(const sdbus::Variant& value) {
   try {
-    const auto data = value.get<NotificationImageDataStruct>();
-    NotificationImageData out;
+    const auto data = value.get<PictureTuple>();
+    NotificationPicture out;
     out.width = std::get<0>(data);
     out.height = std::get<1>(data);
     out.rowStride = std::get<2>(data);
@@ -148,7 +142,7 @@ std::optional<NotificationImageData> decode_image_data_variant(const sdbus::Vari
   try {
     const auto data = value.get<std::tuple<std::int32_t, std::int32_t, std::int32_t, bool, std::int32_t, std::int32_t,
                                            std::vector<std::uint8_t>>>();
-    NotificationImageData out;
+    NotificationPicture out;
     out.width = std::get<0>(data);
     out.height = std::get<1>(data);
     out.rowStride = std::get<2>(data);
@@ -165,8 +159,7 @@ std::optional<NotificationImageData> decode_image_data_variant(const sdbus::Vari
   return std::nullopt;
 }
 
-std::optional<NotificationImageData> decode_image_hint(const std::map<std::string, sdbus::Variant>& hints) {
-   
+std::optional<NotificationPicture> decode_image_hint(const std::map<std::string, sdbus::Variant>& hints) {
   for (const char* key : {"image-data", "image_data", "icon_data"}) {
     const auto it = hints.find(key);
     if (it == hints.end()) {
@@ -183,8 +176,7 @@ std::optional<NotificationImageData> decode_image_hint(const std::map<std::strin
 
 }
 
-NotificationDbusService::NotificationDbusService(NotificationManager& manager) : manager_(manager) {
-    
+NotificationDbusService::NotificationDbusService(NotificationHub& manager) : manager_(manager) {
   bus_ = sdbus::createSessionBusConnection();
 
   // Check if another notification daemon already owns the bus name.
@@ -229,7 +221,6 @@ NotificationDbusService::NotificationDbusService(NotificationManager& manager) :
                   [this](const std::string& app_name, std::uint32_t replaces_id, const std::string& app_icon,
                          const std::string& summary, const std::string& body, const std::vector<std::string>& actions,
                          const std::map<std::string, sdbus::Variant>& hints, std::int32_t expire_timeout) {
-                     
                     return onNotify(app_name, replaces_id, app_icon, summary, body, actions, hints, expire_timeout);
                   }),
 
@@ -237,8 +228,8 @@ NotificationDbusService::NotificationDbusService(NotificationManager& manager) :
             return onGetCapabilities();
           }),
 
-          sdbus::registerMethod("GetNotifications").withOutputParamNames("notifications").implementedAs([this]() {
-            return onGetNotifications();
+          sdbus::registerMethod("ListNotifications").withOutputParamNames("notifications").implementedAs([this]() {
+            return readNotifications();
           }),
 
           sdbus::registerMethod("GetServerInformation")
@@ -246,41 +237,38 @@ NotificationDbusService::NotificationDbusService(NotificationManager& manager) :
               .implementedAs([this]() { return onGetServerInformation(); }),
 
           sdbus::registerMethod("CloseNotification").withInputParamNames("id").implementedAs([this](std::uint32_t id) {
-            onCloseNotification(id);
+            closeNotificationById(id);
           }),
 
-          sdbus::registerMethod("InvokeAction")
+          sdbus::registerMethod("TriggerAction")
               .withInputParamNames("id", "action_key")
               .implementedAs(
-                  [this](std::uint32_t id, const std::string& action_key) { onInvokeAction(id, action_key); }),
+                  [this](std::uint32_t id, const std::string& action_key) { fireAction(id, action_key); }),
 
           sdbus::registerSignal("NotificationClosed").withParameters<std::uint32_t, std::uint32_t>("id", "reason"),
 
           sdbus::registerSignal("ActionInvoked").withParameters<std::uint32_t, std::string>("id", "action_key"))
       .forInterface(kInterface);
 
-  manager_.setActionInvokeCallback(
+  manager_.setActionHook(
       [this](std::uint32_t id, const std::string& action_key) { emitActionInvoked(id, action_key); });
 
   bus_->enterEventLoopAsync();
 }
 
 NotificationDbusService::~NotificationDbusService() {
-   
   MANGOWM_INFO("{}", __func__);
-  manager_.setActionInvokeCallback(nullptr);
+  manager_.setActionHook(nullptr);
 }
 
 void NotificationDbusService::shellDismiss(std::uint32_t id) {
-   
-  if (!manager_.close(id, CloseReason::Dismissed)) {
+  if (!manager_.close(id, DismissReason::Dismissed)) {
     return;
   }
-  emitClose(id, CloseReason::Dismissed);
+  sendClosedSignal(id, DismissReason::Dismissed);
 }
 
 void NotificationDbusService::shellDismissAll() {
-   
   const auto snapshot = manager_.all();
   std::vector<std::uint32_t> ids;
   ids.reserve(snapshot.size());
@@ -292,11 +280,10 @@ void NotificationDbusService::shellDismissAll() {
   }
 }
 
-void NotificationDbusService::processExpired() {
-   
-  for (const std::uint32_t id : manager_.expiredIds()) {
-    if (manager_.close(id, CloseReason::Expired)) {
-      emitClose(id, CloseReason::Expired);
+void NotificationDbusService::sweepExpired() {
+  for (const std::uint32_t id : manager_.expiredList()) {
+    if (manager_.close(id, DismissReason::Expired)) {
+      sendClosedSignal(id, DismissReason::Expired);
     }
   }
 }
@@ -306,19 +293,18 @@ std::uint32_t NotificationDbusService::onNotify(const std::string& app_name, std
                                                 const std::string& body, const std::vector<std::string>& actions,
                                                 const std::map<std::string, sdbus::Variant>& hints,
                                                 std::int32_t expire_timeout) {
-   
   std::int32_t timeout = expire_timeout;
   if (timeout < 0) {
     timeout = manager_.serverDefaultTimeoutMs();
   }
   const auto sanitized_actions = sanitize_actions(actions);
 
-  Urgency urgency = Urgency::Normal;
+  AlertLevel urgency = AlertLevel::Normal;
   if (auto it = hints.find("urgency"); it != hints.end()) {
     try {
       const std::uint8_t raw = it->second.get<std::uint8_t>();
-      if (raw <= static_cast<std::uint8_t>(Urgency::Critical)) {
-        urgency = static_cast<Urgency>(raw);
+      if (raw <= static_cast<std::uint8_t>(AlertLevel::Critical)) {
+        urgency = static_cast<AlertLevel>(raw);
       }
     } catch (const sdbus::Error&) {
     }
@@ -357,7 +343,7 @@ std::uint32_t NotificationDbusService::onNotify(const std::string& app_name, std
     }
   }
 
-  std::optional<NotificationImageData> image_data = decode_image_hint(hints);
+  std::optional<NotificationPicture> image_data = decode_image_hint(hints);
 
   const eh::config::NotificationRule* rule = nullptr;
   {
@@ -390,8 +376,8 @@ std::uint32_t NotificationDbusService::onNotify(const std::string& app_name, std
   bool transient = false;
   if (rule) {
     bool urgencyOk = false;
-    if (urgency == Urgency::Low) urgencyOk = rule->allowLow;
-    else if (urgency == Urgency::Critical) urgencyOk = rule->allowCritical;
+    if (urgency == AlertLevel::Low) urgencyOk = rule->allowLow;
+    else if (urgency == AlertLevel::Critical) urgencyOk = rule->allowCritical;
     else urgencyOk = rule->allowNormal;
     if (!urgencyOk) silent = true;
     if (!rule->showToast) silent = true;
@@ -408,74 +394,74 @@ std::uint32_t NotificationDbusService::onNotify(const std::string& app_name, std
                                " replaces=", replaces_id, " has_image=", image_data.has_value());
 
   return manager_.addOrReplace(replaces_id, clamp_str(app_name), sanitize_markup(clamp_str(summary)),
-                               sanitize_markup(clamp_str(body)), urgency, timeout, NotificationOrigin::External,
+                               sanitize_markup(clamp_str(body)), urgency, timeout, NoticeSource::External,
                                sanitized_actions, icon, image_data, category, desktop_entry, silent, transient);
 }
 
 std::vector<std::string> NotificationDbusService::onGetCapabilities() { return {"body", "actions"}; }
 
-std::vector<std::map<std::string, sdbus::Variant>> NotificationDbusService::onGetNotifications() {
-   
+std::vector<std::map<std::string, sdbus::Variant>> NotificationDbusService::readNotifications() {
+  const auto put = [](auto& dict, const char* key, auto&& value) {
+    dict[key] = sdbus::Variant{std::forward<decltype(value)>(value)};
+  };
+
   std::vector<std::map<std::string, sdbus::Variant>> result;
   for (const auto& n : manager_.all()) {
     std::map<std::string, sdbus::Variant> notif;
-    notif["id"] = sdbus::Variant(n.id);
-    notif["app_name"] = sdbus::Variant(n.appName);
-    notif["summary"] = sdbus::Variant(n.summary);
-    notif["body"] = sdbus::Variant(n.body);
-    notif["timeout"] = sdbus::Variant(n.timeout);
-    notif["urgency"] = sdbus::Variant(static_cast<std::uint8_t>(n.urgency));
-    notif["actions"] = sdbus::Variant(n.actions);
-    notif["icon"] = sdbus::Variant(n.icon.value_or(""));
-    notif["category"] = sdbus::Variant(n.category.value_or(""));
-    notif["desktop_entry"] = sdbus::Variant(n.desktopEntry.value_or(""));
+    put(notif, "id", n.id);
+    put(notif, "app_name", n.appName);
+    put(notif, "summary", n.summary);
+    put(notif, "body", n.body);
+    put(notif, "timeout", n.timeout);
+    put(notif, "urgency", static_cast<std::uint8_t>(n.urgency));
+    put(notif, "actions", n.actions);
+    put(notif, "icon", n.icon.value_or(""));
+    put(notif, "category", n.category.value_or(""));
+    put(notif, "desktop_entry", n.desktopEntry.value_or(""));
     result.push_back(std::move(notif));
   }
   return result;
 }
 
-void NotificationDbusService::onCloseNotification(std::uint32_t id) {
-   
-  eh::shell_log::notif_verbose("onCloseNotification: id=", id);
-  if (!manager_.close(id, CloseReason::ClosedByCall)) {
-    eh::shell_log::notifications("onCloseNotification: id=", id, " not found");
+void NotificationDbusService::closeNotificationById(std::uint32_t id) {
+  eh::shell_log::notif_verbose("closeNotificationById: id=", id);
+  if (!manager_.close(id, DismissReason::ClosedByCall)) {
+    eh::shell_log::notifications("closeNotificationById: id=", id, " not found");
     throw sdbus::Error(sdbus::Error::Name{"org.freedesktop.Notifications.Error.NotFound"},
-                       "notification id was not found");
+                       "no notification with that id");
   }
-  emitClose(id, CloseReason::ClosedByCall);
+  sendClosedSignal(id, DismissReason::ClosedByCall);
 }
 
-void NotificationDbusService::emitClose(std::uint32_t id, CloseReason reason) {
+void NotificationDbusService::sendClosedSignal(std::uint32_t id, DismissReason reason) {
   if (!object_) return;
-   
   object_->emitSignal("NotificationClosed")
       .onInterface(kInterface)
       .withArguments(id, static_cast<std::uint32_t>(reason));
 }
 
-void NotificationDbusService::onInvokeAction(std::uint32_t id, const std::string& action_key) {
-   
-  const std::string sanitized_key = clamp_str(action_key);
-  if (sanitized_key.empty()) {
-    throw sdbus::Error(sdbus::Error::Name{"org.freedesktop.Notifications.Error.InvalidAction"},
-                       "action_key must not be empty");
-  }
+void NotificationDbusService::fireAction(std::uint32_t id, const std::string& action_key) {
+  const auto require = [](bool satisfied, const char* why) {
+    if (!satisfied) {
+      throw sdbus::Error(sdbus::Error::Name{"org.freedesktop.Notifications.Error.InvalidAction"}, why);
+    }
+  };
 
-  if (!manager_.invokeAction(id, sanitized_key, false)) {
-    throw sdbus::Error(sdbus::Error::Name{"org.freedesktop.Notifications.Error.InvalidAction"},
-                       "action_key is not available for this notification");
-  }
+  const std::string sanitized_key = clamp_str(action_key);
+  require(!sanitized_key.empty(), "an action key is required");
+  require(manager_.triggerAction(id, sanitized_key, false), "this notification offers no such action");
 }
 
 void NotificationDbusService::emitActionInvoked(std::uint32_t id, const std::string& action_key) {
   if (!object_) return;
-   
   object_->emitSignal("ActionInvoked").onInterface(kInterface).withArguments(id, action_key);
 }
 
 std::tuple<std::string, std::string, std::string, std::string> NotificationDbusService::onGetServerInformation() {
-   
-  return {"EventHorizon", "Event Horizon", EH_SHELL_VERSION, "1.2"};
+  const std::string product = "EventHorizon";
+  const std::string vendor = "Event Horizon";
+  const std::string spec = "1.2";
+  return std::make_tuple(product, vendor, EH_SHELL_VERSION, spec);
 }
 
 }

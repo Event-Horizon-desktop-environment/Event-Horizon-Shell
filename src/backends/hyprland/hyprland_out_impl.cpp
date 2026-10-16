@@ -2,10 +2,10 @@
 
 #include <nlohmann/json.hpp>
 
-HyprlandOutputBackend::HyprlandOutputBackend(wspace::hyprland::HyprlandRuntime& rt)
+HyprlandOutputSource::HyprlandOutputSource(wspace::hyprland::HyprlandSession& rt)
     : m_state(rt) {}
 
-std::optional<std::string> HyprlandOutputBackend::focusedOutputName() const {
+std::optional<std::string> HyprlandOutputSource::focusedOutputName() const {
   auto json = m_state.sendQuery("j/monitors");
   if (!json.has_value() || !json->is_array()) {
     return std::nullopt;
@@ -24,7 +24,7 @@ std::optional<std::string> HyprlandOutputBackend::focusedOutputName() const {
 }
 
 namespace wspace::hyprland {
-bool setOutputPower(HyprlandRuntime& rt, bool enabled) {
+bool setOutputPower(HyprlandSession& rt, bool enabled) {
   auto cmd = enabled ? std::string("keyword dpms on") : std::string("keyword dpms off");
   return rt.sendCommand(cmd).has_value();
 }

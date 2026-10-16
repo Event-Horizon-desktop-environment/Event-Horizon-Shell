@@ -26,12 +26,12 @@ struct DriveInfo {
 
 class UDisks2DriveService {
 public:
-  using ChangeCallback = std::function<void()>;
+  using StateChangeHook = std::function<void()>;
 
   static UDisks2DriveService& instance();
 
   void start();
-  void set_change_callback(ChangeCallback cb);
+  void set_change_callback(StateChangeHook cb);
   std::vector<DriveInfo> query_drives();
 
   // Mount unmounted drive. Returns mount point on success, empty on failure.
@@ -72,7 +72,7 @@ private:
 
   std::mutex mtx_{};
   bool started_ = false;
-  ChangeCallback on_change_{};
+  StateChangeHook on_change_{};
 
   std::unique_ptr<sdbus::IConnection> bus_{};
   std::unique_ptr<sdbus::IProxy> proxy_{};

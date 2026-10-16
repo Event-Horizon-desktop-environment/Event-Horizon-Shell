@@ -1,26 +1,29 @@
 #include "backends/mango/mango_backends.h"
 
-MangoKeyboardBackend::MangoKeyboardBackend(wspace::mango::MangoRuntime& rt) : m_state(rt) {}
+MangoKeyboardSource::MangoKeyboardSource(wspace::mango::MangoSession& rt) : m_state(rt) {}
 
-bool MangoKeyboardBackend::ready() const noexcept { return m_state.available(); }
-
-bool MangoKeyboardBackend::nextLayout() const {
-  return m_state.dispatch("switch_keyboard_layout");
+std::optional<std::string> MangoKeyboardSource::activeLayoutName() const {
+  auto resp = m_state.ipcQuery("get keyboardlayout");
+  if (resp.has_value() && resp->is_object()) {
+    auto it = resp->find("layout");
+    if (it != resp->end() && it->is_string()) {
+      return it->get<std::string>();
+    }
+  }
+  return std::nullopt;
 }
 
-std::optional<LayoutInfo> MangoKeyboardBackend::currentLayout() const {
+std::optional<LayoutSet> MangoKeyboardSource::currentLayout() const {
   auto name = activeLayoutName();
   if (!name.has_value()) { return std::nullopt; }
-  LayoutInfo st;
-  st.names.push_back(*name);
+  LayoutSet st;
   st.activeIndex = 0;
+  st.names.push_back(*name);
   return st;
 }
 
-std::optional<std::string> MangoKeyboardBackend::activeLayoutName() const {
-  auto resp = m_state.request("get keyboardlayout");
-  if (!resp.has_value() || !resp->is_object()) { return std::nullopt; }
-  auto it = resp->find("layout");
-  if (it == resp->end() || !it->is_string()) { return std::nullopt; }
-  return it->get<std::string>();
+bool MangoKeyboardSource::nextLayout() const {
+  return m_state.runCommand("switch_keyboard_layout");
 }
+
+bool MangoKeyboardSource::ready() const noexcept { return m_state.available(); }

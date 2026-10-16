@@ -138,7 +138,7 @@ struct PanelApp {
   PanelSettings settings{};
   bool pendingOutputRebind = false;
 
-  std::unique_ptr<eh::wayland::WaylandConnection> wl;
+  std::unique_ptr<eh::wayland::WaylandLink> wl;
   bool wlError = false;
 
   eh::wayland::GammaService* gammaService_ = nullptr;
@@ -158,7 +158,7 @@ struct PanelApp {
   std::string slotFpCenterSig{};
   std::string slotFpRightSig{};
 
-  eh::shell::AnimationManager anim{};
+  eh::shell::MotionTimeline anim{};
 
   std::unique_ptr<eh::mpris::DockMpris> mpris{};
 

@@ -34,7 +34,7 @@ namespace eh::shell::desktop {
 enum class MountDeferredKind : std::uint8_t { None, MountDialog, FstabMount, Unmount };
 
 struct DesktopApp {
-  std::unique_ptr<eh::wayland::WaylandConnection> wl;
+  std::unique_ptr<eh::wayland::WaylandLink> wl;
   wl_display* display = nullptr;
   wl_compositor* compositor = nullptr;
   wl_shm* shm = nullptr;

@@ -1516,7 +1516,7 @@ void draw(App& app) {
     static bool nmCbRegistered = false;
     if (!nmCbRegistered) {
       nmCbRegistered = true;
-      nm.setChangeCallback([&app](const eh::net::Snapshot&) {
+      nm.hookStateChanges([&app](const eh::net::NetState&) {
         debug_log("settings", "nm callback: settingsDeferRedraw");
         app.settingsDeferRedraw = true;
       });

@@ -715,7 +715,7 @@ static void sound_settings_slider(App& app, cairo_t* cr, int trX, int trY, int t
 
 // Forward declaration for settings_paint_sound_dropdown_unclipped
 static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /*contentX*/, int /*contentW*/,
-                                                     double glassOv, const eh::audio::Snapshot& snap);
+                                                     double glassOv, const eh::audio::AudioSummary& snap);
 
 static const char* sound_child_header_subtitle(int child) {
   switch (child) {
@@ -755,7 +755,7 @@ void paint_sound_tab(App& app, cairo_t* cr, int contentX, int contentW, double g
       }
     }
 
-    eh::audio::Snapshot snap;
+    eh::audio::AudioSummary snap;
     if (app.soundPaintSnapPending) {
       snap = std::move(*app.soundPaintSnapPending);
       app.soundPaintSnapPending.reset();
@@ -1606,7 +1606,7 @@ static const char* sound_dd_title_for(int sound_active_dd) {
   return nullptr;
 }
 
-SoundDropdown build_sound_dropdown(App& app, const eh::audio::Snapshot& snap) {
+SoundDropdown build_sound_dropdown(App& app, const eh::audio::AudioSummary& snap) {
   SoundDropdown dd;
   const int id = app.soundActiveDd;
   if (id < 0) return dd;
@@ -1825,7 +1825,7 @@ static void paint_sound_dropdown_list_mixer_style(App& app, cairo_t* cr, int x, 
 }
 
 static void settings_paint_sound_dropdown_unclipped(App& app, cairo_t* cr, int /*contentX*/, int /*contentW*/,
-                                                    double glassOv, const eh::audio::Snapshot& snap) {
+                                                    double glassOv, const eh::audio::AudioSummary& snap) {
   (void)glassOv;  // mixer-style list is fully opaque by design
   const SoundDropdown dd = build_sound_dropdown(app, snap);
   if (!dd.open || dd.rows.empty()) return;
@@ -1860,7 +1860,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
 
-  const eh::audio::Snapshot snap = pw.snapshot();
+  const eh::audio::AudioSummary snap = pw.snapshot();
   const int n_play = static_cast<int>(snap.output_streams.size());
   const int n_rec = static_cast<int>(snap.input_streams.size());
   const int n_cards = sound_tab_card_count_clamped(app);
@@ -1911,7 +1911,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
           pw.set_default_sink(snap.sinks[static_cast<size_t>(rr)].node_id);
           app.settings.audioDefaultSinkName = snap.sinks[static_cast<size_t>(rr)].name;
           save_settings(app.settings);
-          const eh::audio::Snapshot verify = pw.snapshot();
+          const eh::audio::AudioSummary verify = pw.snapshot();
           eh::settings::sound_log::SoundLog::instance().writef(
               "dd-apply dd=0 row=%d node=%u sink='%s' now_default_sink=%u", rr,
               snap.sinks[static_cast<size_t>(rr)].node_id,
@@ -1920,7 +1920,7 @@ bool settings_sound_consume_pointer_down(App& app, int contentX, int contentW) {
           pw.set_default_source(snap.sources[static_cast<size_t>(rr)].node_id);
           app.settings.audioDefaultSourceName = snap.sources[static_cast<size_t>(rr)].name;
           save_settings(app.settings);
-          const eh::audio::Snapshot verify = pw.snapshot();
+          const eh::audio::AudioSummary verify = pw.snapshot();
           eh::settings::sound_log::SoundLog::instance().writef(
               "dd-apply dd=1 row=%d node=%u source='%s' now_default_source=%u", rr,
               snap.sources[static_cast<size_t>(rr)].node_id,

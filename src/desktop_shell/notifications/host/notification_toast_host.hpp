@@ -22,7 +22,7 @@ struct zwlr_layer_shell_v1;
 
 namespace eh::shell::notifications {
 
-class NotificationManager;
+class NotificationHub;
 
 struct ToastCard {
   std::uint32_t id = 0;
@@ -31,7 +31,7 @@ struct ToastCard {
 
 class NotificationToastHost {
 public:
-  explicit NotificationToastHost(NotificationManager& manager);
+  explicit NotificationToastHost(NotificationHub& manager);
   ~NotificationToastHost();
 
   NotificationToastHost(const NotificationToastHost&) = delete;
@@ -69,7 +69,7 @@ private:
   static std::uint32_t anchor_for_position(const std::string& position);
   int hit_test(double sx, double sy) const;
 
-  NotificationManager& mgr_;
+  NotificationHub& mgr_;
   eh::config::ShellNotificationsToastSettings cfg_{};
 
   wl_compositor* compositor_ = nullptr;

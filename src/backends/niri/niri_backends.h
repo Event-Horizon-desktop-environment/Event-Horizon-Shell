@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backends/interfaces/kbd_interface.h"
+#include "backends/contract/keyboard.h"
 
 #include <nlohmann/json.hpp>
 
@@ -8,9 +8,9 @@
 #include <string>
 #include <string_view>
 
-class NiriRuntime {
+class NiriSession {
 public:
-  NiriRuntime() = default;
+  NiriSession() = default;
 
   [[nodiscard]] bool canConnect() const;
   [[nodiscard]] const std::string& queryEndpoint() const;
@@ -29,25 +29,25 @@ private:
   mutable std::string m_endpoint;
 };
 
-bool niriSetOutputPower(NiriRuntime& state, bool on);
+bool niriSetOutputPower(NiriSession& state, bool on);
 
-class NiriKeyboardBackend {
+class NiriKeyboardSource {
 private:
-  NiriRuntime& m_state;
+  NiriSession& m_state;
 
 public:
-  explicit NiriKeyboardBackend(NiriRuntime& ref);
+  explicit NiriKeyboardSource(NiriSession& ref);
   [[nodiscard]] bool ready() const noexcept;
   [[nodiscard]] bool nextLayout() const;
-  [[nodiscard]] std::optional<LayoutInfo> currentLayout() const;
+  [[nodiscard]] std::optional<LayoutSet> currentLayout() const;
   [[nodiscard]] std::optional<std::string> activeLayoutName() const;
 };
 
-class NiriOutputBackend {
+class NiriOutputSource {
 private:
-  NiriRuntime& m_state;
+  NiriSession& m_state;
 
 public:
-  explicit NiriOutputBackend(NiriRuntime& ref);
+  explicit NiriOutputSource(NiriSession& ref);
   [[nodiscard]] std::optional<std::string> focusedOutputName() const;
 };

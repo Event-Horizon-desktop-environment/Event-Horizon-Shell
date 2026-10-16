@@ -73,7 +73,7 @@ void Manager::start() {
   }
 }
 
-void Manager::set_change_callback(ChangeCallback cb) {
+void Manager::set_change_callback(StateChangeHook cb) {
   on_change_ = std::move(cb);
 }
 

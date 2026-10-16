@@ -8,29 +8,29 @@
 
 namespace eh::notify {
 
-inline eh::shell::notifications::NotificationManager*& instancePtr() {
-  static eh::shell::notifications::NotificationManager* ptr = nullptr;
+inline eh::shell::notifications::NotificationHub*& instancePtr() {
+  static eh::shell::notifications::NotificationHub* ptr = nullptr;
   return ptr;
 }
 
-inline void setInstance(eh::shell::notifications::NotificationManager* manager) { instancePtr() = manager; }
+inline void setInstance(eh::shell::notifications::NotificationHub* manager) { instancePtr() = manager; }
 
-inline eh::shell::notifications::NotificationManager* instance() { return instancePtr(); }
+inline eh::shell::notifications::NotificationHub* instance() { return instancePtr(); }
 
 inline void error(std::string app, std::string title, std::string body) {
   if (auto* m = instancePtr()) {
-    (void)m->addInternal(std::move(app), std::move(title), std::move(body), eh::shell::notifications::Urgency::Critical);
+    (void)m->postInternal(std::move(app), std::move(title), std::move(body), eh::shell::notifications::AlertLevel::Critical);
     return;
   }
-  push_internal(app, title, body, static_cast<int>(eh::shell::notifications::Urgency::Critical));
+  push_internal(app, title, body, static_cast<int>(eh::shell::notifications::AlertLevel::Critical));
 }
 
 inline void info(std::string app, std::string title, std::string body) {
   if (auto* m = instancePtr()) {
-    (void)m->addInternal(std::move(app), std::move(title), std::move(body));
+    (void)m->postInternal(std::move(app), std::move(title), std::move(body));
     return;
   }
-  push_internal(app, title, body, static_cast<int>(eh::shell::notifications::Urgency::Normal));
+  push_internal(app, title, body, static_cast<int>(eh::shell::notifications::AlertLevel::Normal));
 }
 
 }

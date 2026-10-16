@@ -81,7 +81,7 @@ void UDisks2DriveService::start() {
   if (ok) started_ = true;
 }
 
-void UDisks2DriveService::set_change_callback(ChangeCallback cb) {
+void UDisks2DriveService::set_change_callback(StateChangeHook cb) {
    
   std::lock_guard<std::mutex> lock(mtx_);
   on_change_ = std::move(cb);

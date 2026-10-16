@@ -13,7 +13,7 @@ struct wl_region;
 
 namespace eh::wayland {
 
-class WaylandConnection;
+class WaylandLink;
 
 // RAII wrapper around zwp_relative_pointer_v1.
 // Gives relative motion deltas (dx, dy) for use alongside pointer lock.

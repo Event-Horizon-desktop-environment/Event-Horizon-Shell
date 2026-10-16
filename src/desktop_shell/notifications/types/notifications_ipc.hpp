@@ -13,7 +13,7 @@
 
 // Cross-process notification bus contract.
 //
-// The NotificationManager + D-Bus service + toast host live in the
+// The NotificationHub + D-Bus service + toast host live in the
 // `horizon-notifications` child. Producers (supervisor `notify` command,
 // mpris now-playing, the settings test button) publish framed `notify.push`
 // events; the child subscribes and owns the authoritative state. The child
@@ -46,12 +46,12 @@ inline constexpr std::int32_t kArtMaxDim = 160;
 
 // Image serialization (downscale + inline blob).
 
-inline std::uint64_t art_payload_size(const eh::shell::notifications::NotificationImageData& img) {
+inline std::uint64_t art_payload_size(const eh::shell::notifications::NotificationPicture& img) {
   return static_cast<std::uint64_t>(img.width) * img.height * 4;
 }
 
-inline eh::shell::notifications::NotificationImageData downscale_art(
-    const eh::shell::notifications::NotificationImageData& in) {
+inline eh::shell::notifications::NotificationPicture downscale_art(
+    const eh::shell::notifications::NotificationPicture& in) {
   if (in.width <= kArtMaxDim && in.height <= kArtMaxDim) {
     return in;
   }
@@ -62,7 +62,7 @@ inline eh::shell::notifications::NotificationImageData downscale_art(
   const int srcPb = (in.channels >= 4) ? 4 : 3;
   const int srcStride = in.rowStride > 0 ? in.rowStride : in.width * srcPb;
 
-  eh::shell::notifications::NotificationImageData out;
+  eh::shell::notifications::NotificationPicture out;
   out.width = dw;
   out.height = dh;
   out.rowStride = dw * 4;
@@ -111,7 +111,7 @@ struct ImageBlobHeader {
 };
 
 inline std::vector<std::uint8_t> serialize_image_blob(
-    const eh::shell::notifications::NotificationImageData& img) {
+    const eh::shell::notifications::NotificationPicture& img) {
   ImageBlobHeader h;
   h.width = img.width;
   h.height = img.height;
@@ -129,7 +129,7 @@ inline std::vector<std::uint8_t> serialize_image_blob(
   return blob;
 }
 
-inline std::optional<eh::shell::notifications::NotificationImageData> deserialize_image_blob(
+inline std::optional<eh::shell::notifications::NotificationPicture> deserialize_image_blob(
     std::string_view blob) {
   if (blob.size() < sizeof(ImageBlobHeader)) return std::nullopt;
   ImageBlobHeader h;
@@ -138,7 +138,7 @@ inline std::optional<eh::shell::notifications::NotificationImageData> deserializ
       h.dataLen > blob.size() - sizeof(h)) {
     return std::nullopt;
   }
-  eh::shell::notifications::NotificationImageData out;
+  eh::shell::notifications::NotificationPicture out;
   out.width = h.width;
   out.height = h.height;
   out.rowStride = h.rowStride;
@@ -213,7 +213,7 @@ inline bool push_mpris(const std::string& key, const std::string& summary, const
 }
 
 inline bool push_mpris_art(const std::string& key,
-                           const eh::shell::notifications::NotificationImageData& img) {
+                           const eh::shell::notifications::NotificationPicture& img) {
   const auto blob = serialize_image_blob(downscale_art(img));
   std::string payload;
   payload.reserve(key.size() + blob.size() + 32);

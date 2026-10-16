@@ -20,7 +20,7 @@ struct zwlr_layer_shell_v1;
 struct zwlr_layer_surface_v1;
 
 namespace eh::wayland {
-class WaylandConnection;
+class WaylandLink;
 }  // namespace eh::wayland
 
 namespace eh::wallpaper {
@@ -43,7 +43,7 @@ struct WallpaperOutputLayer {
 };
 
 struct WallpaperRenderer {
-  std::unique_ptr<eh::wayland::WaylandConnection> conn{};
+  std::unique_ptr<eh::wayland::WaylandLink> conn{};
   wl_display* display = nullptr;
   wl_compositor* compositor = nullptr;
   wl_shm* shm = nullptr;

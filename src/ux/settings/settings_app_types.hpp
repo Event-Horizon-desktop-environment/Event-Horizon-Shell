@@ -373,7 +373,7 @@ struct SidebarItem {
 struct App {
   App();
 
-  eh::wayland::WaylandConnection wl{};
+  eh::wayland::WaylandLink wl{};
   eh::wayland::WaylandSeat seat{};
   eh::wayland::ClipboardService clipboard{};
   eh::wayland::GammaService* gammaService_ = nullptr;
@@ -645,7 +645,7 @@ struct App {
   std::int64_t soundRestartArmMonoMs = -1;
   std::int64_t soundRestartDoneMonoMs = -1;
 
-  std::optional<eh::audio::Snapshot> soundPaintSnapPending{};
+  std::optional<eh::audio::AudioSummary> soundPaintSnapPending{};
 
   int monitorsScaleSliderDragIdx = -1;
 
@@ -815,11 +815,11 @@ struct App {
   int wallpaperHoveredSlot = -1;
   std::string wallpaperHoveredPath{};
   float wallpaperHoverScale = 1.0f;
-  eh::shell::AnimationManager wallpaperHoverAnim{};
+  eh::shell::MotionTimeline wallpaperHoverAnim{};
 
   wl_callback* surfaceFrameCb = nullptr;
 
-  eh::shell::AnimationManager embedAnim{};
+  eh::shell::MotionTimeline embedAnim{};
   float embedPresentT = 1.f;
 
   m3::Toggle wifiToggle{};

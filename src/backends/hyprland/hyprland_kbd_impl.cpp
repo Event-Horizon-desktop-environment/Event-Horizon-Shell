@@ -2,14 +2,14 @@
 
 #include <nlohmann/json.hpp>
 
-HyprlandKeyboardBackend::HyprlandKeyboardBackend(wspace::hyprland::HyprlandRuntime& rt)
+HyprlandKeyboardSource::HyprlandKeyboardSource(wspace::hyprland::HyprlandSession& rt)
     : m_state(rt) {}
 
-bool HyprlandKeyboardBackend::ready() const noexcept {
+bool HyprlandKeyboardSource::ready() const noexcept {
   return m_state.sendQuery("j/devices").has_value();
 }
 
-bool HyprlandKeyboardBackend::nextLayout() const {
+bool HyprlandKeyboardSource::nextLayout() const {
   auto json = m_state.sendQuery("j/devices");
   if (!json.has_value() || !json->is_object()) { return false; }
 
@@ -28,7 +28,7 @@ bool HyprlandKeyboardBackend::nextLayout() const {
   return m_state.sendCommand("switchxkblayout '" + name + "' next").has_value();
 }
 
-std::optional<LayoutInfo> HyprlandKeyboardBackend::currentLayout() const {
+std::optional<LayoutSet> HyprlandKeyboardSource::currentLayout() const {
   auto json = m_state.sendQuery("j/devices");
   if (!json.has_value() || !json->is_object()) { return std::nullopt; }
 
@@ -41,7 +41,7 @@ std::optional<LayoutInfo> HyprlandKeyboardBackend::currentLayout() const {
   }
   if (!kb->is_object()) { return std::nullopt; }
 
-  LayoutInfo info;
+  LayoutSet info;
   auto names = kb->find("keymap_names");
   if (names != kb->end() && names->is_array()) {
     for (auto const& n : *names) {
@@ -61,7 +61,7 @@ std::optional<LayoutInfo> HyprlandKeyboardBackend::currentLayout() const {
   return info;
 }
 
-std::optional<std::string> HyprlandKeyboardBackend::activeLayoutName() const {
+std::optional<std::string> HyprlandKeyboardSource::activeLayoutName() const {
   auto state = currentLayout();
   if (!state.has_value() || state->activeIndex < 0 ||
       static_cast<std::size_t>(state->activeIndex) >= state->names.size()) {

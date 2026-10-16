@@ -49,7 +49,7 @@ struct AppState {
   AppState();
   ~AppState();
 
-  eh::wayland::WaylandConnection wl{};
+  eh::wayland::WaylandLink wl{};
   eh::wayland::WaylandSeat seat{};
   eh::wayland::ClipboardService clipboard{};
 
@@ -112,7 +112,7 @@ struct AppState {
   int liveWallpaperHoveredSlot = -1;
   std::string liveWallpaperHoveredPath{};
   float liveWallpaperHoverScale = 1.0f;
-  eh::shell::AnimationManager liveWallpaperHoverAnim{};
+  eh::shell::MotionTimeline liveWallpaperHoverAnim{};
 
   // Video hover preview (play in place).
   std::vector<cairo_surface_t*> liveWallpaperHoverVideoFrames{};

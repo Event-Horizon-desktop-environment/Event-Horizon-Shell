@@ -67,7 +67,7 @@ constexpr uint64_t kWatchdogIntervalMs = 30000;
 // Pick the primary output for the overview layer surface.
 // In multi-monitor mode, this is the largest output.  In single-monitor mode,
 // this is also the largest output (the one where the dock lives).
-wl_output* pick_primary_output(eh::wayland::WaylandConnection* wl) {
+wl_output* pick_primary_output(eh::wayland::WaylandLink* wl) {
   if (!wl) return nullptr;
   return wl->pick_largest_logical_output().output;
 }
@@ -422,7 +422,7 @@ void Host::keyboard_modifiers(void* data, wl_keyboard*, uint32_t, uint32_t mods_
 void Host::keyboard_repeat_info(void*, wl_keyboard*, int32_t, int32_t) {
 }
 
-Host::Host(ShellCtx& ctx, std::unique_ptr<eh::wayland::WaylandConnection> wl)
+Host::Host(ShellCtx& ctx, std::unique_ptr<eh::wayland::WaylandLink> wl)
     : ctx_(ctx), wl_(std::move(wl)) {
   input_ = std::make_unique<Input>(*this);
   capture_ = std::make_unique<Capture>(*this);

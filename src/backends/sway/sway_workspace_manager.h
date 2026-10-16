@@ -1,6 +1,8 @@
 #pragma once
 
-#include "backends/interfaces/workspace_manager.h"
+#include "backends/contract/desk_types.h"
+#include "backends/contract/desk_source.h"
+#include "backends/contract/output_link.h"
 
 #include <chrono>
 #include <cstdint>
@@ -12,14 +14,14 @@
 #include <vector>
 
 namespace wspace::sway {
-class SwayRuntime;
+class SwaySession;
 }
 
-class SwayWorkspaceManager final : public IWorkspaceManager,
-                                    public IOutputNameLookup,
-                                    public ISocketConnector {
+class SwayWorkspaceManager final : public IDeskSource,
+                                    public IOutputResolver,
+                                    public ILinkOpener {
 public:
-  explicit SwayWorkspaceManager(wspace::sway::SwayRuntime& runtime);
+  explicit SwayWorkspaceManager(wspace::sway::SwaySession& runtime);
   ~SwayWorkspaceManager() override;
 
   SwayWorkspaceManager(const SwayWorkspaceManager&) = delete;
@@ -27,55 +29,55 @@ public:
 
   [[nodiscard]] const char* name() const override { return "sway-ipc"; }
   [[nodiscard]] bool ready() const noexcept override;
-  void onStateChange(IWorkspaceManager::Notify callback) override;
+  [[nodiscard]] int eventFd() const noexcept { return m_fd; }
+  void onStateChange(IDeskSource::Notify callback) override;
   void setOutputResolver(Resolver resolver) override;
   bool openConnection() override;
-  void jumpTo(const std::string& id) override;
-  void jumpToOnOutput(wl_output* output, const std::string& id) override;
-  void jumpToOnOutput(wl_output* output, const DeskRegion& region) override;
-  [[nodiscard]] std::vector<DeskRegion> allRegions() const override;
-  [[nodiscard]] std::vector<DeskRegion> regionsOnOutput(wl_output* output) const override;
   [[nodiscard]] std::unordered_map<std::string, std::vector<std::string>>
   appsByDesk(wl_output* output) const override;
+  [[nodiscard]] std::vector<DeskSlot> regionsOnOutput(wl_output* output) const override;
+  [[nodiscard]] std::vector<DeskSlot> allRegions() const override;
+  void jumpToOnOutput(wl_output* output, const DeskSlot& region) override;
+  void jumpToOnOutput(wl_output* output, const std::string& id) override;
+  void jumpTo(const std::string& id) override;
   void teardown() override;
 
-  [[nodiscard]] int eventFd() const noexcept { return m_fd; }
-
 private:
-  struct WorkspaceState {
-    std::string name;
-    std::string output;
-    bool visible = false;
+  struct WorkspaceRecord {
+    bool occupied = false;
     bool urgent = false;
+    bool visible = false;
     int num = -1;
     std::size_t ordinal = 0;
-    bool occupied = false;
+    std::string output;
+    std::string name;
 
-    bool operator==(const WorkspaceState&) const = default;
+    bool operator==(const WorkspaceRecord&) const = default;
   };
 
-  void openStream();
-  void closeIfOpen(bool scheduleRetry);
-  void planRetry();
-  void drainEvents();
-  void processMessages();
-  bool onIpcMessage(std::uint32_t type, const std::string& payload);
-  bool loadWorkspaceList(const std::string& payload);
+  [[nodiscard]] int resolveWsId(const std::string& id) const;
+  static bool swayOrder(WorkspaceRecord const& a, WorkspaceRecord const& b);
+
   bool loadTree(const std::string& payload);
-  void fetchSnapshot();
+  bool loadWorkspaceList(const std::string& payload);
+  bool onIpcMessage(std::uint32_t type, const std::string& payload);
+  void processMessages();
+  void drainEvents();
   void fetchTree();
+  void fetchSnapshot();
   void writeMessage(std::uint32_t type, std::string_view payload);
+  void planRetry();
+  void closeIfOpen(bool scheduleRetry);
+  void openStream();
   void emitChange() const;
 
-  [[nodiscard]] int resolveWsId(const std::string& id) const;
-
-  wspace::sway::SwayRuntime& m_backend;
+  wspace::sway::SwaySession& m_backend;
   int m_fd = -1;
   std::vector<char> m_buf;
-  std::vector<WorkspaceState> m_spaces;
+  std::vector<WorkspaceRecord> m_spaces;
   std::unordered_map<std::string, std::size_t> m_occMap;
   std::unordered_map<std::string, std::vector<std::string>> m_appMap;
-  IWorkspaceManager::Notify m_notify;
+  IDeskSource::Notify m_notify;
   Resolver m_resolver;
   std::chrono::steady_clock::time_point m_retryAt{};
   std::chrono::seconds m_backoff{2};

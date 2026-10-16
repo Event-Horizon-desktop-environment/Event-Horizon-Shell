@@ -15,7 +15,7 @@ ColorManager& ColorManager::operator=(ColorManager&& other) noexcept {
 }
 
 ColorManager::~ColorManager() {
-  // The manager is a global proxy; WaylandConnection owns its lifetime.
+  // The manager is a global proxy; WaylandLink owns its lifetime.
   manager_ = nullptr;
 }
 

@@ -18,7 +18,7 @@ namespace eh::widgets {
 // UI code goes through the widget layer instead of calling the service
 // singleton directly.
 
-enum class BluetoothDeviceKind {
+enum class BluetoothPeerKind {
   Unknown,
   Headset,
   Headphones,
@@ -38,7 +38,7 @@ struct BluetoothDevice {
   std::string path;
   std::string address;
   std::string alias;
-  BluetoothDeviceKind kind = BluetoothDeviceKind::Unknown;
+  BluetoothPeerKind kind = BluetoothPeerKind::Unknown;
   bool paired = false;
   bool connected = false;
   bool connecting = false;
@@ -84,7 +84,7 @@ void bluetooth_stop_discovery();
 // Power the adapter on/off.
 void bluetooth_set_powered(bool on);
 // Return a material glyph name for the device kind.
-[[nodiscard]] const char* bluetooth_device_kind_glyph(BluetoothDeviceKind kind);
+[[nodiscard]] const char* bluetooth_device_kind_glyph(BluetoothPeerKind kind);
 // Connect to a device by its object path.
 void bluetooth_connect_device(const std::string& path);
 // Disconnect a device by its object path.

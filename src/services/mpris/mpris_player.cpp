@@ -38,7 +38,7 @@ static void trim_in_place(std::string& s) {
   while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
 }
 
-static std::optional<eh::shell::notifications::NotificationImageData> cairo_surface_to_notification_image(cairo_surface_t* surface) {
+static std::optional<eh::shell::notifications::NotificationPicture> cairo_surface_to_notification_image(cairo_surface_t* surface) {
    
   if (!surface || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
     eh::shell_log::mpris_dbus("cairo_surface_to_notification_image: invalid surface");
@@ -59,7 +59,7 @@ static std::optional<eh::shell::notifications::NotificationImageData> cairo_surf
   const unsigned char* src = cairo_image_surface_get_data(surface);
   const int src_stride = cairo_image_surface_get_stride(surface);
 
-  eh::shell::notifications::NotificationImageData img;
+  eh::shell::notifications::NotificationPicture img;
   img.width = w;
   img.height = h;
   img.rowStride = w * 4;
@@ -898,7 +898,7 @@ void DockMpris::update_now_playing_art_assume_locked() {
                               " last_attempt=\"", art_last_attempt_url_, "\"");
     return;
   }
-  std::optional<eh::shell::notifications::NotificationImageData> album_art =
+  std::optional<eh::shell::notifications::NotificationPicture> album_art =
       cairo_surface_to_notification_image(s.art.get());
   eh::shell_log::mpris_dbus("update_now_playing_art: key=\"", last_track_notify_key_, "\" art=", album_art.has_value());
   if (album_art) {

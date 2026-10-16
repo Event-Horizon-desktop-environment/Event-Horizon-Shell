@@ -12,7 +12,7 @@ namespace eh::wayland {
 
 class KeyboardShortcutsInhibit {
 public:
-  using StateCallback = std::function<void(bool active)>;
+  using StateHandler = std::function<void(bool active)>;
 
   KeyboardShortcutsInhibit() = default;
   KeyboardShortcutsInhibit(const KeyboardShortcutsInhibit&) = delete;
@@ -27,7 +27,7 @@ public:
   void uninhibit();
   void cleanup();
 
-  void set_state_callback(StateCallback cb) { stateCb_ = std::move(cb); }
+  void set_state_callback(StateHandler cb) { stateCb_ = std::move(cb); }
 
   explicit operator bool() const { return inhibitor_ != nullptr; }
 
@@ -37,7 +37,7 @@ private:
 
   zwp_keyboard_shortcuts_inhibit_manager_v1* manager_ = nullptr;
   zwp_keyboard_shortcuts_inhibitor_v1* inhibitor_ = nullptr;
-  StateCallback stateCb_;
+  StateHandler stateCb_;
 
   static constexpr zwp_keyboard_shortcuts_inhibitor_v1_listener kListener_{
     .active = active_tramp,

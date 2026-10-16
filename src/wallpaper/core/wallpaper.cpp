@@ -386,7 +386,7 @@ WallpaperRenderer::~WallpaperRenderer() {
 bool wallpaper_renderer_init(WallpaperRenderer& r) {
   WP_SCOPE();
   if (!r.conn) {
-    r.conn = std::make_unique<eh::wayland::WaylandConnection>();
+    r.conn = std::make_unique<eh::wayland::WaylandLink>();
     if (!r.conn->connect(false)) {
       WP_LOG("connect failed");
       r.conn.reset();

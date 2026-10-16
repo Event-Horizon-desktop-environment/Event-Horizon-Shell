@@ -41,9 +41,9 @@ volatile sig_atomic_t g_notif_signal = 0;
 
 void notif_signal_handler(int) { g_notif_signal = 1; }
 
-void arm_notification_expiry_timer(int timer_fd, const NotificationManager& mgr) {
+void arm_notification_expiry_timer(int timer_fd, const NotificationHub& mgr) {
   if (timer_fd < 0) return;
-  const int ms = mgr.nextExpiryTimeoutMs();
+  const int ms = mgr.nextExpiryDelayMs();
   itimerspec its{};
   its.it_interval.tv_sec = 0;
   its.it_interval.tv_nsec = 0;
@@ -82,7 +82,7 @@ std::vector<std::string> split_text_fields(const std::string& payload, char sep)
 // Dispatch one `notify.push` payload. GOTCHA: the `mpris-art` tail is a raw
 // RGBA blob and CAN contain kFieldSep bytes, so it is parsed by position, never
 // tokenized. Only `internal` / `mpris` are safe to tokenize (text fields).
-void handle_notify_push(NotificationManager& mgr, const std::string& payload,
+void handle_notify_push(NotificationHub& mgr, const std::string& payload,
                         std::unordered_map<std::string, MprisEntry>& mpris_entries) {
   namespace diag = eh::shell::notifications::diag;
   constexpr std::size_t kKindArtLen = sizeof(eh::notify::kKindMprisArt) - 1;
@@ -121,8 +121,8 @@ void handle_notify_push(NotificationManager& mgr, const std::string& payload,
     const int artH = img->height;
     diag::pipeline_stats().noteArtAttached();
     it->second.id = mgr.addOrReplace(it->second.id, "Media", it->second.summary, it->second.body,
-                                     Urgency::Normal, kDefaultNotificationTimeoutMs,
-                                     NotificationOrigin::Internal, {}, std::nullopt, std::move(*img));
+                                     AlertLevel::Normal, kDefaultNotificationTimeoutMs,
+                                     NoticeSource::Internal, {}, std::nullopt, std::move(*img));
     debug_log("notifications", "mpris-art: attached id=%u (%dx%d)", it->second.id, artW,
               artH);
     return;
@@ -139,8 +139,8 @@ void handle_notify_push(NotificationManager& mgr, const std::string& payload,
     e.summary = parts[2];
     e.body = parts[3];
     diag::pipeline_stats().noteMprisRx();
-    e.id = mgr.addOrReplace(e.id, "Media", e.summary, e.body, Urgency::Normal,
-                            kDefaultNotificationTimeoutMs, NotificationOrigin::Internal);
+    e.id = mgr.addOrReplace(e.id, "Media", e.summary, e.body, AlertLevel::Normal,
+                            kDefaultNotificationTimeoutMs, NoticeSource::Internal);
     mpris_entries[key] = std::move(e);
     debug_log("notifications", "mpris: key=%s id=%u", key.c_str(), mpris_entries[key].id);
     return;
@@ -151,15 +151,15 @@ void handle_notify_push(NotificationManager& mgr, const std::string& payload,
       payload.compare(0, kKindInternalLen, eh::notify::kKindInternal) == 0) {
     const auto parts = split_text_fields(payload, eh::notify::kFieldSep);
     if (parts.size() < 5) return;
-    int urgency = static_cast<int>(Urgency::Normal);
+    int urgency = static_cast<int>(AlertLevel::Normal);
     try {
       urgency = std::stoi(parts[4]);
     } catch (...) {
     }
-    if (urgency < static_cast<int>(Urgency::Low)) urgency = static_cast<int>(Urgency::Low);
-    if (urgency > static_cast<int>(Urgency::Critical)) urgency = static_cast<int>(Urgency::Critical);
-    (void)mgr.addOrReplace(0, parts[1], parts[2], parts[3], static_cast<Urgency>(urgency),
-                           mgr.serverDefaultTimeoutMs(), NotificationOrigin::Internal);
+    if (urgency < static_cast<int>(AlertLevel::Low)) urgency = static_cast<int>(AlertLevel::Low);
+    if (urgency > static_cast<int>(AlertLevel::Critical)) urgency = static_cast<int>(AlertLevel::Critical);
+    (void)mgr.addOrReplace(0, parts[1], parts[2], parts[3], static_cast<AlertLevel>(urgency),
+                           mgr.serverDefaultTimeoutMs(), NoticeSource::Internal);
   }
 }
 
@@ -167,7 +167,7 @@ void handle_notify_push(NotificationManager& mgr, const std::string& payload,
 // child owns the layer-shell surface, so this is the port of the supervisor's
 // old sync_notification_toast_host. Re-binds (shutdown + initialize) when the
 // resolved output changes so the Settings display picker takes effect live.
-void sync_toast_host(eh::wayland::WaylandConnection& conn, NotificationToastHost& toast,
+void sync_toast_host(eh::wayland::WaylandLink& conn, NotificationToastHost& toast,
                      const eh::config::ShellNotificationsSettings& ncfg, bool& toast_active,
                      wl_output*& bound_output) {
   if (!ncfg.toast.layerShellEnabled || !conn.compositor() || !conn.shm() || !conn.layer_shell()) {
@@ -208,20 +208,20 @@ void sync_toast_host(eh::wayland::WaylandConnection& conn, NotificationToastHost
 int run_notifications_standalone() {
   eh::proc::install_parent_death_guard();
 
-  eh::wayland::WaylandConnection conn;
+  eh::wayland::WaylandLink conn;
   if (!conn.connect(false)) {
     std::cerr << "[horizon-notifications] WAYLAND_DISPLAY not set or compositor unavailable.\n";
     return 1;
   }
 
-  NotificationManager mgr;
+  NotificationHub mgr;
   NotificationToastHost toast_host(mgr);
   eh::notify::setInstance(&mgr);
 
   eh::config::shell_config_reload_from_disk_now(true);
   const eh::config::ShellNotificationsSettings ncfg = eh::config::shell_config_snapshot().notifications;
   mgr.setServerDefaultTimeoutMs(ncfg.defaultTimeoutMs);
-  mgr.setDoNotDisturb(ncfg.doNotDisturb);
+  mgr.setQuietMode(ncfg.doNotDisturb);
 
   bool toast_active = false;
   wl_output* toast_output = nullptr;
@@ -234,7 +234,7 @@ int run_notifications_standalone() {
   }
 
   int event_cb_token = -1;
-  event_cb_token = mgr.addEventCallback(
+  event_cb_token = mgr.subscribeEvents(
       [&](const Notification&, NotificationEvent) {
         arm_notification_expiry_timer(timer_fd, mgr);
         DeferredCall::callLater([&]() {
@@ -242,11 +242,11 @@ int run_notifications_standalone() {
         });
       });
 
-  mgr.setStateCallback([&]() {
+  mgr.setStateHandler([&]() {
     if (mgr.doNotDisturb()) {
       const auto active = mgr.all();
       for (const auto& n : active) {
-        (void)mgr.close(n.id, CloseReason::Dismissed);
+        (void)mgr.close(n.id, DismissReason::Dismissed);
       }
     }
     arm_notification_expiry_timer(timer_fd, mgr);
@@ -282,7 +282,7 @@ int run_notifications_standalone() {
           eh::config::shell_config_reload_from_disk_now();
           const auto& sc = eh::config::shell_config_snapshot();
           mgr.setServerDefaultTimeoutMs(sc.notifications.defaultTimeoutMs);
-          mgr.setDoNotDisturb(sc.notifications.doNotDisturb);
+          mgr.setQuietMode(sc.notifications.doNotDisturb);
           sync_toast_host(conn, toast_host, sc.notifications, toast_active, toast_output);
         }
       });
@@ -362,9 +362,9 @@ int run_notifications_standalone() {
       std::uint64_t expirations = 0;
       (void)read(timer_fd, &expirations, sizeof(expirations));
       if (dbus) {
-        dbus->processExpired();
+        dbus->sweepExpired();
       } else {
-        mgr.processExpired();
+        mgr.sweepExpired();
       }
       arm_notification_expiry_timer(timer_fd, mgr);
     }

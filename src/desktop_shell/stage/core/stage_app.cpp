@@ -59,7 +59,7 @@ void stage_build_overview_ctx(StageApp& app) {
 }
 
 bool stage_init_on_display(StageApp& app) {
-  app.wl = std::make_unique<eh::wayland::WaylandConnection>();
+  app.wl = std::make_unique<eh::wayland::WaylandLink>();
   if (!app.wl->connect(true)) {
     std::cerr << "[stage] Failed to connect own wl_display\n";
     return false;

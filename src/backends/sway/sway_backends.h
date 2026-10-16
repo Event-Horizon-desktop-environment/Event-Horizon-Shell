@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backends/interfaces/kbd_interface.h"
+#include "backends/contract/keyboard.h"
 
 #include <nlohmann/json.hpp>
 
@@ -12,11 +12,11 @@
 
 namespace wspace::sway {
 
-class SwayRuntime {
+class SwaySession {
 public:
   static constexpr std::string_view kIpcMagic = "i3-ipc";
 
-  SwayRuntime() = default;
+  SwaySession() = default;
 
   [[nodiscard]] bool canConnect() const;
   [[nodiscard]] const std::string& queryEndpoint() const;
@@ -42,27 +42,27 @@ private:
   mutable std::string m_endpoint;
 };
 
-bool swaySetOutputPower(SwayRuntime& ctx, bool on);
+bool swaySetOutputPower(SwaySession& ctx, bool on);
 
 } // namespace wspace::sway
 
-class SwayKeyboardBackend {
+class SwayKeyboardSource {
 private:
-  wspace::sway::SwayRuntime& m_state;
+  wspace::sway::SwaySession& m_state;
 
 public:
-  explicit SwayKeyboardBackend(wspace::sway::SwayRuntime& ref);
+  explicit SwayKeyboardSource(wspace::sway::SwaySession& ref);
   [[nodiscard]] bool ready() const noexcept;
   [[nodiscard]] bool nextLayout() const;
-  [[nodiscard]] std::optional<LayoutInfo> currentLayout() const;
+  [[nodiscard]] std::optional<LayoutSet> currentLayout() const;
   [[nodiscard]] std::optional<std::string> activeLayoutName() const;
 };
 
-class SwayOutputBackend {
+class SwayOutputSource {
 private:
-  wspace::sway::SwayRuntime& m_ctx;
+  wspace::sway::SwaySession& m_ctx;
 
 public:
-  explicit SwayOutputBackend(wspace::sway::SwayRuntime& ref);
+  explicit SwayOutputSource(wspace::sway::SwaySession& ref);
   [[nodiscard]] std::optional<std::string> focusedOutputName() const;
 };

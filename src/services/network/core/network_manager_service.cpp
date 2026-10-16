@@ -943,7 +943,7 @@ void NetworkManagerService::handle_wake() {
   if (onChange_) onChange_(snapshot());
 }
 
-void NetworkManagerService::set_change_callback(ChangeCallback cb) {
+void NetworkManagerService::set_change_callback(StateChangeHook cb) {
    
   onChange_ = std::move(cb);
 }
@@ -971,11 +971,11 @@ void NetworkManagerService::request_scan() {
   }
 }
 
-Snapshot NetworkManagerService::snapshot() const {
+NetState NetworkManagerService::snapshot() const {
    
   std::lock_guard lk(d->stateMtx);
   const auto& st = d->state;
-  Snapshot s;
+  NetState s;
   switch (st.kind) {
     case NetworkConnectivity::None:    s.kind = ConnectivityKind::None; break;
     case NetworkConnectivity::Wired:   s.kind = ConnectivityKind::Wired; break;

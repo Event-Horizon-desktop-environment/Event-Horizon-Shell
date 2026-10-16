@@ -58,43 +58,43 @@ T get_or(const IfaceProps& p, const char* key, T fallback) {
   }
 }
 
-BluetoothDeviceKind classify_icon(const std::string& icon) {
+BluetoothPeerKind classify_icon(const std::string& icon) {
    
-  if (icon == "audio-headset") return BluetoothDeviceKind::Headset;
-  if (icon == "audio-headphones") return BluetoothDeviceKind::Headphones;
-  if (icon == "audio-card" || icon == "audio-speakers") return BluetoothDeviceKind::Speaker;
-  if (icon == "input-mouse") return BluetoothDeviceKind::Mouse;
-  if (icon == "input-keyboard") return BluetoothDeviceKind::Keyboard;
-  if (icon == "input-gaming") return BluetoothDeviceKind::Gamepad;
-  if (icon == "phone") return BluetoothDeviceKind::Phone;
-  if (icon == "computer") return BluetoothDeviceKind::Computer;
-  if (icon == "video-display") return BluetoothDeviceKind::Tv;
-  return BluetoothDeviceKind::Unknown;
+  if (icon == "audio-headset") return BluetoothPeerKind::Headset;
+  if (icon == "audio-headphones") return BluetoothPeerKind::Headphones;
+  if (icon == "audio-card" || icon == "audio-speakers") return BluetoothPeerKind::Speaker;
+  if (icon == "input-mouse") return BluetoothPeerKind::Mouse;
+  if (icon == "input-keyboard") return BluetoothPeerKind::Keyboard;
+  if (icon == "input-gaming") return BluetoothPeerKind::Gamepad;
+  if (icon == "phone") return BluetoothPeerKind::Phone;
+  if (icon == "computer") return BluetoothPeerKind::Computer;
+  if (icon == "video-display") return BluetoothPeerKind::Tv;
+  return BluetoothPeerKind::Unknown;
 }
 
-BluetoothDeviceKind classify_class(uint32_t cod) {
+BluetoothPeerKind classify_class(uint32_t cod) {
    
   const uint8_t major = (cod >> 8) & 0x1f;
   const uint8_t minor = (cod >> 2) & 0x3f;
   switch (major) {
-    case 0x01: return BluetoothDeviceKind::Computer;
-    case 0x02: return BluetoothDeviceKind::Phone;
+    case 0x01: return BluetoothPeerKind::Computer;
+    case 0x02: return BluetoothPeerKind::Phone;
     case 0x04:
       switch (minor >> 4) {
-        case 1: return BluetoothDeviceKind::Headphones;
-        case 2: return BluetoothDeviceKind::Speaker;
-        case 4: return BluetoothDeviceKind::Microphone;
-        case 6: return BluetoothDeviceKind::Tv;
-        default: return (minor & 0x04) ? BluetoothDeviceKind::Headset : BluetoothDeviceKind::Unknown;
+        case 1: return BluetoothPeerKind::Headphones;
+        case 2: return BluetoothPeerKind::Speaker;
+        case 4: return BluetoothPeerKind::Microphone;
+        case 6: return BluetoothPeerKind::Tv;
+        default: return (minor & 0x04) ? BluetoothPeerKind::Headset : BluetoothPeerKind::Unknown;
       }
     case 0x05:
-      if ((minor >> 2) == 1) return BluetoothDeviceKind::Keyboard;
-      if ((minor >> 2) == 2) return BluetoothDeviceKind::Mouse;
-      if ((minor >> 2) == 3) return BluetoothDeviceKind::Gamepad;
-      return BluetoothDeviceKind::Unknown;
-    case 0x07: return BluetoothDeviceKind::Watch;
-    case 0x08: return BluetoothDeviceKind::Gamepad;
-    default: return BluetoothDeviceKind::Unknown;
+      if ((minor >> 2) == 1) return BluetoothPeerKind::Keyboard;
+      if ((minor >> 2) == 2) return BluetoothPeerKind::Mouse;
+      if ((minor >> 2) == 3) return BluetoothPeerKind::Gamepad;
+      return BluetoothPeerKind::Unknown;
+    case 0x07: return BluetoothPeerKind::Watch;
+    case 0x08: return BluetoothPeerKind::Gamepad;
+    default: return BluetoothPeerKind::Unknown;
   }
 }
 
@@ -113,7 +113,7 @@ DeviceInfo make_device(const sdbus::ObjectPath& path, const IfaceProps& props) {
   d.rssi = get_or<int16_t>(props, "RSSI", 0);
   const std::string icon = get_or<std::string>(props, "Icon", "");
   d.kind = classify_icon(icon);
-  if (d.kind == BluetoothDeviceKind::Unknown) {
+  if (d.kind == BluetoothPeerKind::Unknown) {
     const uint32_t cod = get_or<uint32_t>(props, "Class", 0);
     d.kind = classify_class(cod);
   }
@@ -310,13 +310,13 @@ void BluezService::refresh() {
   if (started_ && objmgr_) refresh_locked();
 }
 
-void BluezService::set_change_callback(ChangeCallback cb) {
+void BluezService::set_change_callback(StateChangeHook cb) {
    
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   on_change_ = std::move(cb);
 }
 
-Snapshot BluezService::snapshot() const {
+BluetoothSummary BluezService::snapshot() const {
    
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   return snap_;
@@ -509,7 +509,7 @@ void BluezService::on_bluez_properties_changed(sdbus::Message msg) {
         try {
           std::string icon = it->second.get<std::string>();
           dev.kind = classify_icon(icon);
-          if (dev.kind == BluetoothDeviceKind::Unknown) {
+          if (dev.kind == BluetoothPeerKind::Unknown) {
             auto cit = props.find("Class");
             if (cit != props.end()) {
               uint32_t cod = cit->second.get<uint32_t>();
@@ -519,7 +519,7 @@ void BluezService::on_bluez_properties_changed(sdbus::Message msg) {
         } catch (...) {}
       }
       it = props.find("Class");
-      if (it != props.end() && dev.kind == BluetoothDeviceKind::Unknown) {
+      if (it != props.end() && dev.kind == BluetoothPeerKind::Unknown) {
         try {
           uint32_t cod = it->second.get<uint32_t>();
           dev.kind = classify_class(cod);
@@ -1314,44 +1314,44 @@ void BluezService::run_set_powered_async(bool on) {
 
 // Helper functions.
 
-const char* bluetooth_device_kind_name(BluetoothDeviceKind kind) {
+const char* bluetooth_device_kind_name(BluetoothPeerKind kind) {
    
   switch (kind) {
-    case BluetoothDeviceKind::Headset: return "Headset";
-    case BluetoothDeviceKind::Headphones: return "Headphones";
-    case BluetoothDeviceKind::Earbuds: return "Earbuds";
-    case BluetoothDeviceKind::Speaker: return "Speaker";
-    case BluetoothDeviceKind::Microphone: return "Microphone";
-    case BluetoothDeviceKind::Mouse: return "Mouse";
-    case BluetoothDeviceKind::Keyboard: return "Keyboard";
-    case BluetoothDeviceKind::Phone: return "Phone";
-    case BluetoothDeviceKind::Computer: return "Computer";
-    case BluetoothDeviceKind::Gamepad: return "Gamepad";
-    case BluetoothDeviceKind::Watch: return "Watch";
-    case BluetoothDeviceKind::Tv: return "TV";
+    case BluetoothPeerKind::Headset: return "Headset";
+    case BluetoothPeerKind::Headphones: return "Headphones";
+    case BluetoothPeerKind::Earbuds: return "Earbuds";
+    case BluetoothPeerKind::Speaker: return "Speaker";
+    case BluetoothPeerKind::Microphone: return "Microphone";
+    case BluetoothPeerKind::Mouse: return "Mouse";
+    case BluetoothPeerKind::Keyboard: return "Keyboard";
+    case BluetoothPeerKind::Phone: return "Phone";
+    case BluetoothPeerKind::Computer: return "Computer";
+    case BluetoothPeerKind::Gamepad: return "Gamepad";
+    case BluetoothPeerKind::Watch: return "Watch";
+    case BluetoothPeerKind::Tv: return "TV";
     default: return "Device";
   }
 }
 
-const char* bluetooth_device_kind_glyph(BluetoothDeviceKind kind) {
+const char* bluetooth_device_kind_glyph(BluetoothPeerKind kind) {
    
   switch (kind) {
     // One distinct Material Symbols Rounded ligature per kind (all verified
     // present in the vendored font via hb-shape). Audio devices must NOT
     // collapse: A2DP sinks are headphones, HSP/HFP voice links are headset_mic,
     // LE buds are earbuds — only actual speakers get speaker.
-    case BluetoothDeviceKind::Headset: return "headset_mic";
-    case BluetoothDeviceKind::Headphones: return "headphones";
-    case BluetoothDeviceKind::Earbuds: return "earbuds";
-    case BluetoothDeviceKind::Speaker: return "speaker";
-    case BluetoothDeviceKind::Microphone: return "mic";
-    case BluetoothDeviceKind::Mouse: return "mouse";
-    case BluetoothDeviceKind::Keyboard: return "keyboard";
-    case BluetoothDeviceKind::Phone: return "smartphone";
-    case BluetoothDeviceKind::Computer: return "computer";
-    case BluetoothDeviceKind::Gamepad: return "gamepad";
-    case BluetoothDeviceKind::Watch: return "watch";
-    case BluetoothDeviceKind::Tv: return "tv";
+    case BluetoothPeerKind::Headset: return "headset_mic";
+    case BluetoothPeerKind::Headphones: return "headphones";
+    case BluetoothPeerKind::Earbuds: return "earbuds";
+    case BluetoothPeerKind::Speaker: return "speaker";
+    case BluetoothPeerKind::Microphone: return "mic";
+    case BluetoothPeerKind::Mouse: return "mouse";
+    case BluetoothPeerKind::Keyboard: return "keyboard";
+    case BluetoothPeerKind::Phone: return "smartphone";
+    case BluetoothPeerKind::Computer: return "computer";
+    case BluetoothPeerKind::Gamepad: return "gamepad";
+    case BluetoothPeerKind::Watch: return "watch";
+    case BluetoothPeerKind::Tv: return "tv";
     default: return "bluetooth";
   }
 }

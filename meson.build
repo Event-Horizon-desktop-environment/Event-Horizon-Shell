@@ -468,7 +468,6 @@ shell_cpp_sources = [
   'src/wl/core/connection.cpp',
   'src/wl/toplevel/workspaces.cpp',
   'src/backends/interfaces/compositor_ipc.cpp',
-  'src/backends/interfaces/power_actions.cpp',
   'src/backends/hyprland/hyprland_run_ctx.cpp',
   'src/backends/hyprland/hyprland_ev_handler.cpp',
   'src/backends/hyprland/hyprland_workspace_manager.cpp',

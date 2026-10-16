@@ -5,7 +5,7 @@
 namespace eh::shell::taskbar {
 
 // Supervisor-side: spawn/kill the split-out `horizon-taskbar` child. The child
-// owns the taskbar bar + app drawer + popups on its own WaylandConnection,
+// owns the taskbar bar + app drawer + popups on its own WaylandLink,
 // timer fds, settings inotify, and MPRIS listener, and tracks toplevels on its
 // own connection (mirroring `horizon-dock`).
 // Returns the spawned child pid, or -1 on failure.

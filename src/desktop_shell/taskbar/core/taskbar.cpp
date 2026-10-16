@@ -4248,11 +4248,11 @@ bool taskbar_init_on_display(TaskbarApp& app) {
   debug_log("taskbar", "init_on_display: BEGIN");
 
   // Create own isolated Wayland connection
-  app.wl = std::make_unique<eh::wayland::WaylandConnection>();
-  debug_log("taskbar", "init_on_display: connecting WaylandConnection");
+  app.wl = std::make_unique<eh::wayland::WaylandLink>();
+  debug_log("taskbar", "init_on_display: connecting WaylandLink");
   if (!app.wl->connect(true)) {
     std::cerr << "[taskbar] Failed to connect own wl_display\n";
-    debug_log("taskbar", "init_on_display FAIL: WaylandConnection::connect returned false");
+    debug_log("taskbar", "init_on_display FAIL: WaylandLink::connect returned false");
     return false;
   }
 
@@ -5663,7 +5663,7 @@ void taskbar_cleanup(TaskbarApp& app) {
   app.vkFailed = false;
 
   // Destroy own Wayland connection last
-  debug_log("taskbar", "cleanup: resetting WaylandConnection (wl=%p)", (void*)app.wl.get());
+  debug_log("taskbar", "cleanup: resetting WaylandLink (wl=%p)", (void*)app.wl.get());
   app.wl.reset();
   app.display = nullptr;
   app.compositor = nullptr;

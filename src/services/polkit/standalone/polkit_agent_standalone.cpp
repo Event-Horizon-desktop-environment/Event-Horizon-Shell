@@ -43,7 +43,7 @@ int run_polkit_agent_standalone() {
 
   eh::config::shell_config_reload_from_disk_now(true);
 
-  auto conn = std::make_unique<eh::wayland::WaylandConnection>();
+  auto conn = std::make_unique<eh::wayland::WaylandLink>();
   if (!conn->connect(false)) {
     // Registering with no way to prompt would leave polkitd waiting on an
     // answer nobody can type: fail fast instead and let the supervisor's
@@ -79,7 +79,7 @@ int run_polkit_agent_standalone() {
 
   auto& polkit = PolkitAuthService::instance();
   polkit.set_change_callback([&dialog, &conn]() {
-    const Snapshot snap = PolkitAuthService::instance().snapshot();
+    const PolkitState snap = PolkitAuthService::instance().snapshot();
     if (snap.has_request && snap.state != AuthState::Idle) {
       if (!dialog) return;
       wl_output* out = nullptr;

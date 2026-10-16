@@ -779,13 +779,13 @@ bool PipeWireService::started() const {
   return started_;
 }
 
-void PipeWireService::set_change_callback(ChangeCallback cb) {
+void PipeWireService::set_change_callback(StateChangeHook cb) {
    
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   on_change_ = std::move(cb);
 }
 
-Snapshot PipeWireService::snapshot() const {
+AudioSummary PipeWireService::snapshot() const {
    
   std::lock_guard<std::recursive_mutex> lock(mtx_);
   return snap_;
@@ -1012,7 +1012,7 @@ void PipeWireService::refresh_default_nodes_locked() {
 
 void PipeWireService::rebuild_snapshot_locked() {
    
-  Snapshot s{};
+  AudioSummary s{};
   s.available = snap_.available;
   s.default_sink = default_sink_;
   s.default_source = default_source_;

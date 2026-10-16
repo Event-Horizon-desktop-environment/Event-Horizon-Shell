@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backends/interfaces/kbd_interface.h"
+#include "backends/contract/keyboard.h"
 
 #include <cstdint>
 #include <functional>
@@ -12,21 +12,21 @@
 
 namespace wspace::hyprland {
 
-class HyprlandRuntime;
-class HyprlandEventHandler;
+class HyprlandSession;
+class HyprlandEventSink;
 
 struct SocketPaths {
   std::string req;
   std::string ev;
 };
 
-class HyprlandRuntime {
+class HyprlandSession {
 public:
-  HyprlandRuntime();
-  ~HyprlandRuntime();
+  HyprlandSession();
+  ~HyprlandSession();
 
-  HyprlandRuntime(const HyprlandRuntime&) = delete;
-  HyprlandRuntime& operator=(const HyprlandRuntime&) = delete;
+  HyprlandSession(const HyprlandSession&) = delete;
+  HyprlandSession& operator=(const HyprlandSession&) = delete;
 
   [[nodiscard]] bool canConnect() const noexcept { return m_fd >= 0; }
   [[nodiscard]] bool startSession();
@@ -38,8 +38,8 @@ public:
   void rescan();
   void shutdown();
 
-  void registerEventHandler(HyprlandEventHandler* handler);
-  void unregisterEventHandler(HyprlandEventHandler* handler);
+  void addEventSink(HyprlandEventSink* handler);
+  void removeEventSink(HyprlandEventSink* handler);
 
   [[nodiscard]] int pollHandle() const noexcept { return m_fd; }
   void handlePoll(short revents);
@@ -57,7 +57,7 @@ private:
   mutable bool m_pathsKnown = false;
   bool m_luaMode = false;
   mutable SocketPaths m_sockets;
-  std::vector<HyprlandEventHandler*> m_listeners;
+  std::vector<HyprlandEventSink*> m_listeners;
 };
 
 [[nodiscard]] bool hyprland_config_is_lua();
@@ -65,21 +65,21 @@ std::string fmtAddress(std::uint64_t addr);
 std::optional<std::uint64_t> parseHexAddress(std::string_view in);
 std::string canonicalWindowId(std::string_view raw);
 bool idMatch(std::string_view a, std::string_view b);
-bool setOutputPower(HyprlandRuntime& state, bool on);
+bool setOutputPower(HyprlandSession& state, bool on);
 
-class HyprlandEventHandler {
+class HyprlandEventSink {
 public:
-  explicit HyprlandEventHandler(HyprlandRuntime& rt);
-  HyprlandEventHandler(HyprlandEventHandler const&) = delete;
-  HyprlandEventHandler& operator=(HyprlandEventHandler const&) = delete;
-  virtual ~HyprlandEventHandler();
+  explicit HyprlandEventSink(HyprlandSession& rt);
+  HyprlandEventSink(HyprlandEventSink const&) = delete;
+  HyprlandEventSink& operator=(HyprlandEventSink const&) = delete;
+  virtual ~HyprlandEventSink();
 
   virtual void onEvent(std::string_view ev, std::string_view data) = 0;
   virtual void onCleanup() {}
   virtual void onStateChange() {}
 
 protected:
-  HyprlandRuntime& m_rt;
+  HyprlandSession& m_rt;
 };
 
 } // namespace wspace::hyprland
@@ -87,23 +87,23 @@ protected:
 bool hyprland_ipc_send(std::string_view command);
 std::optional<std::string> hyprland_ipc_request(std::string_view command);
 
-class HyprlandKeyboardBackend {
+class HyprlandKeyboardSource {
 private:
-  wspace::hyprland::HyprlandRuntime& m_state;
+  wspace::hyprland::HyprlandSession& m_state;
 
 public:
-  explicit HyprlandKeyboardBackend(wspace::hyprland::HyprlandRuntime& ref);
+  explicit HyprlandKeyboardSource(wspace::hyprland::HyprlandSession& ref);
   [[nodiscard]] bool ready() const noexcept;
   [[nodiscard]] bool nextLayout() const;
-  [[nodiscard]] std::optional<LayoutInfo> currentLayout() const;
+  [[nodiscard]] std::optional<LayoutSet> currentLayout() const;
   [[nodiscard]] std::optional<std::string> activeLayoutName() const;
 };
 
-class HyprlandOutputBackend {
+class HyprlandOutputSource {
 private:
-  wspace::hyprland::HyprlandRuntime& m_state;
+  wspace::hyprland::HyprlandSession& m_state;
 
 public:
-  explicit HyprlandOutputBackend(wspace::hyprland::HyprlandRuntime& ref);
+  explicit HyprlandOutputSource(wspace::hyprland::HyprlandSession& ref);
   [[nodiscard]] std::optional<std::string> focusedOutputName() const;
 };

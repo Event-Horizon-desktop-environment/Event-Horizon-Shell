@@ -430,7 +430,7 @@ void panel_start_tray_async(PanelApp& app) {
 }  // namespace
 
 bool panel_init_on_display(PanelApp& app) {
-  app.wl = std::make_unique<eh::wayland::WaylandConnection>();
+  app.wl = std::make_unique<eh::wayland::WaylandLink>();
   if (!app.wl->connect(true)) {
     std::cerr << "[panel] Failed to connect own wl_display\n";
     return false;

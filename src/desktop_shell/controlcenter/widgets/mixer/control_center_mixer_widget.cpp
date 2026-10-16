@@ -87,7 +87,7 @@ void enrich_stream_name_from_desktop(ControlCenterMixerStream& row) {
 std::vector<ControlCenterMixerStream> control_center_mixer_streams(const ControlCenterState* cs) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
 
   std::vector<ControlCenterMixerStream> out;
   out.reserve(s.output_streams.size());
@@ -117,7 +117,7 @@ std::vector<ControlCenterMixerStream> control_center_mixer_streams(const Control
 std::vector<ControlCenterMixerStream> control_center_input_mixer_streams(const ControlCenterState* cs) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
 
   std::vector<ControlCenterMixerStream> out;
   out.reserve(s.input_streams.size());

@@ -4,17 +4,17 @@
 #include <cstdlib>
 #include <string>
 
-MangoOutputBackend::MangoOutputBackend(wspace::mango::MangoRuntime& rt) : m_rt(rt) {
-  MANGOWM_DEBUG("MangoOutputBackend ctor this=%p", (void*)this);
+MangoOutputSource::MangoOutputSource(wspace::mango::MangoSession& rt) : m_rt(rt) {
+  MANGOWM_DEBUG("MangoOutputSource ctor this=%p", (void*)this);
 }
 
-std::optional<std::string> MangoOutputBackend::focusedOutputName() const {
+std::optional<std::string> MangoOutputSource::focusedOutputName() const {
   return std::nullopt;
 }
 
 namespace wspace::mango {
 
-bool mangoSetOutputPower(eh::wayland::WaylandConnection& wl, bool on) {
+bool mangoSetOutputPower(eh::wayland::WaylandLink& wl, bool on) {
   bool any = false;
   for (auto const& out : wl.logical_outputs()) {
     if (out.name.empty()) { continue; }

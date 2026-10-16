@@ -183,17 +183,17 @@ bool mango_json_scan_layout(const nlohmann::json& j, std::string* out) {
 
 std::string query_mango_live() {
   if (std::getenv("MANGO_INSTANCE_SIGNATURE") == nullptr) return {};
-  // Fresh runtime per query: request() mutates the endpoint cache, so a
+  // Fresh runtime per query: ipcQuery() mutates the endpoint cache, so a
   // shared instance would need external locking across paint threads.
-  wspace::mango::MangoRuntime rt;
+  wspace::mango::MangoSession rt;
   if (!rt.available()) return {};
   // NOTE: structured bindings over json::items() need C++17 compatible
   // iteration; kept explicit for -Werror builds.
-  if (auto r = rt.request("get all-monitors")) {
+  if (auto r = rt.ipcQuery("get all-monitors")) {
     std::string found;
     if (mango_json_scan_layout(*r, &found)) return found;
   }
-  if (auto r = rt.request("get all-tags")) {
+  if (auto r = rt.ipcQuery("get all-tags")) {
     std::string found;
     if (mango_json_scan_layout(*r, &found)) return found;
   }
@@ -306,8 +306,8 @@ bool layout_apply(const std::string& name) {
   if (mango) {
     // Wiki "Switching Layouts": `bind=SUPER,t,setlayout,tile`.
     if (std::getenv("MANGO_INSTANCE_SIGNATURE") == nullptr) return false;
-    wspace::mango::MangoRuntime rt;
-    return rt.available() && rt.dispatch("setlayout," + norm);
+    wspace::mango::MangoSession rt;
+    return rt.available() && rt.runCommand("setlayout," + norm);
   }
   bool liveOk = false;
   if (std::getenv("HYPRLAND_INSTANCE_SIGNATURE") != nullptr) {

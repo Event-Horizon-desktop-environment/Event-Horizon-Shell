@@ -20,7 +20,7 @@
 
 namespace {
 
-using eh::wayland::WaylandConnection;
+using eh::wayland::WaylandLink;
 
 void conn_out_geometry(void*, wl_output*, int32_t, int32_t, int32_t, int32_t, int32_t, const char*, const char*,
                               int32_t) {}
@@ -39,13 +39,13 @@ static void conn_log(const char* fmt, ...) {
 }
 
 void conn_out_mode(void* data, wl_output*, uint32_t, int32_t w, int32_t h, int32_t) {
-  auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+  auto* slot = static_cast<WaylandLink::OutputSlot*>(data);
   slot->mode_w = w;
   slot->mode_h = h;
 }
 
 void conn_out_done(void* data, wl_output*) {
-  auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+  auto* slot = static_cast<WaylandLink::OutputSlot*>(data);
   conn_log("wl_output.done: name=%s mode=(%dx%d) logical=(%dx%d) pos=(%d,%d) xdg=%p ready=%d scale=%d",
            slot->name.c_str(), slot->mode_w, slot->mode_h,
            slot->logical_w, slot->logical_h,
@@ -72,12 +72,12 @@ void conn_out_done(void* data, wl_output*) {
 }
 
 void conn_out_scale(void* data, wl_output*, int32_t factor) {
-  auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+  auto* slot = static_cast<WaylandLink::OutputSlot*>(data);
   if (factor > 0) slot->scale = factor;
 }
 
 void conn_out_name(void* data, wl_output*, const char* name) {
-  auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+  auto* slot = static_cast<WaylandLink::OutputSlot*>(data);
   if (name && name[0]) slot->name = name;
 }
 
@@ -93,7 +93,7 @@ static const wl_output_listener kConnWlOutputListener = {
 };
 
 void conn_xdg_logical_position(void* data, zxdg_output_v1*, int32_t x, int32_t y) {
-  auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+  auto* slot = static_cast<WaylandLink::OutputSlot*>(data);
   conn_log("xdg.logical_position: name=%s x=%d y=%d (was %d,%d)",
            slot->name.c_str(), x, y, slot->logical_x, slot->logical_y);
   slot->logical_x = x;
@@ -101,7 +101,7 @@ void conn_xdg_logical_position(void* data, zxdg_output_v1*, int32_t x, int32_t y
 }
 
 void conn_xdg_logical_size(void* data, zxdg_output_v1*, int32_t w, int32_t h) {
-  auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+  auto* slot = static_cast<WaylandLink::OutputSlot*>(data);
   conn_log("xdg.logical_size: name=%s w=%d h=%d (was %d,%d) ready_before=%d",
            slot->name.c_str(), w, h, slot->logical_w, slot->logical_h, (int)slot->ready);
   slot->logical_w = w;
@@ -130,17 +130,17 @@ static const zxdg_output_v1_listener kConnXdgOutputListener = {
 
 namespace eh::wayland {
 
-WaylandConnection::WaylandConnection()
-    : waylandWorkspaces_(std::make_unique<WaylandWorkspaces>(runtimeRegistry_)) {
-  MANGOWM_DEBUG("WaylandConnection ctor this=%p", (void*)this);
+WaylandLink::WaylandLink()
+    : waylandWorkspaces_(std::make_unique<CompositorWorkspaces>(runtimeRegistry_)) {
+  MANGOWM_DEBUG("WaylandLink ctor this=%p", (void*)this);
 }
 
-WaylandConnection::~WaylandConnection() {
-  MANGOWM_DEBUG("WaylandConnection dtor this=%p", (void*)this);
+WaylandLink::~WaylandLink() {
+  MANGOWM_DEBUG("WaylandLink dtor this=%p", (void*)this);
   disconnect();
 }
 
-void WaylandConnection::clear_tracked_outputs_() {
+void WaylandLink::clear_tracked_outputs_() {
   for (auto& t : tracked_outputs_) {
     if (!t) continue;
     if (t->xdg) {
@@ -158,7 +158,7 @@ void WaylandConnection::clear_tracked_outputs_() {
   logical_outputs_.shrink_to_fit();
 }
 
-void WaylandConnection::bind_xdg_for_tracked_() {
+void WaylandLink::bind_xdg_for_tracked_() {
   if (!xdgOutputMgr_) return;
   for (auto& t : tracked_outputs_) {
     if (!t || t->xdg || !t->output) continue;
@@ -167,7 +167,7 @@ void WaylandConnection::bind_xdg_for_tracked_() {
   }
 }
 
-void WaylandConnection::rebuild_logical_snapshot_() {
+void WaylandLink::rebuild_logical_snapshot_() {
   logical_outputs_.clear();
   std::vector<const OutputSlot*> tmp;
   tmp.reserve(tracked_outputs_.size());
@@ -185,7 +185,7 @@ void WaylandConnection::rebuild_logical_snapshot_() {
   }
 }
 
-void WaylandConnection::refresh_logical_outputs() {
+void WaylandLink::refresh_logical_outputs() {
   conn_log("refresh_logical_outputs: enter xdgOutputMgr=%p", (void*)xdgOutputMgr_);
   if (!display_) { conn_log("refresh_logical_outputs: no display"); return; }
   (void)wl_display_roundtrip(display_);
@@ -198,9 +198,9 @@ void WaylandConnection::refresh_logical_outputs() {
   conn_log("refresh_logical_outputs: %zu logical outputs after rebuild", logical_outputs_.size());
 }
 
-void WaylandConnection::sync_logical_outputs_from_cache() { rebuild_logical_snapshot_(); }
+void WaylandLink::sync_logical_outputs_from_cache() { rebuild_logical_snapshot_(); }
 
-wl_output* WaylandConnection::output_by_name(std::string_view name) const {
+wl_output* WaylandLink::output_by_name(std::string_view name) const {
   for (const auto& t : tracked_outputs_) {
     if (!t || !t->output || !t->ready || t->name.empty()) continue;
     if (name == t->name) return t->output;
@@ -208,7 +208,7 @@ wl_output* WaylandConnection::output_by_name(std::string_view name) const {
   return nullptr;
 }
 
-std::vector<LogicalOutputBounds> WaylandConnection::logical_output_bounds() const {
+std::vector<LogicalOutputBounds> WaylandLink::logical_output_bounds() const {
   std::vector<LogicalOutputBounds> out;
   out.reserve(tracked_outputs_.size());
   for (const auto& t : tracked_outputs_) {
@@ -225,7 +225,7 @@ std::vector<LogicalOutputBounds> WaylandConnection::logical_output_bounds() cons
   return out;
 }
 
-std::vector<wl_output*> WaylandConnection::outputs() const {
+std::vector<wl_output*> WaylandLink::outputs() const {
   std::vector<wl_output*> out;
   out.reserve(tracked_outputs_.size());
   for (const auto& t : tracked_outputs_)
@@ -233,7 +233,7 @@ std::vector<wl_output*> WaylandConnection::outputs() const {
   return out;
 }
 
-PickedLogicalOutput WaylandConnection::pick_largest_logical_output() const {
+PickedLogicalOutput WaylandLink::pick_largest_logical_output() const {
   PickedLogicalOutput r{};
   int best_area = 0;
   for (const auto& t : tracked_outputs_) {
@@ -250,9 +250,9 @@ PickedLogicalOutput WaylandConnection::pick_largest_logical_output() const {
   return r;
 }
 
-bool WaylandConnection::connect(bool init_workspaces) {
+bool WaylandLink::connect(bool init_workspaces) {
    
-  MANGOWM_INFO("WaylandConnection::connect this=%p init_ws=%d", (void*)this, (int)init_workspaces);
+  MANGOWM_INFO("WaylandLink::connect this=%p init_ws=%d", (void*)this, (int)init_workspaces);
   if (display_) {
     MANGOWM_DEBUG("already connected");
     return true;
@@ -294,21 +294,21 @@ bool WaylandConnection::connect(bool init_workspaces) {
   return true;
 }
 
-bool WaylandConnection::attach(wl_display* display, wl_seat* borrowed_seat, bool init_workspaces) {
+bool WaylandLink::attach(wl_display* display, wl_seat* borrowed_seat, bool init_workspaces) {
    
-  MANGOWM_INFO("WaylandConnection::attach this=%p display=%p seat=%p init_ws=%d",
+  MANGOWM_INFO("WaylandLink::attach this=%p display=%p seat=%p init_ws=%d",
     (void*)this, (void*)display, (void*)borrowed_seat, (int)init_workspaces);
-  debug_log("settings", "WaylandConnection::attach: enter display=%p seat=%p init_ws=%d",
+  debug_log("settings", "WaylandLink::attach: enter display=%p seat=%p init_ws=%d",
             (void*)display, (void*)borrowed_seat, (int)init_workspaces);
   if (!display) {
     MANGOWM_ERROR("attach: null display");
-    debug_log("settings", "WaylandConnection::attach FAIL: null display");
+    debug_log("settings", "WaylandLink::attach FAIL: null display");
     return false;
   }
   if (display_) {
     bool ok = display_ == display;
     MANGOWM_INFO("attach: already attached (display_=%p match=%d)", (void*)display_, (int)ok);
-    debug_log("settings", "WaylandConnection::attach: already attached (display_=%p match=%d)",
+    debug_log("settings", "WaylandLink::attach: already attached (display_=%p match=%d)",
               (void*)display_, (int)ok);
     return ok;
   }
@@ -321,27 +321,27 @@ bool WaylandConnection::attach(wl_display* display, wl_seat* borrowed_seat, bool
   registry_ = wl_display_get_registry(display_);
   if (!registry_) {
     MANGOWM_ERROR("attach: no registry");
-    debug_log("settings", "WaylandConnection::attach: FAIL: no registry");
+    debug_log("settings", "WaylandLink::attach: FAIL: no registry");
     return false;
   }
   MANGOWM_DEBUG("attach: registry=%p roundtrip #1", (void*)registry_);
-  debug_log("settings", "WaylandConnection::attach: registry=%p, roundtrip #1", (void*)registry_);
+  debug_log("settings", "WaylandLink::attach: registry=%p, roundtrip #1", (void*)registry_);
 
   conn_log("attach: registry listener added, starting roundtrips");
   wl_registry_add_listener(registry_, &kRegistryListener_, this);
   wl_display_roundtrip(display_);
   MANGOWM_DEBUG("roundtrip #1 done");
-  debug_log("settings", "WaylandConnection::attach: roundtrip #1 done");
+  debug_log("settings", "WaylandLink::attach: roundtrip #1 done");
   conn_log("attach: roundtrip #1 done, xdgOutputMgr=%p", (void*)xdgOutputMgr_);
   wl_display_roundtrip(display_);
   MANGOWM_DEBUG("roundtrip #2 done");
-  debug_log("settings", "WaylandConnection::attach: roundtrip #2 done");
+  debug_log("settings", "WaylandLink::attach: roundtrip #2 done");
   conn_log("attach: roundtrip #2 done");
   if (xdgOutputMgr_) {
     conn_log("attach: roundtrip #3 (xdg flush)");
     wl_display_roundtrip(display_);
     MANGOWM_DEBUG("roundtrip #3 done (xdg)");
-    debug_log("settings", "WaylandConnection::attach: roundtrip #3 (xdg flush)");
+    debug_log("settings", "WaylandLink::attach: roundtrip #3 (xdg flush)");
     conn_log("attach: roundtrip #3 done");
   }
   rebuild_logical_snapshot_();
@@ -352,12 +352,12 @@ bool WaylandConnection::attach(wl_display* display, wl_seat* borrowed_seat, bool
   bool result = compositor_ && shm_ && has_xdg_shell();
   MANGOWM_INFO("attach result=%d compositor=%d shm=%d xdg=%d",
     (int)result, (int)(compositor_ != nullptr), (int)(shm_ != nullptr), (int)has_xdg_shell());
-  debug_log("settings", "WaylandConnection::attach: result=%d compositor=%d shm=%d xdg=%d",
+  debug_log("settings", "WaylandLink::attach: result=%d compositor=%d shm=%d xdg=%d",
             (int)result, (int)(compositor_ != nullptr), (int)(shm_ != nullptr), (int)has_xdg_shell());
   return result;
 }
 
-void WaylandConnection::disconnect() {
+void WaylandLink::disconnect() {
   // Touching any Wayland proxy while the display is in a fatal error state
   // segfaults, so skip all Wayland cleanup — the OS closes the connection.
   if (display_ && wl_display_get_error(display_)) {
@@ -521,9 +521,9 @@ void WaylandConnection::disconnect() {
   owns_display_ = false;
 }
 
-void WaylandConnection::registry_global(void* data, wl_registry* registry, uint32_t name, const char* iface,
+void WaylandLink::registry_global(void* data, wl_registry* registry, uint32_t name, const char* iface,
                                        uint32_t version) {
-  auto& self = *static_cast<WaylandConnection*>(data);
+  auto& self = *static_cast<WaylandLink*>(data);
   const std::string_view ifc(iface ? iface : "");
 
   if (ifc == wl_compositor_interface.name) {
@@ -563,7 +563,7 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
     return;
   }
   if (ifc == wl_output_interface.name) {
-    auto slot = std::make_unique<WaylandConnection::OutputSlot>();
+    auto slot = std::make_unique<WaylandLink::OutputSlot>();
     slot->owner = &self;
     slot->output = static_cast<wl_output*>(
         wl_registry_bind(registry, name, &wl_output_interface, std::min<uint32_t>(version, 4)));
@@ -742,8 +742,8 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
   }
 }
 
-void WaylandConnection::registry_global_remove(void* data, wl_registry*  , uint32_t  ) {
-  auto& self = *static_cast<WaylandConnection*>(data);
+void WaylandLink::registry_global_remove(void* data, wl_registry*  , uint32_t  ) {
+  auto& self = *static_cast<WaylandLink*>(data);
   (void)self;
 }
 

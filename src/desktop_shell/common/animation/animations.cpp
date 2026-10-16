@@ -9,9 +9,9 @@
 
 namespace eh::shell {
 
-AnimationManager::AnimationManager() { MotionService::instance().register_manager(this); }
+MotionTimeline::MotionTimeline() { MotionRegistry::instance().register_manager(this); }
 
-AnimationManager::~AnimationManager() { MotionService::instance().unregister_manager(this); }
+MotionTimeline::~MotionTimeline() { MotionRegistry::instance().unregister_manager(this); }
 
 float apply_easing(Easing easing, float t) {
   t = std::clamp(t, 0.f, 1.f);
@@ -45,29 +45,29 @@ bool animations_reduced_motion() noexcept {
   return false;
 }
 
-AnimationManager::Id AnimationManager::animate(float from, float to, float duration_ms, Easing easing,
+MotionTimeline::Id MotionTimeline::animate(float from, float to, float duration_ms, Easing easing,
                                                 std::function<void(float)> setter,
                                                 std::function<void()> on_complete) {
   return animateInternal(from, to, duration_ms, easing, std::move(setter), std::move(on_complete), nullptr, true, true);
 }
 
-AnimationManager::Id AnimationManager::animateUnscaled(float from, float to, float duration_ms, Easing easing,
+MotionTimeline::Id MotionTimeline::animateUnscaled(float from, float to, float duration_ms, Easing easing,
                                                         std::function<void(float)> setter,
                                                         std::function<void()> on_complete) {
   return animateInternal(from, to, duration_ms, easing, std::move(setter), std::move(on_complete), nullptr, false, true);
 }
 
-AnimationManager::Id AnimationManager::animateTimer(float from, float to, float duration_ms, Easing easing,
+MotionTimeline::Id MotionTimeline::animateTimer(float from, float to, float duration_ms, Easing easing,
                                                      std::function<void(float)> setter,
                                                      std::function<void()> on_complete) {
   return animateInternal(from, to, duration_ms, easing, std::move(setter), std::move(on_complete), nullptr, false, false);
 }
 
-AnimationManager::Id AnimationManager::animateInternal(float from, float to, float duration_ms, Easing easing,
+MotionTimeline::Id MotionTimeline::animateInternal(float from, float to, float duration_ms, Easing easing,
                                                         std::function<void(float)> setter,
                                                         std::function<void()> on_complete, const void* owner,
                                                         bool scale_duration, bool respect_motion) {
-  auto& motion = MotionService::instance();
+  auto& motion = MotionRegistry::instance();
 
   if (respect_motion && !motion.enabled()) {
     if (setter) setter(to);
@@ -106,21 +106,21 @@ AnimationManager::Id AnimationManager::animateInternal(float from, float to, flo
   return id;
 }
 
-void AnimationManager::cancel(Id id) {
+void MotionTimeline::cancel(Id id) {
   if (id == 0) return;
   std::erase_if(entries_, [id](const Entry& en) { return en.id == id; });
 }
 
-void AnimationManager::cancel_all() {
+void MotionTimeline::cancel_all() {
   entries_.clear();
 }
 
-void AnimationManager::cancel_for_owner(const void* owner) {
+void MotionTimeline::cancel_for_owner(const void* owner) {
   if (!owner) return;
   std::erase_if(entries_, [owner](const Entry& e) { return e.owner == owner; });
 }
 
-void AnimationManager::reduce_motion() {
+void MotionTimeline::reduce_motion() {
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
   const std::uint64_t now_ns = static_cast<std::uint64_t>(ts.tv_sec) * 1000000000ull +
@@ -135,7 +135,7 @@ void AnimationManager::reduce_motion() {
   }
 }
 
-void AnimationManager::tick() {
+void MotionTimeline::tick() {
   if (entries_.empty()) return;
 
   timespec mono_ts{};
@@ -172,6 +172,6 @@ void AnimationManager::tick() {
   }
 }
 
-bool AnimationManager::has_active() const noexcept { return !entries_.empty(); }
+bool MotionTimeline::has_active() const noexcept { return !entries_.empty(); }
 
 }

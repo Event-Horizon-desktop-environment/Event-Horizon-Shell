@@ -14,7 +14,7 @@ struct zwlr_layer_surface_v1;
 struct DockApp;
 
 namespace eh::wayland {
-class WaylandConnection;
+class WaylandLink;
 }
 
 namespace eh::shell::taskflip {

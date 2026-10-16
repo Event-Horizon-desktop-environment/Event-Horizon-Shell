@@ -78,7 +78,7 @@ using eh::widgets::battery_widget_init;
 using eh::widgets::battery_widget_poll;
 using eh::widgets::battery_widget_shutdown;
 using eh::widgets::BluetoothDevice;
-using eh::widgets::BluetoothDeviceKind;
+using eh::widgets::BluetoothPeerKind;
 using eh::widgets::BluetoothSnapshot;
 using eh::widgets::bluetooth_connect_device;
 using eh::widgets::bluetooth_device_kind_glyph;

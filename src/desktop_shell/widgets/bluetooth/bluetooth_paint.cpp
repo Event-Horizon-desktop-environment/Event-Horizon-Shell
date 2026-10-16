@@ -60,7 +60,7 @@ std::optional<eh::bt::FullState> debug_full_state() {
   if (!env || env[0] == '\0') return std::nullopt;
   const std::string_view sv(env);
 
-  using K = eh::bt::BluetoothDeviceKind;
+  using K = eh::bt::BluetoothPeerKind;
   auto dev = [](const char* path, const char* addr, const char* alias, K kind, bool paired, bool connected,
                 bool has_battery, uint8_t pct) {
     eh::bt::DeviceInfo d;
@@ -161,7 +161,7 @@ struct SlotLabel {
   int pct = 0;
 };
 
-SlotLabel make_slot_label(const eh::bt::Snapshot& snap, const std::vector<eh::bt::DeviceInfo>& devs) {
+SlotLabel make_slot_label(const eh::bt::BluetoothSummary& snap, const std::vector<eh::bt::DeviceInfo>& devs) {
   SlotLabel out;
   if (!snap.connected || snap.connected_count <= 0) return out;
   int min_pct = 101;
@@ -227,7 +227,7 @@ struct PopupLayout {
   int shown = 0;   // device rows only (excludes section headers)
 };
 
-std::vector<PopupItem> plan_popup_items(const eh::bt::Snapshot& bt,
+std::vector<PopupItem> plan_popup_items(const eh::bt::BluetoothSummary& bt,
                                         const std::vector<eh::bt::DeviceInfo>& devs) {
   std::vector<PopupItem> items;
   if (!bt.available || !bt.powered) return items;
@@ -266,7 +266,7 @@ std::vector<PopupItem> plan_popup_items(const eh::bt::Snapshot& bt,
   return items;
 }
 
-double popup_height_for_state(const eh::bt::Snapshot& bt, const std::vector<eh::bt::DeviceInfo>& devs) {
+double popup_height_for_state(const eh::bt::BluetoothSummary& bt, const std::vector<eh::bt::DeviceInfo>& devs) {
   const double us = dock_ui_scale(eh::config::shell_config_snapshot().dock);
   double h = 16.0 * us + kHeaderH * us;
   if (!bt.available) {
@@ -284,7 +284,7 @@ double popup_height_for_state(const eh::bt::Snapshot& bt, const std::vector<eh::
   return std::ceil(h);
 }
 
-PopupLayout build_popup_layout(const eh::bt::Snapshot& bt, const std::vector<eh::bt::DeviceInfo>& devs,
+PopupLayout build_popup_layout(const eh::bt::BluetoothSummary& bt, const std::vector<eh::bt::DeviceInfo>& devs,
                                double us, double W, double H) {
   PopupLayout L;
   L.W = W;
@@ -423,7 +423,7 @@ std::vector<BluetoothDevice> bluetooth_devices() {
       .path = d.path,
       .address = d.address,
       .alias = d.alias,
-      .kind = static_cast<BluetoothDeviceKind>(d.kind),
+      .kind = static_cast<BluetoothPeerKind>(d.kind),
       .paired = d.paired,
       .connected = d.connected,
       .connecting = d.connecting,
@@ -433,14 +433,14 @@ std::vector<BluetoothDevice> bluetooth_devices() {
   return out;
 }
 
-const char* bluetooth_device_kind_glyph(BluetoothDeviceKind kind) {
-  return eh::bt::bluetooth_device_kind_glyph(static_cast<::eh::bt::BluetoothDeviceKind>(kind));
+const char* bluetooth_device_kind_glyph(BluetoothPeerKind kind) {
+  return eh::bt::bluetooth_device_kind_glyph(static_cast<::eh::bt::BluetoothPeerKind>(kind));
 }
 
 BluetoothSnapshot bluetooth_snapshot() {
   auto& bt = eh::bt::BluezService::instance();
   bt.start();
-  const eh::bt::Snapshot s = bt.snapshot();
+  const eh::bt::BluetoothSummary s = bt.snapshot();
   // Lowest battery among connected devices so the control center can show the
   // most actionable number, matching the dock slot label.
   int battery = -1;

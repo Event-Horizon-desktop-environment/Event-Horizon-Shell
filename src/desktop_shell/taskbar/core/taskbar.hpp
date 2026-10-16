@@ -165,7 +165,7 @@ struct TaskbarApp {
   // Independent subsystems.
 
   // Own Wayland connection (isolated from other components)
-  std::unique_ptr<eh::wayland::WaylandConnection> wl;
+  std::unique_ptr<eh::wayland::WaylandLink> wl;
   bool wlError = false;
 
   // Nightlight gamma control (owned by the session, shared with the taskbar)
@@ -204,12 +204,12 @@ struct TaskbarApp {
   bool cachedFloatingPinActivated = false;
 
   // Animation
-  eh::shell::AnimationManager anim{};
+  eh::shell::MotionTimeline anim{};
 
   // MPRIS
   std::unique_ptr<eh::mpris::DockMpris> mpris{};
 
-  // DeskRegion strip
+  // DeskSlot strip
   CompositorKind compositorKind = CompositorKind::Unknown;
   std::vector<eh::shell::WorkspaceStripEntry> workspaceStrip{};
   timespec workspaceStripLastPoll{};

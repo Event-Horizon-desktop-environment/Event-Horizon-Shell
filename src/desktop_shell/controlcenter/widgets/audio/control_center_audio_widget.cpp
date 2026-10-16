@@ -37,7 +37,7 @@ using paint_utils::kSurfB;
 ControlCenterAudioOutputState control_center_audio_output_state(const ControlCenterState* cs) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
 
   ControlCenterAudioOutputState out{};
   out.device_name = "Default Sink";
@@ -60,7 +60,7 @@ ControlCenterAudioOutputState control_center_audio_output_state(const ControlCen
 std::vector<ControlCenterOutputDevice> control_center_output_devices() {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
 
   std::vector<ControlCenterOutputDevice> out;
   out.reserve(s.sinks.size());
@@ -77,7 +77,7 @@ std::vector<ControlCenterOutputDevice> control_center_output_devices() {
 std::vector<ControlCenterInputDevice> control_center_input_devices() {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
 
   std::vector<ControlCenterInputDevice> out;
   out.reserve(s.sources.size());
@@ -94,14 +94,14 @@ std::vector<ControlCenterInputDevice> control_center_input_devices() {
 void control_center_set_audio_output_volume(double normalized_0_1) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
   if (s.default_sink != 0) pw.set_node_volume(s.default_sink, normalized_0_1);
 }
 
 void control_center_set_audio_output_mute(bool muted) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
   if (s.default_sink != 0) pw.set_node_mute(s.default_sink, muted);
 }
 
@@ -118,7 +118,7 @@ void control_center_set_default_sink(std::string_view sink_name) {
 ControlCenterAudioInputState control_center_audio_input_state(const ControlCenterState* cs) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
 
   ControlCenterAudioInputState out{};
   out.device_name = "Default Source";
@@ -141,14 +141,14 @@ ControlCenterAudioInputState control_center_audio_input_state(const ControlCente
 void control_center_set_audio_input_volume(double normalized_0_1) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
   if (s.default_source != 0) pw.set_node_volume(s.default_source, normalized_0_1);
 }
 
 void control_center_set_audio_input_mute(bool muted) {
   auto& pw = eh::audio::PipeWireService::instance();
   pw.start();
-  const eh::audio::Snapshot s = pw.snapshot();
+  const eh::audio::AudioSummary s = pw.snapshot();
   if (s.default_source != 0) pw.set_node_mute(s.default_source, muted);
 }
 

@@ -26,36 +26,31 @@ std::uint32_t event_time_ms() {
 
 }
 
-VirtualKeyboardService::~VirtualKeyboardService() { cleanup(); }
+VirtualKeyboardService::~VirtualKeyboardService() { detach(); }
 
-bool VirtualKeyboardService::bind(zwp_virtual_keyboard_manager_v1* manager, wl_seat* seat) {
-   
-  if (!manager || !seat) {
-    cleanup();
-    return false;
-  }
-  if (manager_ == manager && seat_ == seat && keyboard_ != nullptr) return true;
+bool VirtualKeyboardService::attach(zwp_virtual_keyboard_manager_v1* manager, wl_seat* seat) {
+  if (manager_ == manager && seat_ == seat && keyboard_ != nullptr) { return true; }
 
-  cleanup();
+  const bool usable = manager != nullptr && seat != nullptr;
+  detach();
+  if (!usable) { return false; }
+
   manager_ = manager;
   seat_ = seat;
   return ensure_keyboard();
 }
 
-void VirtualKeyboardService::cleanup() {
-   
-  if (keyboard_) {
-    zwp_virtual_keyboard_v1_destroy(keyboard_);
-    keyboard_ = nullptr;
-  }
-  if (xkbKeymap_) {
-    xkb_keymap_unref(xkbKeymap_);
-    xkbKeymap_ = nullptr;
-  }
-  if (xkbContext_) {
-    xkb_context_unref(xkbContext_);
-    xkbContext_ = nullptr;
-  }
+void VirtualKeyboardService::detach() {
+  const auto release = [](auto& slot, auto retire) {
+    if (slot == nullptr) { return; }
+    retire(slot);
+    slot = nullptr;
+  };
+
+  release(keyboard_, zwp_virtual_keyboard_v1_destroy);
+  release(xkbKeymap_, xkb_keymap_unref);
+  release(xkbContext_, xkb_context_unref);
+
   manager_ = nullptr;
   seat_ = nullptr;
   ctrlMask_ = 0;
@@ -65,20 +60,25 @@ void VirtualKeyboardService::cleanup() {
 
 bool VirtualKeyboardService::is_available() const noexcept { return manager_ && seat_; }
 
-bool VirtualKeyboardService::send_paste_shortcut(VirtualPasteShortcut shortcut) {
+bool VirtualKeyboardService::send_paste_shortcut(PasteChord shortcut) {
    
   if (!ensure_keyboard() || !ensure_keymap()) return false;
 
-  switch (shortcut) {
-  case VirtualPasteShortcut::CtrlV:
-    press_chord(KEY_V, true, false);
-    break;
-  case VirtualPasteShortcut::CtrlShiftV:
-    press_chord(KEY_V, true, true);
-    break;
-  case VirtualPasteShortcut::ShiftInsert:
-    press_chord(KEY_INSERT, false, true);
-    break;
+  struct Chord {
+    std::uint32_t key;
+    bool ctrl;
+    bool shift;
+  };
+  static constexpr Chord kChords[] = {
+    {KEY_V, true, false},       // Primary
+    {KEY_V, true, true},        // PrimaryShift
+    {KEY_INSERT, false, true},  // LegacyInsert
+  };
+
+  const auto picked = static_cast<std::size_t>(shortcut);
+  if (picked < std::size(kChords)) {
+    const Chord chord = kChords[picked];
+    press_chord(chord.key, chord.ctrl, chord.shift);
   }
 
   auto* display = wl_proxy_get_display(reinterpret_cast<wl_proxy*>(keyboard_));
@@ -148,19 +148,17 @@ void VirtualKeyboardService::press_chord(std::uint32_t key, bool ctrlPressed, bo
 }
 
 void VirtualKeyboardService::send_key(std::uint32_t key, bool pressed) {
-   
-  if (!keyboard_) return;
-  zwp_virtual_keyboard_v1_key(keyboard_, event_time_ms(), key,
-                             pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+  const auto state = pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED;
+  if (keyboard_ == nullptr) { return; }
+  zwp_virtual_keyboard_v1_key(keyboard_, event_time_ms(), key, state);
 }
 
 void VirtualKeyboardService::update_modifiers(bool ctrlPressed, bool shiftPressed) {
-   
-  if (!keyboard_) return;
-  std::uint32_t depressed = 0;
-  if (ctrlPressed) depressed |= ctrlMask_;
-  if (shiftPressed) depressed |= shiftMask_;
-  zwp_virtual_keyboard_v1_modifiers(keyboard_, depressed, 0, 0, 0);
+  const std::uint32_t active = ctrlPressed ? ctrlMask_ : 0u;
+  const std::uint32_t held = shiftPressed ? shiftMask_ : 0u;
+  if (keyboard_ != nullptr) {
+    zwp_virtual_keyboard_v1_modifiers(keyboard_, active | held, 0, 0, 0);
+  }
 }
 
 }

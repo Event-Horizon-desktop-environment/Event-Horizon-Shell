@@ -190,7 +190,7 @@ void UnifiedShellSession::start_notifications_services() {
   MANGOWM_INFO("starting notification services");
 
   // Notifications live in the split-out `horizon-notifications` child: it
-  // owns the NotificationManager, the org.freedesktop.Notifications D-Bus
+  // owns the NotificationHub, the org.freedesktop.Notifications D-Bus
   // service, and the toast host on its own connection. Producers just publish
   // `notify.push`; this process only installs a bus sender and spawns the child.
   eh::notify::setNotifySender([this](const std::string& payload, const std::vector<int>& /*fds*/) {
@@ -793,7 +793,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   eh::bench::bench_write("spawn", "dock_init_done");
   MANGOWM_INFO("startup: init wallpaper");
   // Wallpaper runs as the split-out `horizon-wallpaper` child: it
-  // owns its own WaylandConnection + WallpaperRenderer and reads the config
+  // owns its own WaylandLink + WallpaperRenderer and reads the config
   // itself, re-applying on the `config.applied` broadcast. The supervisor only
   // spawns it (after the IPC service is up, below) and kills it at shutdown.
   MANGOWM_INFO("startup: wallpaper/desktop/dock/taskbar run as split-out children");
@@ -837,7 +837,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   MANGOWM_INFO("startup: init gamma control");
   // Nightlight gamma lives on its own Wayland connection so a protocol error
   // there can never take down the main shell connection.
-  gamma_conn_ = std::make_unique<eh::wayland::WaylandConnection>();
+  gamma_conn_ = std::make_unique<eh::wayland::WaylandLink>();
   if (gamma_conn_->connect(false) && gamma_conn_->gamma_control_manager()) {
     gamma_service_ = std::make_unique<eh::wayland::GammaService>(gamma_conn_->gamma_control_manager());
     for (wl_output* out : gamma_conn_->outputs()) {
@@ -854,7 +854,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   boot_mark("gamma_connect_done");
 
   MANGOWM_INFO("startup: init idle service");
-  idle_conn_ = std::make_unique<eh::wayland::WaylandConnection>();
+  idle_conn_ = std::make_unique<eh::wayland::WaylandLink>();
   if (idle_conn_->connect(false) && idle_conn_->idle_notifier() && idle_conn_->seat()) {
     idle_service_ = std::make_unique<eh::wayland::IdleService>(idle_conn_->idle_notifier(), idle_conn_->seat());
     const auto& idleCfg = sc0_.idle;
@@ -881,7 +881,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   boot_mark("idle_connect_done");
 
   MANGOWM_INFO("startup: init lockscreen");
-  lock_conn_ = std::make_unique<eh::wayland::WaylandConnection>();
+  lock_conn_ = std::make_unique<eh::wayland::WaylandLink>();
   if (lock_conn_->connect(false) && lock_conn_->has_core_shell_globals() &&
       lock_conn_->session_lock_manager() && lock_conn_->seat()) {
     lock_screen_ = std::make_unique<eh::shell::lockscreen::LockScreen>(
@@ -1136,7 +1136,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   vram_boost_->start();
 
   // Spawn the split-out `horizon-desktop` child: the desktop icon layer +
-  // widgets + menus live on its own WaylandConnection, timer fds, and MPRIS
+  // widgets + menus live on its own WaylandLink, timer fds, and MPRIS
   // listener, and it subscribes to `config.applied` for output / theme /
   // widget-config changes. The SIGCHLD handler respawns it on crash.
   if (ipc_service_ && ipc_service_->running()) {
@@ -1156,7 +1156,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
 
   // Spawn the split-out `horizon-dock` child: the dock bar (surfaces, launchpad,
   // overview, start menu, tray, settings watcher, MPRIS, and the Super-key menu
-  // toggle) now runs on its own WaylandConnection + loop fds and subscribes to
+  // toggle) now runs on its own WaylandLink + loop fds and subscribes to
   // `config.applied`. The SIGCHLD handler respawns it on crash; the taskbar +
   // gamma + Super+S settings were the last supervisor bits removed by this
   // split.
@@ -1171,7 +1171,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   boot_mark("dock_child_spawned");
 
   // Spawn the split-out `horizon-taskbar` child: the taskbar bar + app drawer +
-  // popups get their own WaylandConnection with toplevel tracking of their own
+  // popups get their own WaylandLink with toplevel tracking of their own
   // (mirroring horizon-dock), plus a timer fd, settings inotify, and MPRIS
   // listener, and subscribe to `config.applied` + `command.request`. The
   // SIGCHLD handler respawns it on crash.
@@ -1182,7 +1182,7 @@ int UnifiedShellSession::run(ShellRunMode /*mode*/) {
   boot_mark("taskbar_child_spawned");
 
   // Spawn the split-out `horizon-panel` child: the top/bottom indicator bar +
-  // popups get their own WaylandConnection with toplevel tracking of their own
+  // popups get their own WaylandLink with toplevel tracking of their own
   // (mirroring horizon-dock / horizon-taskbar), plus a timer fd, settings
   // inotify, and MPRIS listener, and subscribe to `config.applied` +
   // `command.request`. The SIGCHLD handler respawns it on crash; like the dock

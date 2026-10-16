@@ -20,7 +20,7 @@ struct SurfaceExtensions {
     }
   }
 
-  void ensure_tearing_control(WaylandConnection& wl, wl_surface* surface);
+  void ensure_tearing_control(WaylandLink& wl, wl_surface* surface);
 
   void destroy() {
     destroy_tearing_control();
@@ -40,6 +40,6 @@ struct SurfaceExtensions {
   }
 };
 
-void attach_surface_extensions(WaylandConnection& wl, wl_surface* surface, SurfaceExtensions& ext);
+void attach_surface_extensions(WaylandLink& wl, wl_surface* surface, SurfaceExtensions& ext);
 
 }

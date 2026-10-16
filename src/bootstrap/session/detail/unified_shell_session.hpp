@@ -104,9 +104,9 @@ private:
 
   // These connections are declared before the services so the services are torn
   // down first; run() also clears them explicitly at exit.
-  std::unique_ptr<eh::wayland::WaylandConnection> gamma_conn_;
-  std::unique_ptr<eh::wayland::WaylandConnection> idle_conn_;
-  std::unique_ptr<eh::wayland::WaylandConnection> lock_conn_;
+  std::unique_ptr<eh::wayland::WaylandLink> gamma_conn_;
+  std::unique_ptr<eh::wayland::WaylandLink> idle_conn_;
+  std::unique_ptr<eh::wayland::WaylandLink> lock_conn_;
 
   std::unique_ptr<eh::wayland::GammaService> gamma_service_;
   int gamma_transition_fd_ = -1;

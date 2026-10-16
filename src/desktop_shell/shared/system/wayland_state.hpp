@@ -94,7 +94,7 @@ struct WaylandState {
 
   // System services.
 
-  eh::shell::AnimationManager shellAnim{};
+  eh::shell::MotionTimeline shellAnim{};
   std::unique_ptr<eh::shell::osd::OsdHost> osdHost{};
   std::unique_ptr<eh::mpris::DockMpris> mpris{};
   eh::icons::IconCache icons{};

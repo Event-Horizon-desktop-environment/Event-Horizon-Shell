@@ -2,10 +2,10 @@
 
 namespace wspace::hyprland {
 
-HyprlandEventHandler::HyprlandEventHandler(HyprlandRuntime& rt) : m_rt(rt) {
-  m_rt.registerEventHandler(this);
+HyprlandEventSink::HyprlandEventSink(HyprlandSession& rt) : m_rt(rt) {
+  m_rt.addEventSink(this);
 }
 
-HyprlandEventHandler::~HyprlandEventHandler() { m_rt.unregisterEventHandler(this); }
+HyprlandEventSink::~HyprlandEventSink() { m_rt.removeEventSink(this); }
 
 } // namespace wspace::hyprland

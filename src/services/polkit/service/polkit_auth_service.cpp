@@ -84,7 +84,7 @@ struct PolkitAuthService::Impl {
 
   mutable std::mutex mtx;
   bool started = false;
-  ChangeCallback on_change;
+  StateChangeHook on_change;
 
   // Auth state (protected by mtx)
   AuthState state = AuthState::Idle;
@@ -527,7 +527,7 @@ void PolkitAuthService::stop() {
   if (stale) g_object_unref(stale);
 }
 
-void PolkitAuthService::set_change_callback(ChangeCallback cb) {
+void PolkitAuthService::set_change_callback(StateChangeHook cb) {
   impl_->on_change = std::move(cb);
 }
 
@@ -543,10 +543,10 @@ bool PolkitAuthService::registration_ok() const {
   return impl_->register_ok;
 }
 
-Snapshot PolkitAuthService::snapshot() const {
+PolkitState PolkitAuthService::snapshot() const {
    
   std::lock_guard<std::mutex> lock(impl_->mtx);
-  Snapshot s;
+  PolkitState s;
   s.state = impl_->state;
   s.action_id = impl_->action_id;
   s.message = impl_->message;

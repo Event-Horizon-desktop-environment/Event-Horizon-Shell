@@ -12,7 +12,7 @@ struct App;
 
 namespace eh::audio {
 struct AudioCardProfiles;
-struct Snapshot;
+struct AudioSummary;
 }
 
 // The Sound sidebar tab (id 8) is an "Audio Center" with its own child tabs,
@@ -66,7 +66,7 @@ struct SoundDropdown {
   int comboX = 0, comboY = 0, comboW = 0, comboH = 0;
   int listX = 0, listY = 0, listW = 0, listH = 0;
 };
-SoundDropdown build_sound_dropdown(App& app, const eh::audio::Snapshot& snap);
+SoundDropdown build_sound_dropdown(App& app, const eh::audio::AudioSummary& snap);
 inline int sound_dropdown_row_at(const SoundDropdown& dd, double px, double py) {
   if (!dd.open || dd.rows.empty()) return -1;
   const int n = static_cast<int>(dd.rows.size());

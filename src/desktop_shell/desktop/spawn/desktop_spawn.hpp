@@ -5,7 +5,7 @@
 namespace eh::shell::desktop {
 
 // Supervisor-side: spawn/kill the split-out `horizon-desktop` child. The child
-// owns the desktop icon layer + widgets on its own WaylandConnection, timer
+// owns the desktop icon layer + widgets on its own WaylandLink, timer
 // fds, and MPRIS listener.
 // Returns the spawned child pid, or -1 on failure.
 [[nodiscard]] pid_t desktop_spawn_native_child();

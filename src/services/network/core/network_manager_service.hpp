@@ -18,14 +18,14 @@ namespace eh::net {
 
 class NetworkManagerService {
 public:
-  using ChangeCallback = std::function<void(const Snapshot&)>;
+  using StateChangeHook = std::function<void(const NetState&)>;
 
   static NetworkManagerService& instance();
   void start();
   void stop();
-  void set_change_callback(ChangeCallback cb);
+  void set_change_callback(StateChangeHook cb);
 
-  Snapshot snapshot() const;
+  NetState snapshot() const;
   NetworkState state() const;
   void refresh();
   void request_scan();
@@ -55,7 +55,7 @@ public:
   void refreshVpnConnections();
 
   // camelCase aliases used by the settings tab.
-  void setChangeCallback(ChangeCallback cb) { set_change_callback(std::move(cb)); }
+  void hookStateChanges(StateChangeHook cb) { set_change_callback(std::move(cb)); }
   void requestScan() { request_scan(); }
   bool activateAccessPoint(const AccessPointInfo& ap);
   bool activateAccessPoint(const AccessPointInfo& ap, const std::string& psk);
@@ -87,7 +87,7 @@ private:
   struct Priv;
   static void worker_main(Priv* d);
   std::unique_ptr<Priv> d;
-  ChangeCallback onChange_;
+  StateChangeHook onChange_;
   bool started_ = false;
 };
 

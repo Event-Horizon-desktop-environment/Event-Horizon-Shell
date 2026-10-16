@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backends/interfaces/kbd_interface.h"
+#include "backends/contract/keyboard.h"
 
 #include <nlohmann/json.hpp>
 
@@ -9,20 +9,21 @@
 #include <string_view>
 
 namespace eh::wayland {
-class WaylandConnection;
+class WaylandLink;
 }
 
 namespace wspace::mango {
 
-class MangoRuntime {
+class MangoSession {
 public:
-  MangoRuntime() = default;
+  MangoSession() = default;
 
-  [[nodiscard]] bool available() const;
-  [[nodiscard]] const std::string& socketPath() const;
-  [[nodiscard]] std::optional<nlohmann::json> request(std::string_view cmd) const;
-  [[nodiscard]] bool dispatch(std::string_view cmd) const;
   void refresh();
+
+  [[nodiscard]] bool runCommand(std::string_view cmd) const;
+  [[nodiscard]] std::optional<nlohmann::json> ipcQuery(std::string_view cmd) const;
+  [[nodiscard]] const std::string& socketPath() const;
+  [[nodiscard]] bool available() const;
 
 private:
   void resolveIfPending() const;
@@ -32,27 +33,27 @@ private:
   mutable std::string m_endpoint;
 };
 
-bool mangoSetOutputPower(eh::wayland::WaylandConnection& wl, bool on);
+bool mangoSetOutputPower(eh::wayland::WaylandLink& wl, bool on);
 
 } // namespace wspace::mango
 
-class MangoKeyboardBackend {
+class MangoKeyboardSource {
 private:
-  wspace::mango::MangoRuntime& m_state;
+  wspace::mango::MangoSession& m_state;
 
 public:
-  explicit MangoKeyboardBackend(wspace::mango::MangoRuntime& ref);
-  [[nodiscard]] bool ready() const noexcept;
-  [[nodiscard]] bool nextLayout() const;
-  [[nodiscard]] std::optional<LayoutInfo> currentLayout() const;
+  explicit MangoKeyboardSource(wspace::mango::MangoSession& ref);
   [[nodiscard]] std::optional<std::string> activeLayoutName() const;
+  [[nodiscard]] std::optional<LayoutSet> currentLayout() const;
+  [[nodiscard]] bool nextLayout() const;
+  [[nodiscard]] bool ready() const noexcept;
 };
 
-class MangoOutputBackend {
+class MangoOutputSource {
 private:
-  wspace::mango::MangoRuntime& m_rt;
+  wspace::mango::MangoSession& m_rt;
 
 public:
-  explicit MangoOutputBackend(wspace::mango::MangoRuntime& ref);
+  explicit MangoOutputSource(wspace::mango::MangoSession& ref);
   [[nodiscard]] std::optional<std::string> focusedOutputName() const;
 };

@@ -817,9 +817,9 @@ static void standalone_config_applied_hook(void*) {
   g_embed->embedded = true;
   debug_log("settings", "embed_init: created g_embed=%p, calling wl.attach(display=%p, seat=%p)",
             (void*)g_embed.get(), (void*)display, (void*)shared_seat);
-  EH_ST_TRACE(std::cerr << "settings embed_init: WaylandConnection::attach");
+  EH_ST_TRACE(std::cerr << "settings embed_init: WaylandLink::attach");
   if (!g_embed->wl.attach(display, shared_seat)) {
-    debug_log("settings", "embed_init FAIL: WaylandConnection::attach returned false");
+    debug_log("settings", "embed_init FAIL: WaylandLink::attach returned false");
     g_embed.reset();
     return false;
   }
@@ -837,7 +837,7 @@ static void standalone_config_applied_hook(void*) {
   eh::bing::BingWallpaperService::instance().register_redraw([]() {
     if (g_embed) draw(*g_embed);
   });
-  eh::net::NetworkManagerService::instance().set_change_callback([](const eh::net::Snapshot&) {
+  eh::net::NetworkManagerService::instance().set_change_callback([](const eh::net::NetState&) {
     if (g_embed) draw(*g_embed);
   });
   debug_log("settings", "embed_init: OK returning true");

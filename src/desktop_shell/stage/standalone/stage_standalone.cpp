@@ -236,7 +236,7 @@ int run_stage_standalone() {
 
   stage_build_overview_ctx(app);
   {
-    auto ovConn = std::make_unique<eh::wayland::WaylandConnection>();
+    auto ovConn = std::make_unique<eh::wayland::WaylandLink>();
     if (!ovConn->connect(false)) {
       std::cerr << "[horizon-stage] overview own connection unavailable\n";
       ovConn.reset();

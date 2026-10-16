@@ -56,7 +56,7 @@ CcWidgetCfg load_cfg(const eh::config::ShellConfig& sc, std::string_view instanc
 void poll_runtime(CcRuntime& rt) {
   auto& nm = eh::net::NetworkManagerService::instance();
   nm.start();
-  const eh::net::Snapshot s = nm.snapshot();
+  const eh::net::NetState s = nm.snapshot();
   rt.net_up = s.connected;
   rt.net_wifi = (s.kind == eh::net::ConnectivityKind::Wireless) && s.connected;
 
@@ -69,7 +69,7 @@ void poll_runtime(CcRuntime& rt) {
   // PipeWireService::start(). Keeps ~10MB of pipewire mappings out of idle
   // dock RSS when audio UI is never opened.
   if (eh::audio::PipeWireService::instance().started()) {
-    const eh::audio::Snapshot ss = eh::audio::PipeWireService::instance().snapshot();
+    const eh::audio::AudioSummary ss = eh::audio::PipeWireService::instance().snapshot();
 
     rt.sink_muted = false;
     for (const auto& d : ss.sinks) {

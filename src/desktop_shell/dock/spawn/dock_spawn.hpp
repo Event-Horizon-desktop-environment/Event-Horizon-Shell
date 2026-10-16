@@ -5,7 +5,7 @@
 namespace eh::shell::dock {
 
 // Supervisor-side: spawn/kill the split-out `horizon-dock` child. The child
-// owns the dock + popups + launchpad/overview on its own WaylandConnection,
+// owns the dock + popups + launchpad/overview on its own WaylandLink,
 // timer fds, settings inotify, and MPRIS listener.
 // Returns the spawned child pid, or -1 on failure.
 [[nodiscard]] pid_t dock_spawn_native_child();

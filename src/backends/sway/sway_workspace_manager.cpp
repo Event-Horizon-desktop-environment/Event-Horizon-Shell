@@ -32,9 +32,34 @@ bool sendAll(int fd, const char* data, std::size_t len) {
   return true;
 }
 
+constexpr std::size_t kHeadBytes = 14;
+
+struct IpcHead {
+  std::uint32_t bytes = 0;
+  std::uint32_t type = 0;
+};
+
+// The 14-byte sway frame header that follows the magic string.
+IpcHead readHead(std::vector<char> const& buf) {
+  IpcHead head;
+  const auto magic = wspace::sway::SwaySession::kIpcMagic;
+  std::memcpy(&head.bytes, buf.data() + magic.size(), sizeof(head.bytes));
+  std::memcpy(&head.type, buf.data() + magic.size() + sizeof(head.bytes), sizeof(head.type));
+  return head;
+}
+
 } // namespace
 
-SwayWorkspaceManager::SwayWorkspaceManager(wspace::sway::SwayRuntime& runtime)
+// Numbered workspaces sort before unnumbered ones, then by number, then by
+// discovery order. Ranked form: equal ranks fall through to the next key.
+bool SwayWorkspaceManager::swayOrder(WorkspaceRecord const& a, WorkspaceRecord const& b) {
+  auto rank = [](int num) { return num >= 0 ? 0 : 1; };
+  if (rank(a.num) != rank(b.num)) { return rank(a.num) < rank(b.num); }
+  if (rank(a.num) == 0 && a.num != b.num) { return a.num < b.num; }
+  return a.ordinal < b.ordinal;
+}
+
+SwayWorkspaceManager::SwayWorkspaceManager(wspace::sway::SwaySession& runtime)
     : m_backend(runtime) {
    
   if (m_backend.canConnect()) {
@@ -56,7 +81,7 @@ bool SwayWorkspaceManager::openConnection() {
   return m_fd >= 0;
 }
 
-void SwayWorkspaceManager::onStateChange(IWorkspaceManager::Notify callback) {
+void SwayWorkspaceManager::onStateChange(IDeskSource::Notify callback) {
    
   m_notify = std::move(callback);
 }
@@ -75,7 +100,7 @@ int SwayWorkspaceManager::resolveWsId(const std::string& id) const {
 
 void SwayWorkspaceManager::jumpTo(const std::string& id) {
    
-  (void)m_backend.sendCommand(wspace::sway::SwayRuntime::kRunCommand, "workspace " + id);
+  (void)m_backend.sendCommand(wspace::sway::SwaySession::kRunCommand, "workspace " + id);
 }
 
 void SwayWorkspaceManager::jumpToOnOutput(wl_output* output, const std::string& id) {
@@ -84,13 +109,13 @@ void SwayWorkspaceManager::jumpToOnOutput(wl_output* output, const std::string& 
   jumpTo(id);
 }
 
-void SwayWorkspaceManager::jumpToOnOutput(wl_output* output, const DeskRegion& workspace) {
+void SwayWorkspaceManager::jumpToOnOutput(wl_output* output, const DeskSlot& workspace) {
    
   (void)output;
-  jumpTo(workspace.id);
+  jumpTo(workspace.key);
 }
 
-std::vector<DeskRegion> SwayWorkspaceManager::allRegions() const {
+std::vector<DeskSlot> SwayWorkspaceManager::allRegions() const {
     
   auto* self = const_cast<SwayWorkspaceManager*>(this);
 
@@ -103,34 +128,31 @@ std::vector<DeskRegion> SwayWorkspaceManager::allRegions() const {
 
   self->drainEvents();
 
-  std::vector<const WorkspaceState*> ordered;
+  std::vector<const WorkspaceRecord*> ordered;
   ordered.reserve(m_spaces.size());
   for (const auto& ws : m_spaces) {
     ordered.push_back(&ws);
   }
 
-  std::sort(ordered.begin(), ordered.end(), [](const WorkspaceState* a, const WorkspaceState* b) {
-    if ((a->num >= 0) != (b->num >= 0)) return a->num >= 0;
-    if (a->num >= 0 && b->num >= 0 && a->num != b->num) return a->num < b->num;
-    return a->ordinal < b->ordinal;
-  });
+  std::sort(ordered.begin(), ordered.end(),
+            [](WorkspaceRecord const* a, WorkspaceRecord const* b) { return swayOrder(*a, *b); });
 
-  std::vector<DeskRegion> result;
+  std::vector<DeskSlot> result;
   result.reserve(ordered.size());
   for (const auto* ws : ordered) {
-    DeskRegion w;
-    w.id = ws->name;
-    w.name = ws->name;
-    w.index = ws->num >= 0 ? static_cast<std::uint32_t>(ws->num) : static_cast<std::uint32_t>(ws->ordinal + 1);
-    w.active = ws->visible;
-    w.urgent = ws->urgent;
-    w.occupied = ws->occupied;
+    DeskSlot w;
+    w.key = ws->name;
+    w.label = ws->name;
+    w.ordinal = ws->num >= 0 ? static_cast<std::uint32_t>(ws->num) : static_cast<std::uint32_t>(ws->ordinal + 1);
+    w.state.selected = ws->visible;
+    w.state.urgent = ws->urgent;
+    w.state.occupied = ws->occupied;
     result.push_back(std::move(w));
   }
   return result;
 }
 
-std::vector<DeskRegion> SwayWorkspaceManager::regionsOnOutput(wl_output* output) const {
+std::vector<DeskSlot> SwayWorkspaceManager::regionsOnOutput(wl_output* output) const {
     
   if (output == nullptr || !m_resolver) return allRegions();
 
@@ -148,28 +170,25 @@ std::vector<DeskRegion> SwayWorkspaceManager::regionsOnOutput(wl_output* output)
 
   self->drainEvents();
 
-  std::vector<const WorkspaceState*> ordered;
+  std::vector<const WorkspaceRecord*> ordered;
   ordered.reserve(m_spaces.size());
   for (const auto& ws : m_spaces) {
     if (ws.output == outputName) ordered.push_back(&ws);
   }
 
-  std::sort(ordered.begin(), ordered.end(), [](const WorkspaceState* a, const WorkspaceState* b) {
-    if ((a->num >= 0) != (b->num >= 0)) return a->num >= 0;
-    if (a->num >= 0 && b->num >= 0 && a->num != b->num) return a->num < b->num;
-    return a->ordinal < b->ordinal;
-  });
+  std::sort(ordered.begin(), ordered.end(),
+            [](WorkspaceRecord const* a, WorkspaceRecord const* b) { return swayOrder(*a, *b); });
 
-  std::vector<DeskRegion> result;
+  std::vector<DeskSlot> result;
   result.reserve(ordered.size());
   for (const auto* ws : ordered) {
-    DeskRegion w;
-    w.id = ws->name;
-    w.name = ws->name;
-    w.index = ws->num >= 0 ? static_cast<std::uint32_t>(ws->num) : static_cast<std::uint32_t>(ws->ordinal + 1);
-    w.active = ws->visible;
-    w.urgent = ws->urgent;
-    w.occupied = ws->occupied;
+    DeskSlot w;
+    w.key = ws->name;
+    w.label = ws->name;
+    w.ordinal = ws->num >= 0 ? static_cast<std::uint32_t>(ws->num) : static_cast<std::uint32_t>(ws->ordinal + 1);
+    w.state.selected = ws->visible;
+    w.state.urgent = ws->urgent;
+    w.state.occupied = ws->occupied;
     result.push_back(std::move(w));
   }
   return result;
@@ -222,8 +241,8 @@ void SwayWorkspaceManager::openStream() {
 
   // Subscribe to workspace and window events so we get pushed updates.
   const std::string subscribePayload = R"(["workspace","window"])";
-  const auto& magic = wspace::sway::SwayRuntime::kIpcMagic;
-  const std::uint32_t subType = wspace::sway::SwayRuntime::kSubscribe;
+  const auto& magic = wspace::sway::SwaySession::kIpcMagic;
+  const std::uint32_t subType = wspace::sway::SwaySession::kSubscribe;
   const std::uint32_t subPayloadLen = static_cast<std::uint32_t>(subscribePayload.size());
 
   std::vector<char> subMsg;
@@ -310,31 +329,25 @@ void SwayWorkspaceManager::drainEvents() {
 }
 
 void SwayWorkspaceManager::processMessages() {
-   
-  const auto& magic = wspace::sway::SwayRuntime::kIpcMagic;
-  constexpr std::size_t kHeaderSize = 14;
+  const auto& magic = wspace::sway::SwaySession::kIpcMagic;
 
   bool changed = false;
-  while (m_buf.size() >= kHeaderSize) {
+  while (m_buf.size() >= kHeadBytes) {
     if (!std::equal(magic.begin(), magic.end(), m_buf.begin())) {
       closeIfOpen(true);
       return;
     }
 
-    std::uint32_t payloadLen = 0;
-    std::uint32_t type = 0;
-    std::memcpy(&payloadLen, m_buf.data() + magic.size(), sizeof(payloadLen));
-    std::memcpy(&type, m_buf.data() + magic.size() + sizeof(payloadLen), sizeof(type));
-
-    const std::size_t totalFrame = kHeaderSize + payloadLen;
+    const IpcHead head = readHead(m_buf);
+    const std::size_t totalFrame = kHeadBytes + head.bytes;
     if (m_buf.size() < totalFrame) return;
 
-    const std::string payload(m_buf.begin() + static_cast<std::ptrdiff_t>(kHeaderSize),
-                               m_buf.begin() + static_cast<std::ptrdiff_t>(kHeaderSize + payloadLen));
+    const std::string payload(m_buf.begin() + static_cast<std::ptrdiff_t>(kHeadBytes),
+                              m_buf.begin() + static_cast<std::ptrdiff_t>(kHeadBytes + head.bytes));
     m_buf.erase(m_buf.begin(),
-                       m_buf.begin() + static_cast<std::ptrdiff_t>(totalFrame));
+                m_buf.begin() + static_cast<std::ptrdiff_t>(totalFrame));
 
-    if (onIpcMessage(type, payload)) changed = true;
+    if (onIpcMessage(head.type, payload)) changed = true;
   }
 
   if (changed) emitChange();
@@ -342,7 +355,7 @@ void SwayWorkspaceManager::processMessages() {
 
 bool SwayWorkspaceManager::onIpcMessage(std::uint32_t type, const std::string& payload) {
    
-  using RT = wspace::sway::SwayRuntime;
+  using RT = wspace::sway::SwaySession;
 
   if (type == RT::kGetWorkspaces) return loadWorkspaceList(payload);
   if (type == RT::kGetTree) return loadTree(payload);
@@ -363,12 +376,12 @@ bool SwayWorkspaceManager::loadWorkspaceList(const std::string& payload) {
     const auto json = nlohmann::json::parse(payload);
     if (!json.is_array()) return false;
 
-    std::vector<WorkspaceState> next;
+    std::vector<WorkspaceRecord> next;
     next.reserve(json.size());
     std::size_t ordinal = 0;
     for (const auto& item : json) {
       if (!item.is_object()) continue;
-      WorkspaceState ws;
+      WorkspaceRecord ws;
       ws.name = item.value("name", std::string{});
       ws.output = item.value("output", std::string{});
       ws.visible = item.value("visible", false);
@@ -380,11 +393,7 @@ bool SwayWorkspaceManager::loadWorkspaceList(const std::string& payload) {
       if (!ws.name.empty()) next.push_back(std::move(ws));
     }
 
-    std::sort(next.begin(), next.end(), [](const auto& a, const auto& b) {
-      if ((a.num >= 0) != (b.num >= 0)) return a.num >= 0;
-      if (a.num >= 0 && b.num >= 0 && a.num != b.num) return a.num < b.num;
-      return a.ordinal < b.ordinal;
-    });
+    std::sort(next.begin(), next.end(), swayOrder);
 
     if (next == m_spaces) return false;
     m_spaces = std::move(next);
@@ -482,20 +491,20 @@ bool SwayWorkspaceManager::loadTree(const std::string& payload) {
 
 void SwayWorkspaceManager::fetchSnapshot() {
    
-  writeMessage(wspace::sway::SwayRuntime::kGetWorkspaces, {});
-  writeMessage(wspace::sway::SwayRuntime::kGetTree, {});
+  writeMessage(wspace::sway::SwaySession::kGetWorkspaces, {});
+  writeMessage(wspace::sway::SwaySession::kGetTree, {});
 }
 
 void SwayWorkspaceManager::fetchTree() {
    
-  writeMessage(wspace::sway::SwayRuntime::kGetTree, {});
+  writeMessage(wspace::sway::SwaySession::kGetTree, {});
 }
 
 void SwayWorkspaceManager::writeMessage(std::uint32_t type, std::string_view payload) {
    
   if (m_fd < 0) return;
 
-  const auto& magic = wspace::sway::SwayRuntime::kIpcMagic;
+  const auto& magic = wspace::sway::SwaySession::kIpcMagic;
   const std::uint32_t payloadLen = static_cast<std::uint32_t>(payload.size());
 
   std::vector<char> msg;
