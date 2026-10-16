@@ -39,8 +39,6 @@ static void path_field(AppState& app, cairo_t* cr, double x, double y, double w,
   }
 }
 
-// ---- image create/restore ----
-
 void draw_image_dialog(AppState& app, cairo_t* cr) {
   auto& d = *app.imageDlg;
   if (!d.open) return;
@@ -160,8 +158,6 @@ bool image_dialog_key(AppState& app, uint32_t sym, const char* utf8, int len) {
   return false;
 }
 
-// ---- attach ----
-
 void draw_attach_dialog(AppState& app, cairo_t* cr) {
   auto& d = *app.attachDlg;
   if (!d.open) return;
@@ -275,8 +271,6 @@ bool attach_dialog_key(AppState& app, uint32_t sym, const char* utf8, int len) {
   }
   return false;
 }
-
-// ---- drive settings ----
 
 void draw_drive_settings_dialog(AppState& app, cairo_t* cr) {
   auto& d = *app.drvSettingsDlg;

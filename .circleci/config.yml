@@ -1,5 +1,16 @@
 version: 2.1
 
+# Manual-only: this pipeline is gated behind the `run_ci` parameter, which
+# defaults to false, so ordinary pushes build nothing. To run it, trigger a
+# pipeline from the CircleCI UI (set run_ci to true) or via the API:
+#   curl -u $TOKEN: -X POST https://circleci.com/api/v2/project/<vcs>/<org>/<repo>/pipeline \
+#     -d '{"parameters":{"run_ci":true}}'
+parameters:
+  run_ci:
+    type: boolean
+    default: false
+    description: Build packages. Leave false for pushes; set true to run CI by hand.
+
 executors:
   fedora:
     docker:
@@ -217,6 +228,7 @@ jobs:
 
 workflows:
   build-and-package:
+    when: << pipeline.parameters.run_ci >>
     jobs:
       - build
       - package-arch:

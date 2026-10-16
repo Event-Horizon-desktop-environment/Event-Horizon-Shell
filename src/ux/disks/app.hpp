@@ -4,7 +4,6 @@
 
 namespace eh::disks {
 
-// ---- formatting / model helpers (app.cpp) ----
 std::string size_str(uint64_t bytes);           // decimal GB/MB (Disks style)
 std::string size_str_full(uint64_t bytes);      // "500 GB (500,107,862,016 bytes)"
 void set_rgba(cairo_t* cr, double r, double g, double b, double a);
@@ -30,7 +29,6 @@ void drive_groups(const std::vector<std::shared_ptr<Drive>>& drives,
 void disk_log(const char* fmt, ...);
 void toast(AppState& app, const std::string& text, bool error = false);
 
-// ---- menus (app.cpp) ----
 std::vector<MenuItem> build_main_menu(AppState& app);
 std::vector<MenuItem> build_drive_menu(AppState& app,
                                        const std::shared_ptr<Drive>& drive);
@@ -39,11 +37,9 @@ std::vector<MenuItem> build_block_menu(AppState& app,
 void run_menu_action(AppState& app, const std::string& id, int drive_idx,
                      int block_idx);
 
-// ---- core ----
 void draw(AppState& app);
 void schedule_frame(AppState& app);
 
-// ---- input (input/events.cpp) ----
 void handle_click(AppState& app, int x, int y, int button);
 void handle_move(AppState& app, int x, int y);
 void handle_scroll(AppState& app, int x, int y, double dy);
@@ -52,7 +48,6 @@ void handle_key(AppState& app, uint32_t sym, uint32_t state, const char* utf8,
 void handle_text_for_dialogs(AppState& app, uint32_t sym, const char* utf8,
                              int utf8_len);
 
-// ---- embed ----
 [[nodiscard]] int run_standalone();
 
 }  // namespace eh::disks

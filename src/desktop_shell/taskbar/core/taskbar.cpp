@@ -509,7 +509,6 @@ static void draw_context_menu(TaskbarApp& app, cairo_t* cr, int w, int h) {
 
 }
 
-// ---------------------------------------------------------------------------
 // Control-center height.
 //
 // The panel's content height is not the fixed kControlCenterPopupH(): it moves
@@ -519,7 +518,6 @@ static void draw_context_menu(TaskbarApp& app, cairo_t* cr, int w, int h) {
 // surface=640 in horizon-controlcenter.log, with the 5-day forecast cut off at
 // the bottom. Measure the layout instead (what the dock does through
 // control_center_popup_height()) and re-measure after every draw.
-// ---------------------------------------------------------------------------
 
 namespace {
 // Reentrancy guard: the settle below re-creates the surface, whose configure

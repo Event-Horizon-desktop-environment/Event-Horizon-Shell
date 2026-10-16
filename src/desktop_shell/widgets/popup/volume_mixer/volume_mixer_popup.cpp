@@ -79,8 +79,6 @@ std::string lower_copy(std::string s) {
   return s;
 }
 
-// ---------------------------------------------------------------- snapshots
-
 struct DeviceInfo {
   std::uint32_t node_id = 0;
   std::string name{};      // display name
@@ -395,7 +393,6 @@ uint64_t& mixer_engine_hold_until_ms() {
   return s;
 }
 
-// ---------------------------------------------------------------- UI state
 // NOTE: lives in this TU only (single instance). The old header-static ui()
 // duplicated state per translation unit, so a tab switch in one TU was
 // invisible in another.
@@ -422,8 +419,6 @@ MixerUiState& ui() {
   static MixerUiState s;
   return s;
 }
-
-// ---------------------------------------------------------------- geometry
 
 constexpr double content_w() { return static_cast<double>(kVolumeMixerPopupW) - kPad * 2.0; }
 double row_start_x() { return kPad; }
@@ -647,8 +642,6 @@ MixerLayout compute_layout(const MixerSnapshot& snap, bool viewOutput, std::uint
   return L;
 }
 
-// ---------------------------------------------------------------- text
-
 std::string ellipsize(cairo_t* cr, const std::string& text, double maxW) {
   const auto t0 = std::chrono::steady_clock::now();
   auto done = [&](std::string r) {
@@ -678,8 +671,6 @@ std::string ellipsize(cairo_t* cr, const std::string& text, double maxW) {
   return done(best);
 }
 
-// ---------------------------------------------------------------- glyphs
-
 const char* volume_glyph(int pct, bool muted) {
   if (muted || pct <= 0) return "volume_off";
   if (pct < 34) return "volume_down";
@@ -698,8 +689,6 @@ const char* device_glyph(const std::string& name) {  const std::string low = low
     return "mic";
   return "speaker";
 }
-
-// ---------------------------------------------------------------- paint bits
 
 void paint_card(cairo_t* cr, double x, double y, double w, double h, double r, double fr, double fg,
                 double fb, double fa) {
@@ -792,8 +781,6 @@ void paint_icon_tile(cairo_t* cr, double x, double y, const char* glyph, bool ac
 
 }  // namespace
 
-// ---------------------------------------------------------------- public API
-
 int volume_mixer_popup_content_height() {
   // Fixed height: the app list scrolls inside its viewport instead of growing
   // the popup, so this never changes after open.
@@ -820,8 +807,6 @@ void volume_mixer_notify_popup_open() {
                                      snap_ms);
   }
 }
-
-// ---------------------------------------------------------------- hit testing
 
 namespace {
 enum class Hit {
@@ -981,7 +966,6 @@ void mixer_resize_popup(DockApp& app, uint32_t serial) {
 
 }  // namespace
 
-// ---------------------------------------------------------------- input core
 // Coordinate-only core shared by Dock/Panel/Taskbar. Dock wrappers below add
 // outside-close + resize; paint lives in the .tpp thin adapters' target here.
 
@@ -1308,8 +1292,6 @@ bool mixer_axis_at(double x, double y, double deltaPx) {
       return false;
   }
 }
-
-// ---------------------------------------------------------------- paint
 
 const cairo_surface_t* stream_icon_surface(eh::icons::IconCache& icons, const StreamInfo& st) {
   const auto t0 = std::chrono::steady_clock::now();
@@ -1884,8 +1866,6 @@ void mixer_paint(cairo_t* cr, const eh::config::ShellConfig& sc, const MixerView
 }
 
 }  // namespace detail
-
-// ---------------------------------------------------------------- DockApp events
 
 void dock_volume_mixer_popup_handle_click(DockApp& app, double x, double y, uint32_t serial) {
   const double W = static_cast<double>(kVolumeMixerPopupW);

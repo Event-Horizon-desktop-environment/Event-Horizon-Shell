@@ -54,8 +54,6 @@ CompositorWorkspaces::~CompositorWorkspaces() {
   MANGOWM_DEBUG("CompositorWorkspaces dtor this=%p", (void*)this);
 }
 
-// --- private helpers ------------------------------------------------------
-
 void CompositorWorkspaces::setActiveBackend(IDeskSource* backend) {
   m_activeBackend = backend;
 }
@@ -65,8 +63,6 @@ void CompositorWorkspaces::notifyChanged() const {
     m_changeCallback();
   }
 }
-
-// --- construction / destruction ------------------------------------------
 
 void CompositorWorkspaces::initialize() {
 
@@ -121,7 +117,8 @@ void CompositorWorkspaces::initialize() {
 
 void CompositorWorkspaces::bindExtProtocol(ext_workspace_manager_v1* manager) {
   auto* binder = m_extWorkspaceBinder;
-  if (binder != nullptr) { binder->bindExtProtocol(manager); }
+  if (binder == nullptr) { return; }
+  binder->bindExtProtocol(manager);
 }
 
 void CompositorWorkspaces::setOutputResolver(std::function<std::string(wl_output*)> resolver) {
@@ -140,8 +137,6 @@ void CompositorWorkspaces::teardown() {
   m_activeBackend = nullptr;
 }
 
-// --- output life cycle ----------------------------------------------------
-
 void CompositorWorkspaces::outputDetached(wl_output* output) {
   callEach(m_outputObservers, [&](auto& backend) { backend.outputDetached(output); });
 }
@@ -154,24 +149,23 @@ void CompositorWorkspaces::outputAttached(wl_output* output) {
   }
 }
 
-// --- navigation -----------------------------------------------------------
-
 void CompositorWorkspaces::jumpToOnOutput(wl_output* output, const DeskSlot& workspace) {
   auto* backend = m_activeBackend;
-  if (backend != nullptr) { backend->jumpToOnOutput(output, workspace); }
+  if (backend == nullptr) { return; }
+  backend->jumpToOnOutput(output, workspace);
 }
 
 void CompositorWorkspaces::jumpToOnOutput(wl_output* output, const std::string& id) {
   auto* backend = m_activeBackend;
-  if (backend != nullptr) { backend->jumpToOnOutput(output, id); }
+  if (backend == nullptr) { return; }
+  backend->jumpToOnOutput(output, id);
 }
 
 void CompositorWorkspaces::jumpTo(const std::string& id) {
   auto* backend = m_activeBackend;
-  if (backend != nullptr) { backend->jumpTo(id); }
+  if (backend == nullptr) { return; }
+  backend->jumpTo(id);
 }
-
-// --- desk queries ---------------------------------------------------------
 
 std::vector<DeskSlot> CompositorWorkspaces::regionsOnOutput(wl_output* output) const {
   auto* backend = m_activeBackend;
@@ -191,8 +185,6 @@ CompositorWorkspaces::appsByDesk(wl_output* output) const {
   if (backend == nullptr) { return {}; }
   return backend->appsByDesk(output);
 }
-
-// --- bar / window integration ---------------------------------------------
 
 std::vector<ToplevelRef> CompositorWorkspaces::windowsOnDesk(wl_output* output) const {
   auto* backend = m_activeBackend;
@@ -215,14 +207,14 @@ BarMatchPolicy CompositorWorkspaces::taskbarMode() const noexcept {
 
 void CompositorWorkspaces::bringToFront(const std::string& windowId) const {
   auto* backend = m_activeBackend;
-  if (backend != nullptr) { backend->bringToFront(windowId); }
+  if (backend == nullptr) { return; }
+  backend->bringToFront(windowId);
 }
-
-// --- polling --------------------------------------------------------------
 
 void CompositorWorkspaces::onEvent(short revents) {
   auto* backend = m_activeBackend;
-  if (backend != nullptr) { backend->onEvent(revents); }
+  if (backend == nullptr) { return; }
+  backend->onEvent(revents);
 }
 
 int CompositorWorkspaces::eventTimeout() const noexcept {
@@ -242,8 +234,6 @@ int CompositorWorkspaces::eventFd() const noexcept {
   if (backend == nullptr) { return -1; }
   return backend->eventFd();
 }
-
-// --- focus reporting ------------------------------------------------------
 
 IDeskSource const* CompositorWorkspaces::readyMango() const {
   auto const* backend = m_mangoIpcBackend;
@@ -267,8 +257,6 @@ std::optional<std::string> CompositorWorkspaces::focusedWindowTitle() const {
   if (manager == nullptr || m_activeBackend != manager) { return std::nullopt; }
   return manager->focusedWindowTitle();
 }
-
-// --- owner accessors ------------------------------------------------------
 
 HyprlandWorkspaceManager* CompositorWorkspaces::hyprlandBackend() const noexcept {
   auto* hyprland = m_hyprlandBackend;

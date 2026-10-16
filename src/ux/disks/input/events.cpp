@@ -40,8 +40,6 @@ static L::Layout cur_layout(AppState& app) {
   return L::compute(app, drives, blocks, d ? d->get_size() : 0);
 }
 
-// ---- dialogs first (topmost = last painted) ----
-
 static bool dialogs_click(AppState& app, int x, int y) {
   // Topmost first.
   if (app.drvSettingsDlg->open) return drive_settings_dialog_click(app, x, y);

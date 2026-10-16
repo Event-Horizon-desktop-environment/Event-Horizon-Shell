@@ -59,8 +59,6 @@ static void svg_btn(AppState& app, cairo_t* cr, double x, double y, double s,
   }
 }
 
-// ---- header ----
-
 static void paint_header(AppState& app, cairo_t* cr, const L::Layout& lo,
                          const std::vector<std::shared_ptr<Drive>>& drives) {
   // Bar
@@ -135,8 +133,6 @@ static void paint_header(AppState& app, cairo_t* cr, const L::Layout& lo,
           app.svg.more, "⋮", app.hov_headermenu,
           app.menu.open && app.menu.kind == MenuKind::Main, false);
 }
-
-// ---- sidebar ----
 
 static void paint_sidebar(AppState& app, cairo_t* cr, const L::Layout& lo,
                           const std::vector<std::shared_ptr<Drive>>& drives) {
@@ -224,8 +220,6 @@ static void paint_sidebar(AppState& app, cairo_t* cr, const L::Layout& lo,
   }
 }
 
-// ---- drive card ----
-
 static void paint_drive_card(AppState& app, cairo_t* cr, const L::Layout& lo,
                              const std::shared_ptr<Drive>& drive) {
   if (!drive) return;
@@ -294,8 +288,6 @@ static void paint_drive_card(AppState& app, cairo_t* cr, const L::Layout& lo,
     if (!extra.empty()) W::text_right(cr, extra, r.x + r.w - 10, r.y + 19, 11, sec(app), 0);
   }
 }
-
-// ---- volume bar (Disks 51 proportional, GParted-correct) ----
 
 static void paint_volumes(AppState& app, cairo_t* cr, const L::Layout& lo,
                           const std::shared_ptr<Drive>& drive,
@@ -417,8 +409,6 @@ static void paint_volumes(AppState& app, cairo_t* cr, const L::Layout& lo,
                      bar.w);
   }
 }
-
-// ---- block rows (Disks 51 rows + GParted density) ----
 
 static void paint_table(AppState& app, cairo_t* cr, const L::Layout& lo,
                         const std::vector<std::shared_ptr<Block>>&) {
@@ -560,8 +550,6 @@ static void paint_table(AppState& app, cairo_t* cr, const L::Layout& lo,
   cairo_restore(cr);
 }
 
-// ---- details card (GParted device-info parity) ----
-
 static void paint_details(AppState& app, cairo_t* cr, const L::Layout& lo,
                           const std::shared_ptr<Block>& b) {
   if (!b || lo.details_card.w == 0) return;
@@ -622,8 +610,6 @@ static void paint_details(AppState& app, cairo_t* cr, const L::Layout& lo,
       !(b->get_features() & FEATURE_TAKE_OWNERSHIP));
 }
 
-// ---- job bar + status ----
-
 static void paint_jobbar(AppState& app, cairo_t* cr, const L::Layout& lo) {
   if (lo.job_bar.h == 0) return;
   W::fill_rounded(cr, lo.job_bar.x, lo.job_bar.y, lo.job_bar.w, lo.job_bar.h, 0,
@@ -656,8 +642,6 @@ static void paint_status(AppState& app, cairo_t* cr, const L::Layout& lo,
                 sec(app), 0);
 }
 
-// ---- empty states ----
-
 static void paint_empty(AppState& app, cairo_t* cr, const L::Layout& lo) {
   double cx = lo.content.x + lo.content.w / 2;
   double cy = lo.content.y + lo.content.h / 2 - 20;
@@ -675,8 +659,6 @@ static void paint_empty(AppState& app, cairo_t* cr, const L::Layout& lo) {
   W::text(cr, "Attach a disk image or connect a drive", cx - 118, cy + 52, 12, sec(app),
           0);
 }
-
-// ---- main ----
 
 void paint_main(AppState& app, cairo_t* cr, const L::Layout& lo,
                 const std::vector<std::shared_ptr<Drive>>& drives,

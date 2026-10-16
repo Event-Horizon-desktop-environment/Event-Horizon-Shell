@@ -99,8 +99,6 @@ std::string debug_override() {
   return {};
 }
 
-// --- Hyprland ---
-
 bool hypr_response_has_layout(const std::string& resp, std::string* out) {
   const std::string low = to_lower_trim(resp);
   for (const auto& d : kLayouts) {
@@ -136,7 +134,6 @@ std::string read_hypr_persisted() {
   return {"dwindle"};
 }
 
-// --- MangoWM ---
 // Layouts are per-tag runtime state; the compositor is the source of truth.
 // The wiki IPC page documents `dispatch setlayout,<name>` for switching
 // (cf. `bind=SUPER,t,setlayout,tile`). For reading, probe the one-shot

@@ -128,7 +128,6 @@ void eyebrow(cairo_t* cr, const std::string& s, double x, double baseline) {
   text_l(cr, s, x, baseline, 11.0, kMutR, kMutG, kMutB, 1.0);
 }
 
-// ------------------------------------------------------- calendar (week) ----
 // Current-week strip (v5): seven day cells for the week containing today,
 // today highlighted. No navigation state.
 
@@ -146,8 +145,6 @@ void paint_clock(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c
   if (!t.date.empty())
     text_l(cr, t.date, c.x + 16.0, c.y + 88.0, 13.0, mc.textR, mc.textG, mc.textB, 0.90);
 }
-
-// ------------------------------------------------------------- calendar ----
 
 void paint_calendar(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   (void)app;
@@ -185,8 +182,6 @@ void paint_calendar(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect
   }
 }
 
-// -------------------------------------------------------------- weather ----
-
 void paint_weather(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
   ccu::cc_paint_glass_card_mc(cr, c.x, c.y, c.w, c.h, kCardR, s, mc);
@@ -215,8 +210,6 @@ void paint_weather(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect&
   text_l(cr, trunc(cr, sub, std::max(20.0, c.w - 32.0), 12.0), c.x + 16.0, c.y + 80.0, 12.0, mc.textR, mc.textG,
          mc.textB, 0.90);
 }
-
-// ---------------------------------------------------------------- media ----
 
 void paint_media(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   auto& d = app.dash;
@@ -290,8 +283,6 @@ void paint_media(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c
   }
 }
 
-// ---------------------------------------------------------------- mixer ----
-
 void paint_mixer(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   auto& d = app.dash;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
@@ -362,8 +353,6 @@ void paint_mixer(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c
     text_c(cr, "Nothing is playing", c.x + c.w * 0.5, c.y + kMixerHeaderH + 34.0, 12.0, mc.textR, mc.textG, mc.textB, 0.85);
 }
 
-// --------------------------------------------------------------- system ----
-
 void paint_system(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, double s) {
   auto& d = app.dash;
   const auto mc = eh::config::derived_chrome_colors(eh::config::shell_config_snapshot().appearance);
@@ -403,8 +392,6 @@ void paint_system(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& 
   bar_row(c.y + 47.0, "CPU", cpuV, cpuFrac);
   bar_row(c.y + 74.0, "Memory", memV, memFrac);
 }
-
-// ------------------------------------------- expanded network/bluetooth ----
 
 void paint_wifi_rows(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc,
                      double innerGlass) {
@@ -515,7 +502,6 @@ void paint_bt_rows(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect&
   cairo_restore(cr);
 }
 
-// -------------------------------------------- compact net/bt headers (40px) ----
 // Single-row headers for the half-height network/bluetooth cards. The shared
 // control-center card painters draw a 76px two-line header, so the dashboard
 // paints these instead (expanded rows below are unchanged).
@@ -573,7 +559,6 @@ void paint_bt_compact(cairo_t* cr, const CardRect& c, const eh::config::ChromePa
   ccu::cc_draw_status_pill(cr, c.x + c.w - 112.0, c.y + 9.0, bs.powered ? "On" : "Off", bs.powered, s, mc);
 }
 
-// -------------------------------------------- compact volume/mic rows (84px) ----
 // Eyebrow device label on top, then mute icon + flat bar + percent. Replaces
 // the shared two-line audio cards (same mute/slider behavior, new geometry).
 
@@ -636,8 +621,6 @@ void paint_audio_compact(eh::shell::stage::StageApp& app, cairo_t* cr, const Car
   std::snprintf(pb, sizeof(pb), "%d%%", pct);
   text_r(cr, pb, g.pctRightX, g.pctBase, 12.0, mc.textR, mc.textG, mc.textB, 0.90);
 }
-
-// ----------------------------------------------------------------- card ----
 
 void paint_card(eh::shell::stage::StageApp& app, cairo_t* cr, const CardRect& c, const eh::config::ChromePaintColors& mc, double inner) {
   switch (c.kind) {

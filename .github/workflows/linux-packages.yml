@@ -1,12 +1,12 @@
 name: Linux packages
 
-# Automated builds and GitHub Releases for Event Horizon Shell.
+# Manual-only: nothing runs unless you trigger it from the Actions tab
+# (workflow_dispatch). Branch pushes, tag pushes and pull requests do NOT
+# build. Run it once with release=false for a plain build+test, or with
+# release=true to publish a stable release for the version meson.build
+# declares (the tag is created for you, bare 0.9.x style matching the
+# existing 0.9.6 tag).
 #
-# - Every push to main/master builds, tests and refreshes the `rolling`
-#   prerelease. Push a version tag (`0.9.7`, `v0.9.7`, `0.9.7-beta1`, ...)
-#   for a stable release, or run this workflow manually with `release=true`
-#   to publish whatever version `meson.build` currently declares (the tag
-#   is created for you, bare `0.9.x` style matching the existing `0.9.6` tag).
 # - Packages are built with fpm from a single release build, the same
 #   approach as .circleci/config.yml (release binaries only; no debug
 #   variants). The build runs in a fedora:44 container to match CircleCI's
@@ -16,10 +16,6 @@ name: Linux packages
 #   (local `just configure-release` builds -march=native for your own CPU).
 
 on:
-  push:
-    branches: [main, master]
-    tags: ['v*', '[0-9]*']
-  pull_request:
   workflow_dispatch:
     inputs:
       release:
@@ -232,7 +228,7 @@ jobs:
     name: publish GitHub Release
     runs-on: ubuntu-24.04
     needs: [deb, rpm, arch, tarball]
-    if: (github.ref_type == 'tag' && github.ref_name != 'rolling') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    if: github.event_name == 'workflow_dispatch' && inputs.release
     permissions:
       contents: write
     steps:
@@ -276,37 +272,6 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-          files: dist/event-horizon-de*
-          fail_on_unmatched_files: true
-          generate_release_notes: true
-
-  release-latest:
-    name: publish rolling release
-    runs-on: ubuntu-24.04
-    needs: [deb, rpm, arch, tarball]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-      - name: Move rolling tag
-        run: |
-          git tag -f rolling ${{ github.sha }}
-          git push -f origin rolling
-      - uses: actions/download-artifact@v5
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Publish rolling release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: rolling
-          name: Rolling build
-          target_commitish: ${{ github.sha }}
-          draft: false
-          prerelease: true
-          make_latest: false
-          overwrite_files: true
           files: dist/event-horizon-de*
           fail_on_unmatched_files: true
           generate_release_notes: true

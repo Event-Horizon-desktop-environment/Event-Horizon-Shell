@@ -450,7 +450,6 @@ struct MonTextCtx {
 std::unordered_map<uint64_t, MonTextCtx::TextSurf> MonTextCtx::surfs;
 unsigned long long MonTextCtx::textBytes = 0;
 
-// ---- Retained background cache (pixel-identical, state-keyed) ----
 // Section cards, the canvas backdrop and toolbar buttons are pure functions
 // of (geometry, theme colors, alpha, hover/enabled state, device scale):
 // repainting ~20 glassy gradients + m3 buttons every frame costs ~1ms.

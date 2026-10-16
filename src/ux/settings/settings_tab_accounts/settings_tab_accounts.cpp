@@ -539,8 +539,6 @@ static void accounts_ensure_visible(App& app, int topY, int botY) {
   settings_scroll_sync_after_clamp(app);
 }
 
-// ---- form actions (shared by pointer + keyboard handlers) ----
-
 void accounts_action_change_password(App& app) {
   const AccountsUserEntry* sel = selected_entry(app);
   const std::string target = sel ? sel->username : accounts_current_username();

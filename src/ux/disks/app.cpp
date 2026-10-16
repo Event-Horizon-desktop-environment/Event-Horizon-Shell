@@ -64,8 +64,6 @@ bool AppState::any_dialog_open() const {
          (drvSettingsDlg && drvSettingsDlg->open);
 }
 
-// ---- formatting ----
-
 std::string size_str(uint64_t bytes) {
   char buf[64];
   // Disks uses decimal SI.
@@ -312,8 +310,6 @@ void toast(AppState& app, const std::string& text, bool error) {
   app.toasts.push_back(t);
   if (app.toasts.size() > 3) app.toasts.erase(app.toasts.begin());
 }
-
-// ---- menus ----
 
 std::vector<MenuItem> build_main_menu(AppState&) {
   return {
@@ -624,8 +620,6 @@ void run_menu_action(AppState& app, const std::string& id, int drive_idx, int bl
   }
   schedule_frame(app);
 }
-
-// ---- main draw ----
 
 void draw(AppState& app) {
   if (!app.surface) return;

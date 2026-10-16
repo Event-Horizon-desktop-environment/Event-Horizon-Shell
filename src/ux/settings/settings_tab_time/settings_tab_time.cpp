@@ -396,8 +396,6 @@ static void paint_time_preview(App& app, cairo_t* cr, int, int cardX, int cardW,
   }
 }
 
-// --- Timezone picker ------------------------------------------------------
-
 static constexpr int kTzPickW = 480;
 static constexpr int kTzPickH = 400;
 static constexpr int kTzRowH = 38;
@@ -639,8 +637,6 @@ bool time_zone_picker_consume_pointer_move(App& app) {
   }
   return true;
 }
-
-// --- NTP (timedatectl) ------------------------------------------------------
 
 static std::string time_run_capture(const std::string& cmd) {
   std::string out;

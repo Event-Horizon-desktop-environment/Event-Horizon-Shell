@@ -88,8 +88,6 @@ std::vector<AccountsUserEntry> enumerate_users() {
   return out;
 }
 
-// ---- privileged exec (no shell) ----
-
 bool write_all(int fd, const std::string& data) {
   size_t off = 0;
   while (off < data.size()) {
@@ -165,8 +163,6 @@ PrivResult accounts_run_priv(const std::vector<std::string>& pkexec_argv,
   return r;
 }
 
-// ---- cached enumeration ----
-
 namespace {
 std::vector<AccountsUserEntry> g_users;
 int g_users_tick = 0;
@@ -226,8 +222,6 @@ int accounts_admin_count() {
 
 std::string accounts_admin_group() { return detect_admin_group(); }
 
-// ---- validation ----
-
 bool accounts_valid_username(const std::string& u) {
   if (u.empty() || u.size() > 32) return false;
   if (!(u[0] == '_' || (u[0] >= 'a' && u[0] <= 'z'))) return false;
@@ -256,8 +250,6 @@ bool accounts_valid_fullname(const std::string& f) {
   }
   return true;
 }
-
-// ---- lock state ----
 
 bool accounts_query_locked(const std::string& username, bool& lockedOut) {
   if (username.empty()) return false;
@@ -292,8 +284,6 @@ bool accounts_query_locked(const std::string& username, bool& lockedOut) {
   }
   return true;
 }
-
-// ---- actions ----
 
 AccountsActionResult accounts_set_password(const std::string& username, const std::string& pass) {
   if (!accounts_valid_username(username)) return {false, "Invalid username."};
@@ -397,8 +387,6 @@ AccountsActionResult accounts_set_hostname(const std::string& hostname) {
   if (r.status == 0) return {true, "Hostname changed."};
   return {false, "Failed to set hostname."};
 }
-
-// ---- avatars ----
 
 namespace {
 std::map<std::string, cairo_surface_t*> g_avatar_cache;
@@ -520,8 +508,6 @@ AccountsActionResult accounts_install_avatar(const std::string& username, const 
   accounts_invalidate_avatars();
   return {true, "Avatar updated for '" + username + "'."};
 }
-
-// ---- automatic login ----
 
 namespace {
 bool file_exists(const std::string& p) {

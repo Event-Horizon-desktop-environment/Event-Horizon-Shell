@@ -1140,8 +1140,6 @@ void panel_tooltip_tick(PanelApp& app) {
   if (app.display) wl_display_flush(app.display);
 }
 
-// ---- Popups (v1: calendar + control-center real, others glass stub) ----
-
 void panel_popup_close(PanelApp& app) {
   app.popupHoverItem = -1;
   app.popupKind = PanelPopupKind::None;

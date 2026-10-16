@@ -31,7 +31,6 @@
 
 namespace eh::shell::tahoe {
 
-// ---------------------------------------------------------------- buckets
 // Tahoe bucket order matches Apple's Apps view; each lists the freedesktop
 // categories that belong to it. First match wins for counting; filtering
 // keeps a hit when any of its raw categories intersects the bucket.
@@ -80,8 +79,6 @@ inline bool tahoe_hit_in_bucket(std::string_view cats, int b) {
   if (b == kTahoeBucketCount - 1) return tahoe_bucket_for(cats) == b;
   return tahoe_bucket_for(cats) == b;
 }
-
-// ---------------------------------------------------------------- layout
 
 struct TahoeLayout {
   // Search field.
@@ -207,8 +204,6 @@ inline std::vector<double> tahoe_pill_xs(const std::vector<double>& widths, doub
   }
   return xs;
 }
-
-// ---------------------------------------------------------------- paint helpers
 
 inline void tahoe_rr(cairo_t* cr, double x, double y, double w, double h, double r) {
   cairo_new_path(cr);
